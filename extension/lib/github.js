@@ -64,9 +64,14 @@ export async function putFile({
 }
 
 export async function getFile({ owner, repo, branch, path, token }) {
-  const ref = branch ? `?ref=${encodeURIComponent(branch)}` : "";
-  return gh(`/repos/${owner}/${repo}/contents/${path}${ref}`, token, {
+  // Cache-busting timestamp so the CDN doesn't hand back a stale copy right
+  // after a write (GitHub's Contents API is eventually consistent).
+  const params = new URLSearchParams();
+  if (branch) params.set("ref", branch);
+  params.set("_", Date.now().toString());
+  return gh(`/repos/${owner}/${repo}/contents/${path}?${params}`, token, {
     method: "GET",
+    headers: { "Cache-Control": "no-cache" },
   });
 }
 
@@ -78,33 +83,46 @@ export async function appendNdjsonLine({
   newLine,
   message,
   token,
+  maxAttempts = 5,
 }) {
-  // Fetch current content (if any), append a line, PUT back. Uses the file's
-  // current sha as If-Match for atomicity.
-  let existing;
-  try {
-    existing = await getFile({ owner, repo, branch, path, token });
-  } catch (e) {
-    if (e.status !== 404) throw e;
-  }
+  // Fetch current content (if any), append a line, PUT back with sha as
+  // optimistic concurrency. GitHub returns 409 if the sha is stale (eventual
+  // consistency window after a recent write); retry with a fresh GET.
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let existing;
+    try {
+      existing = await getFile({ owner, repo, branch, path, token });
+    } catch (e) {
+      if (e.status !== 404) throw e;
+    }
 
-  let content = "";
-  let sha;
-  if (existing) {
-    content = atob(existing.content.replace(/\n/g, ""));
-    sha = existing.sha;
-  }
-  const updated = (content.endsWith("\n") || !content ? content : content + "\n")
-    + newLine + "\n";
-  const updatedB64 = btoa(unescape(encodeURIComponent(updated)));
+    let content = "";
+    let sha;
+    if (existing) {
+      content = atob(existing.content.replace(/\n/g, ""));
+      sha = existing.sha;
+    }
+    const updated = (content.endsWith("\n") || !content ? content : content + "\n")
+      + newLine + "\n";
+    const updatedB64 = btoa(unescape(encodeURIComponent(updated)));
 
-  return gh(`/repos/${owner}/${repo}/contents/${path}`, token, {
-    method: "PUT",
-    body: JSON.stringify({
-      message,
-      content: updatedB64,
-      ...(branch ? { branch } : {}),
-      ...(sha ? { sha } : {}),
-    }),
-  });
+    try {
+      return await gh(`/repos/${owner}/${repo}/contents/${path}`, token, {
+        method: "PUT",
+        body: JSON.stringify({
+          message,
+          content: updatedB64,
+          ...(branch ? { branch } : {}),
+          ...(sha ? { sha } : {}),
+        }),
+      });
+    } catch (e) {
+      if (e.status === 409 && attempt < maxAttempts) {
+        // Stale sha — wait and retry with fresh state.
+        await new Promise((r) => setTimeout(r, 400 * attempt));
+        continue;
+      }
+      throw e;
+    }
+  }
 }

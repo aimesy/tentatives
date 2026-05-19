@@ -127,9 +127,12 @@ async function getConfigStatus() {
       const li = document.createElement("li");
       let cls = "status-ok";
       let label = "✓ uploaded";
-      if (r.status === "skipped-exists") {
+      if (r.status === "already-captured") {
         cls = "status-skip";
-        label = "• already archived";
+        label = "• skipped (already captured)";
+      } else if (r.status === "skipped-exists") {
+        cls = "status-skip";
+        label = "• logged (PDF was already archived)";
       } else if (r.status === "error") {
         cls = "status-err";
         label = `✗ ${r.error}`;
@@ -139,9 +142,15 @@ async function getConfigStatus() {
       list.appendChild(li);
     }
     const uploaded = resp.results.filter((r) => r.status === "uploaded").length;
-    const skipped = resp.results.filter((r) => r.status === "skipped-exists").length;
+    const recovered = resp.results.filter((r) => r.status === "skipped-exists").length;
+    const dupe = resp.results.filter((r) => r.status === "already-captured").length;
     const errored = resp.results.filter((r) => r.status === "error").length;
-    btn.textContent = `Done (${uploaded} new${skipped ? `, ${skipped} dupe` : ""}${errored ? `, ${errored} err` : ""})`;
+    const parts = [];
+    if (uploaded) parts.push(`${uploaded} new`);
+    if (recovered) parts.push(`${recovered} logged`);
+    if (dupe) parts.push(`${dupe} dupe`);
+    if (errored) parts.push(`${errored} err`);
+    btn.textContent = `Done (${parts.join(", ") || "no changes"})`;
   });
 })().catch((e) => {
   console.error("[tentatives popup] fatal", e);
