@@ -1,0 +1,110 @@
+// Minimal GitHub Contents API client.
+// One commit per file is fine for v1 (single-page captures of 1-20 PDFs).
+// Switch to Git Data API later if we batch hundreds at a time (Wayback dumps).
+
+const API = "https://api.github.com";
+
+async function gh(path, token, init = {}) {
+  const r = await fetch(`${API}${path}`, {
+    ...init,
+    headers: {
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      Authorization: `Bearer ${token}`,
+      ...(init.headers || {}),
+    },
+  });
+  const text = await r.text();
+  let body;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = text;
+  }
+  if (!r.ok) {
+    const msg = body && body.message ? body.message : text || r.statusText;
+    const err = new Error(`GitHub ${r.status}: ${msg}`);
+    err.status = r.status;
+    err.body = body;
+    throw err;
+  }
+  return body;
+}
+
+export async function fileExists({ owner, repo, branch, path, token }) {
+  const ref = branch ? `?ref=${encodeURIComponent(branch)}` : "";
+  try {
+    await gh(`/repos/${owner}/${repo}/contents/${path}${ref}`, token, {
+      method: "GET",
+    });
+    return true;
+  } catch (e) {
+    if (e.status === 404) return false;
+    throw e;
+  }
+}
+
+export async function putFile({
+  owner,
+  repo,
+  branch,
+  path,
+  message,
+  contentBase64,
+  token,
+}) {
+  return gh(`/repos/${owner}/${repo}/contents/${path}`, token, {
+    method: "PUT",
+    body: JSON.stringify({
+      message,
+      content: contentBase64,
+      ...(branch ? { branch } : {}),
+    }),
+  });
+}
+
+export async function getFile({ owner, repo, branch, path, token }) {
+  const ref = branch ? `?ref=${encodeURIComponent(branch)}` : "";
+  return gh(`/repos/${owner}/${repo}/contents/${path}${ref}`, token, {
+    method: "GET",
+  });
+}
+
+export async function appendNdjsonLine({
+  owner,
+  repo,
+  branch,
+  path,
+  newLine,
+  message,
+  token,
+}) {
+  // Fetch current content (if any), append a line, PUT back. Uses the file's
+  // current sha as If-Match for atomicity.
+  let existing;
+  try {
+    existing = await getFile({ owner, repo, branch, path, token });
+  } catch (e) {
+    if (e.status !== 404) throw e;
+  }
+
+  let content = "";
+  let sha;
+  if (existing) {
+    content = atob(existing.content.replace(/\n/g, ""));
+    sha = existing.sha;
+  }
+  const updated = (content.endsWith("\n") || !content ? content : content + "\n")
+    + newLine + "\n";
+  const updatedB64 = btoa(unescape(encodeURIComponent(updated)));
+
+  return gh(`/repos/${owner}/${repo}/contents/${path}`, token, {
+    method: "PUT",
+    body: JSON.stringify({
+      message,
+      content: updatedB64,
+      ...(branch ? { branch } : {}),
+      ...(sha ? { sha } : {}),
+    }),
+  });
+}

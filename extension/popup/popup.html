@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Tentatives Capture</title>
+    <style>
+      body { font: 13px/1.4 system-ui, sans-serif; width: 320px; padding: 12px; margin: 0; }
+      h1 { font-size: 14px; margin: 0 0 8px; }
+      .muted { color: #6b7280; }
+      .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; }
+      button { padding: 6px 10px; cursor: pointer; }
+      ul { list-style: none; padding: 0; margin: 8px 0 0; max-height: 240px; overflow-y: auto; }
+      li { padding: 4px 0; border-top: 1px solid #e5e7eb; font-size: 12px; }
+      li:first-child { border-top: 0; }
+      .status-ok { color: #059669; }
+      .status-skip { color: #6b7280; }
+      .status-err { color: #dc2626; }
+      a { color: #2563eb; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+    </style>
+  </head>
+  <body>
+    <h1>Tentatives Capture</h1>
+    <div id="county" class="muted"></div>
+    <div class="row">
+      <span id="count">Scanning…</span>
+      <button id="upload" disabled>Upload</button>
+    </div>
+    <ul id="results"></ul>
+    <div class="row muted" style="margin-top: 12px;">
+      <a id="opts" href="#">Settings</a>
+    </div>
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

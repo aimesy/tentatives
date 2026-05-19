@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Tentatives Capture",
+  "version": "0.1.0",
+  "description": "Capture California superior court tentative rulings PDFs to a GitHub archive.",
+
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": [
+    "https://*.eldorado.courts.ca.gov/*",
+    "https://api.github.com/*",
+    "https://web.archive.org/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "action": {
+    "default_title": "Tentatives Capture",
+    "default_popup": "popup/popup.html"
+  },
+
+  "options_page": "options/options.html",
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.eldorado.courts.ca.gov/online-services/tentative-rulings/*"
+      ],
+      "js": ["sites/el-dorado.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

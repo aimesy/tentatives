@@ -1,0 +1,48 @@
+name: Parse new PDFs
+
+# Triggers whenever the extension (or anything else) commits to archive/.
+# Walks the archive, parses any PDFs not yet represented in data/<county>/rulings.parquet,
+# and commits the updated parquet files back.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "archive/**/*.pdf"
+      - "archive/**/captures.ndjson"
+      - "counties/**/*.py"
+      - "schema/**/*.py"
+      - "ingest/**/*.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Parse new PDFs
+        run: python -m ingest.orchestrate
+
+      - name: Commit updated parquet
+        run: |
+          if git diff --quiet -- data/; then
+            echo "no parquet changes"
+            exit 0
+          fi
+          git config user.name "tentatives-bot"
+          git config user.email "tentatives-bot@users.noreply.github.com"
+          git add data/
+          git commit -m "ingest: update rulings.parquet"
+          git push
