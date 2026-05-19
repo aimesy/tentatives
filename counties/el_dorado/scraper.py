@@ -1,18 +1,33 @@
 """El Dorado County tentative-rulings scraper.
 
-Four stages, all separable for testing and replay:
+The court publishes tentative rulings in at least four different PDF styles,
+varying by department and calendar type:
 
-  discover_live(html)   list of PDF refs from a dept landing page
-  fetch(ref)            download PDF bytes
-  parse(pdf_bytes, ...) extract Ruling records
+  Style A: "Probate Tentative Rulings" (dept 9 probate)
+           Header includes 'Dept. N' on its own line.
+           Ruling header: "1. <CASE_NUMBER> <CASE_TITLE>"
+  Style B: "LAW AND MOTION CALENDAR" (dept 4 civil)
+           No dept in header. Has '– N –' page footer, footnotes, '/ / /' marks.
+           Ruling header: "1. <CASE_TITLE>, <CASE_NUMBER>"
+  Style C: "PROBATE CALENDAR" (dept 4 probate)
+           No dept in header. '– N –' page footer. Often short rulings.
+           Ruling header: "1. <CASE_TITLE>, <CASE_NUMBER>"
+  Style D: "LAW & MOTION TENTATIVE RULINGS" (dept 12)
+           Multi-line header includes 'DEPARTMENT 12'.
+           Ruling header: "1. <CASE_TITLE>      <CASE_NUMBER>" (whitespace-separated)
 
-The unit of input is a *file*, not a date — court purges old URLs from the live
-server (~2 months of retention), and one PDF can cover a date range. Metadata
-(hearing_date, dept, division) is taken from the page header inside the PDF,
-not the filename, which has multiple inconsistent formats.
+Rather than detect+dispatch by style, the parser is style-agnostic:
 
-Reference fixture: counties/el_dorado/fixtures/tr-d-09-2026-05-18.pdf
-  - 20 pages, 15 rulings, Dept. 9, Probate, hearing date 2026-05-18.
+  1. Strip repeating page headers/footers (detected dynamically across pages).
+  2. Find all "TENTATIVE RULING #N:" anchors — universal across styles.
+  3. For each anchor, scan backward for the ruling's case header line
+     (matches "^N. ... <CASE_NUMBER> ..." on a single line where N is the index
+     of the disposition anchor that follows).
+  4. Body = text between case header and disposition anchor.
+  5. Disposition = text from anchor to (next anchor's case header) or end.
+
+Metadata (date, division, dept) comes from page-1 header, with optional
+caller-supplied dept_hint as fallback when the header doesn't include it.
 """
 
 from __future__ import annotations
@@ -31,15 +46,19 @@ from schema import Ruling
 from . import COUNTY_SLUG, PARSER_VERSION
 
 
-# ---------------------------------------------------------------- DISCOVERY
+# ============================================================ DISCOVERY
 
 
 PDF_HREF_RE = re.compile(
-    r'href="(/system/files/tentative-rulings/[^"]+\.pdf)"',
+    r'href="(/system/files/[^"]+\.pdf)"',
     re.IGNORECASE,
 )
 DEPT_PAGE_RE = re.compile(
     r'href="(/online-services/tentative-rulings/tentative-rulings-dept-\d+)"',
+    re.IGNORECASE,
+)
+TENTATIVE_PDF_RE = re.compile(
+    r"/system/files/(tentative-rulings?|tentative-ruling)/",
     re.IGNORECASE,
 )
 BASE = "https://www.eldorado.courts.ca.gov"
@@ -52,19 +71,39 @@ class PdfRef:
     url: str
     filename: str
     wayback_ts: str | None = None
+    dept_hint: str | None = None  # from the discovery URL (e.g. "9" from /tentative-rulings-dept-9)
 
 
-def discover_live(html: str, base_url: str = BASE) -> list[PdfRef]:
-    """Extract PDF links from a dept landing page's HTML."""
+def _dept_from_landing_url(url: str) -> str | None:
+    m = re.search(r"tentative-rulings-dept-(\d+)", url)
+    return m.group(1) if m else None
+
+
+def discover_live(html: str, page_url: str | None = None, base_url: str = BASE) -> list[PdfRef]:
+    """Extract PDF links from a dept landing page's HTML.
+
+    If `page_url` is given and looks like a per-dept landing page, the dept is
+    encoded into each returned PdfRef so callers can pass it to parse().
+    """
+    dept_hint = _dept_from_landing_url(page_url or "")
     seen: set[str] = set()
     refs: list[PdfRef] = []
     for m in PDF_HREF_RE.finditer(html):
         path = m.group(1)
+        # Only keep tentative-ruling PDFs, not the assorted PDFs courts also link.
+        if not TENTATIVE_PDF_RE.search(path):
+            continue
         url = urljoin(base_url + "/", path.lstrip("/"))
         if url in seen:
             continue
         seen.add(url)
-        refs.append(PdfRef(url=url, filename=path.rsplit("/", 1)[-1]))
+        refs.append(
+            PdfRef(
+                url=url,
+                filename=path.rsplit("/", 1)[-1],
+                dept_hint=dept_hint,
+            )
+        )
     return refs
 
 
@@ -82,11 +121,11 @@ def discover_dept_pages(html: str, base_url: str = BASE) -> list[str]:
     return sorted(urls)
 
 
-# ---------------------------------------------------------------- FETCH
+# ============================================================ FETCH
 
 
 def fetch(ref: PdfRef, session=None) -> tuple[bytes, str]:
-    """Download the PDF. Returns (content, sha256). For Wayback refs uses id_ form."""
+    """Download the PDF. Returns (content, sha256). Uses Wayback `id_` form when applicable."""
     import requests  # local import; not needed for parser tests
 
     sess = session or requests.Session()
@@ -100,54 +139,59 @@ def fetch(ref: PdfRef, session=None) -> tuple[bytes, str]:
     return content, hashlib.sha256(content).hexdigest()
 
 
-# ---------------------------------------------------------------- PARSE
+# ============================================================ PARSE
 
 
-# Per-page header. Each PDF page begins with these four lines:
-#   <MONTH DD, YYYY>
-#   Dept. <N>
-#   <Division Name> Tentative Rulings
-#   <page-number>
-HEADER_DATE_RE = re.compile(
-    r"^([A-Z][A-Za-z]+ \d{1,2}, \d{4})\s*$",
+# A case number is alphanumeric, has at least 2 letters and at least 3 digits.
+# Covers all observed formats:
+#   25PR0206, 26PR0099, 24CV1535      (modern: <YY><LL><####>)
+#   PP20200121, SP20140014            (legacy: <LL><YYYY><####>)
+#   SC20210148, SFL20210053           (legacy with 2-3 letter prefix)
+#   24FL0473, 23FL0933                (modern Family Law)
+CASE_NUMBER_RE = re.compile(r"\b(\d*[A-Z]{2,4}\d{3,8})\b")
+
+# Disposition anchor — universal across styles. "TENTATIVE RULING" optionally
+# followed by space or #, then index, then colon. e.g.:
+#   TENTATIVE RULING #1:
+#   TENTATIVE RULING # 1:
+#   TENTATIVE RULING #1:  (with trailing whitespace)
+TENTATIVE_RULING_ANCHOR_RE = re.compile(
+    r"TENTATIVE\s+RULING\s*#\s*(\d{1,3})\s*:",
+    re.IGNORECASE,
+)
+
+# Ruling header line: "N. ... <CASE_NUMBER> ..." — must contain a case number on
+# the same line to distinguish from numbered sub-sections inside a ruling body.
+RULING_HEADER_LINE_RE = re.compile(
+    r"^(?P<idx>\d{1,3})\.\s+(?P<rest>.*?\b\d*[A-Z]{2,4}\d{3,8}\b.*?)\s*$",
     re.MULTILINE,
 )
-HEADER_DEPT_RE = re.compile(r"^Dept\.\s+(\d+)\s*$", re.MULTILINE)
-HEADER_DIVISION_RE = re.compile(r"^(.+?)\s+Tentative Rulings\s*$", re.MULTILINE)
 
-# Ruling header: "<N>. <CASE_NUMBER> <CASE_TITLE>" on one line, motion-type on the next.
-# Case-number formats observed:
-#   25PR0206       new style: <YY><type><####>
-#   26PR0099
-#   PP20200121     legacy style (pre-2021): <prefix><YYYY><####>
-# Pattern covers both: optional leading digits, then letters, then digits.
-RULING_HEADER_RE = re.compile(
-    r"""^
-    (?P<idx>\d{1,2})\.\s+
-    (?P<case_number>\d*[A-Z]{2,}\d{3,})\s+
-    (?P<case_title>[^\n]+?)\s*\n
-    (?P<motion_type>[^\n]+?)\s*$
-    """,
-    re.MULTILINE | re.VERBOSE,
+# Date in long form: "MAY 18, 2026" or "May 18, 2026".
+LONG_DATE_RE = re.compile(
+    r"\b([A-Z][A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})\b"
 )
 
-# Disposition section.
-DISPOSITION_RE = re.compile(
-    r"^TENTATIVE RULING #(?P<idx>\d{1,2}):\s*\n(?P<text>.*?)(?=\n\s*\n|\Z)",
-    re.MULTILINE | re.DOTALL,
-)
+# Continuation marker — lines of just "/ / /" or "///".
+CONTINUATION_LINE_RE = re.compile(r"^\s*/\s*/\s*/\s*$")
 
-# Common boilerplate to trim from disposition text.
-REMOTE_BOILERPLATE_RE = re.compile(
-    r"\s*IF A PARTY OR PARTIES WISH TO APPEAR REMOTELY,?\s+INSTRUCTIONS FOR REMOTE\s+"
-    r"APPEARANCES CAN BE FOUND ON THE COURT[’']S WEBSITE\.?\s*",
-    re.IGNORECASE | re.DOTALL,
-)
+# Common boilerplate strings appended to dispositions. Stripped from outcome_text
+# but recorded so callers can see what was removed if needed.
+BOILERPLATE_PATTERNS = [
+    re.compile(
+        r"\s*IF A PARTY OR PARTIES WISH TO APPEAR REMOTELY,?\s+"
+        r"INSTRUCTIONS FOR REMOTE\s+APPEARANCES CAN BE FOUND ON THE COURT[’']S\s+WEBSITE\.?\s*",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\s*NO HEARING ON THIS MATTER WILL BE HELD.*?(?=$|\n\s*\n)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+]
 
-# Continued-to date extractor. "CONTINUED TO MONDAY, JULY 6, 2026," or
-# "CONTINUED TO MONDAY, JUNE 29, 2026, AT 8:30 AM ..."
-CONTINUED_RE = re.compile(
-    r"CONTINUED TO\s+(?:[A-Z]+,?\s+)?"
+# "CONTINUED TO MONDAY, JULY 6, 2026" / "HEARING CONTINUED TO ..."
+CONTINUED_TO_RE = re.compile(
+    r"CONTINUED\s+TO\s+(?:[A-Z]+,?\s+)?"
     r"(?P<month>[A-Z]+)\s+(?P<day>\d{1,2}),?\s+(?P<year>\d{4})",
     re.IGNORECASE,
 )
@@ -164,61 +208,151 @@ _MONTHS = {
 }
 
 
-def _parse_long_date(s: str) -> date:
-    m = re.match(r"^([A-Z][A-Za-z]+) (\d{1,2}), (\d{4})$", s.strip())
+def _parse_long_date(s: str) -> date | None:
+    m = LONG_DATE_RE.search(s)
     if not m:
-        raise ValueError(f"unrecognised date: {s!r}")
-    return date(int(m.group(3)), _MONTHS[m.group(1).upper()], int(m.group(2)))
+        return None
+    month = m.group(1).upper()
+    if month not in _MONTHS:
+        return None
+    return date(int(m.group(3)), _MONTHS[month], int(m.group(2)))
+
+
+def _detect_division(header_text: str) -> str | None:
+    """Look at the first few lines of page-1 to identify division."""
+    upper = header_text.upper()
+    if "PROBATE" in upper:
+        return "Probate"
+    if "LAW AND MOTION" in upper or "LAW & MOTION" in upper or "LAW AMP; MOTION" in upper:
+        return "Law and Motion"
+    if "FAMILY" in upper:
+        return "Family Law"
+    if "CIVIL" in upper:
+        return "Civil"
+    if "CRIMINAL" in upper:
+        return "Criminal"
+    return None
+
+
+def _detect_dept_in_header(header_text: str) -> str | None:
+    """Look for 'Dept. N' or 'DEPARTMENT N' in the first few lines of page-1."""
+    m = re.search(r"(?:Dept\.|DEPARTMENT)\s+(\d{1,3})\b", header_text)
+    return m.group(1) if m else None
+
+
+def _detect_style(header_text: str) -> str:
+    """Tag the style based on header characteristics, for debugging/audit."""
+    upper = header_text.upper()
+    if "PROBATE TENTATIVE RULINGS" in upper:
+        return "probate-dept-header"
+    if "LAW AND MOTION CALENDAR" in upper:
+        return "lawandmotion-calendar"
+    if "PROBATE CALENDAR" in upper:
+        return "probate-calendar"
+    if "LAW & MOTION TENTATIVE RULINGS" in upper or "LAW AMP; MOTION" in upper:
+        return "lawandmotion-tentative-rulings"
+    return "unknown"
 
 
 @dataclass(frozen=True)
-class PdfMeta:
-    hearing_date: date
-    dept: str
-    division: str
+class _DocMeta:
+    hearing_date: date | None
+    division: str | None
+    dept: str | None
+    style: str
 
 
-def extract_meta(reader: pypdf.PdfReader) -> PdfMeta:
-    """Read date/dept/division from the page-1 header."""
-    text = reader.pages[0].extract_text() or ""
-    date_m = HEADER_DATE_RE.search(text)
-    dept_m = HEADER_DEPT_RE.search(text)
-    div_m = HEADER_DIVISION_RE.search(text)
-    if not (date_m and dept_m and div_m):
-        raise ValueError(f"could not parse page-1 header; got: {text[:300]!r}")
-    return PdfMeta(
-        hearing_date=_parse_long_date(date_m.group(1)),
-        dept=dept_m.group(1),
-        division=div_m.group(1).strip(),
+def _extract_doc_meta(page1_text: str, dept_hint: str | None) -> _DocMeta:
+    """Pull hearing date, division, dept from the first ~6 lines of page 1."""
+    head = "\n".join(page1_text.splitlines()[:8])
+    return _DocMeta(
+        hearing_date=_parse_long_date(head),
+        division=_detect_division(head),
+        dept=_detect_dept_in_header(head) or dept_hint,
+        style=_detect_style(head),
     )
 
 
-def _strip_page_header(page_text: str, meta: PdfMeta) -> str:
-    """Remove the 4-line header that repeats on every page."""
-    lines = page_text.splitlines()
-    # First 4 non-empty lines are: date / Dept. N / Division Tentative Rulings / page#
+def _line_looks_like_page_number(line: str) -> bool:
+    """True for '1', '– 1 –', '- 1 -', '\\ufeff1 ' etc."""
+    s = line.strip()
+    if not s:
+        return False
+    s = s.replace("–", "-").replace("—", "-")
+    s = s.strip(" -\t")
+    return s.isdigit()
+
+
+def _find_repeating_prefix_suffix(pages: list[list[str]]) -> tuple[int, int]:
+    """Find how many lines at top and bottom of each page are 'header'/'footer'.
+
+    A line is part of the header if it (or a page-number lookalike) appears at
+    the same position on every page. Same for footer.
+    """
+    if len(pages) < 2:
+        return 0, 0
+
+    def equiv(a: str, b: str) -> bool:
+        if _line_looks_like_page_number(a) and _line_looks_like_page_number(b):
+            return True
+        return a.strip() == b.strip()
+
+    min_len = min(len(p) for p in pages)
+    if min_len == 0:
+        return 0, 0
+
+    # Prefix
+    prefix_len = 0
+    for i in range(min_len):
+        ref = pages[0][i]
+        if all(equiv(p[i], ref) for p in pages[1:]):
+            prefix_len = i + 1
+        else:
+            break
+
+    # Suffix - independent count from the bottom
+    suffix_len = 0
+    for i in range(1, min_len - prefix_len + 1):
+        ref = pages[0][-i]
+        if all(equiv(p[-i], ref) for p in pages[1:]):
+            suffix_len = i
+        else:
+            break
+
+    return prefix_len, suffix_len
+
+
+def _strip_headers_and_footers(page_texts: list[str]) -> list[str]:
+    """Strip the auto-detected repeating header/footer lines from each page."""
+    page_lines = [t.splitlines() for t in page_texts]
+    prefix_len, suffix_len = _find_repeating_prefix_suffix(page_lines)
     out: list[str] = []
-    skip = 4
-    for line in lines:
-        if skip > 0 and line.strip():
-            skip -= 1
-            continue
-        out.append(line)
-    return "\n".join(out)
+    for lines in page_lines:
+        end = len(lines) - suffix_len if suffix_len else len(lines)
+        out.append("\n".join(lines[prefix_len:end]))
+    return out
+
+
+def _strip_continuation_marks(text: str) -> str:
+    return "\n".join(
+        line for line in text.splitlines()
+        if not CONTINUATION_LINE_RE.match(line)
+    )
 
 
 def _classify(disposition_text: str) -> tuple[str, bool, date | None]:
     """Return (primary_outcome, conditional, continued_to)."""
-    text = disposition_text.upper()
-    text = REMOTE_BOILERPLATE_RE.sub("", text).strip()
+    cleaned = disposition_text
+    for pat in BOILERPLATE_PATTERNS:
+        cleaned = pat.sub(" ", cleaned)
+    text = cleaned.upper()
     conditional = "ABSENT OBJECTION" in text
 
-    # Priority order: substantive dispositions first.
-    has_denied = bool(re.search(r"\bDENIED\b", text))
+    has_denied = bool(re.search(r"\bDENIED\b|\bDISMISSES\b", text))
     has_granted = bool(re.search(r"\bGRANTED\b", text))
-    has_continued = bool(re.search(r"\bCONTINUED TO\b|\bHEARING CONTINUED\b", text))
+    has_continued = bool(re.search(r"\bCONTINUED TO\b|\bHEARING CONTINUED\b|\bCONTINUES THE MATTER\b", text))
     has_appearance = bool(re.search(r"\bAPPEARANCES ARE REQUIRED\b", text))
-    has_off_cal = bool(re.search(r"\bOFF CALENDAR\b|\bDROPPED FROM CALENDAR\b", text))
+    has_off_cal = bool(re.search(r"\bOFF CALENDAR\b|\bDROPPED FROM (?:THE )?CALENDAR\b", text))
 
     if has_denied:
         outcome = "denied"
@@ -235,96 +369,215 @@ def _classify(disposition_text: str) -> tuple[str, bool, date | None]:
 
     continued_to: date | None = None
     if has_continued:
-        m = CONTINUED_RE.search(disposition_text)
+        m = CONTINUED_TO_RE.search(disposition_text)
         if m:
             month = m.group("month").upper()
             if month in _MONTHS:
-                continued_to = date(int(m.group("year")), _MONTHS[month], int(m.group("day")))
+                try:
+                    continued_to = date(
+                        int(m.group("year")),
+                        _MONTHS[month],
+                        int(m.group("day")),
+                    )
+                except ValueError:
+                    pass
 
     return outcome, conditional, continued_to
+
+
+def _strip_boilerplate(text: str) -> str:
+    cleaned = text
+    for pat in BOILERPLATE_PATTERNS:
+        cleaned = pat.sub("", cleaned)
+    return cleaned.strip()
+
+
+def _split_case_header(rest: str) -> tuple[str, str]:
+    """Given the part of a header line after the leading 'N. ', return (case_number, case_title).
+
+    Handles all four observed formats:
+      Style A: "25PR0206 MATTER OF ANDRESEN TRUST"        → first token is the number
+      Style B/C: "CAPITAL ONE, N.A. v. McGINNIS, 25CV1362" → last comma-separated token is the number
+      Style D: "MARIA DE LA CRUZ V. JUAN ... SFL20210053"  → last whitespace token is the number
+    """
+    m = CASE_NUMBER_RE.search(rest)
+    if not m:
+        return "", rest.strip(", \t")
+    case_number = m.group(1)
+    # Title = everything before case_number, possibly minus trailing ", " or whitespace.
+    before = rest[: m.start()].rstrip(", \t")
+    after = rest[m.end():].strip(", \t")
+    title = (before + " " + after).strip(", \t") if after else before
+    return case_number, title
+
+
+def _extract_motion_type(lines: list[str]) -> tuple[str, int]:
+    """Pull motion-type line(s) starting at lines[0].
+
+    Returns (motion_type_text, lines_consumed). Motion type can be:
+      - A single short title-like line (Styles A, B, C single-motion case)
+      - Multiple '(<LETTER>) ...' lines (B, C multi-motion)
+      - Empty (Style D — body starts immediately)
+    """
+    if not lines:
+        return "", 0
+    consumed_lines: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line:
+            break
+        # Multi-motion marker (A), (B), (C)
+        if re.match(r"^\([A-Z]\)\s+\S", line):
+            consumed_lines.append(line)
+            i += 1
+            continue
+        # Single-line title: short, no sentence-ish punctuation, no leading lowercase
+        # (which would suggest narrative continuation).
+        if i == 0:
+            if (
+                len(line) <= 120
+                and not _looks_like_narrative(line)
+            ):
+                consumed_lines.append(line)
+                i += 1
+                continue
+        break
+    return "\n".join(consumed_lines), i
+
+
+def _looks_like_narrative(line: str) -> bool:
+    """Heuristic: does this line look like body prose rather than a motion-type title?"""
+    if len(line) > 130:
+        return True
+    # Narrative sentences typically have multiple periods OR end with a period.
+    # Title lines like "Motion for Judgment on the Pleadings" don't.
+    # But "Mr. Laub's Motion..." has a period; check for sentence-end period followed by space + capital.
+    if re.search(r"\.\s+[A-Z]", line):
+        return True
+    # Body lines often start with " " (indented) or with a date-like phrase.
+    if re.match(r"^\s*(?:On|Pending|This|The|Defendant|Plaintiff|Petitioner|Respondent|Decedent|At the|In this|Letters|Default)\b", line):
+        return True
+    return False
+
+
+# ----------------------------------------------------------------- parse()
 
 
 def parse(
     pdf_bytes: bytes,
     source_url: str,
     source_sha256: str | None = None,
+    dept_hint: str | None = None,
 ) -> list[Ruling]:
-    """Extract all rulings from one EDC tentative-rulings PDF."""
+    """Extract all rulings from one EDC tentative-rulings PDF.
+
+    `dept_hint`: department number ("9", "12", ...) supplied by the discovery
+    layer (which knows what dept page the PDF was linked from). Used when the
+    PDF header doesn't include the dept (Styles B, C).
+    """
     if source_sha256 is None:
         source_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
     reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
-    meta = extract_meta(reader)
+    raw_pages = [page.extract_text() or "" for page in reader.pages]
+    if not raw_pages:
+        return []
 
-    # Build a per-page text array, stripping the repeating header.
-    page_texts: list[str] = []
-    for page in reader.pages:
-        raw = page.extract_text() or ""
-        page_texts.append(_strip_page_header(raw, meta))
-    full_doc_text = "\n\n".join(
-        f"\x1ePAGE {i+1}\x1e\n{t}" for i, t in enumerate(page_texts)
-    )
+    meta = _extract_doc_meta(raw_pages[0], dept_hint)
+    if meta.hearing_date is None:
+        return []  # if we can't find a date, this isn't a tentatives PDF we recognise
 
-    # Find ruling header positions in the joined text (with page markers).
-    # Strip page markers when searching headers but preserve them for page lookup.
-    plain = re.sub(r"\x1ePAGE \d+\x1e\n", "", full_doc_text)
-    page_offsets: list[tuple[int, int]] = []  # (offset_in_plain, page_number)
+    stripped_pages = _strip_headers_and_footers(raw_pages)
+    stripped_pages = [_strip_continuation_marks(p) for p in stripped_pages]
+
+    # Join pages with a separator so we can map offsets back to page numbers.
+    joined_parts: list[str] = []
+    page_offsets: list[int] = []  # offset into `plain` where page i starts
     cursor = 0
-    for i, t in enumerate(page_texts):
-        page_offsets.append((cursor, i + 1))
-        cursor += len(t) + 2  # the "\n\n" between pages
+    SEP = "\n\n"
+    for i, page in enumerate(stripped_pages):
+        page_offsets.append(cursor)
+        joined_parts.append(page)
+        cursor += len(page) + len(SEP)
+    plain = SEP.join(joined_parts)
 
-    def page_for_offset(off: int) -> int:
+    def page_for_offset(offset: int) -> int:
         page = 1
-        for o, p in page_offsets:
-            if o <= off:
-                page = p
+        for i, start in enumerate(page_offsets):
+            if start <= offset:
+                page = i + 1
             else:
                 break
         return page
 
-    header_matches = list(RULING_HEADER_RE.finditer(plain))
-    if not header_matches:
+    # Find disposition anchors.
+    anchors = list(TENTATIVE_RULING_ANCHOR_RE.finditer(plain))
+    if not anchors:
         return []
 
-    # Map ruling_idx → disposition text.
-    dispositions: dict[int, tuple[str, int]] = {}  # idx -> (text, start_offset)
-    for dm in DISPOSITION_RE.finditer(plain):
-        idx = int(dm.group("idx"))
-        dispositions[idx] = (dm.group("text").strip(), dm.start())
-
+    # For each anchor, scan backward for the case-header line whose idx matches.
     rulings: list[Ruling] = []
-    for i, hm in enumerate(header_matches):
-        idx = int(hm.group("idx"))
-        case_number = hm.group("case_number").strip()
-        case_title = hm.group("case_title").strip()
-        motion_type = hm.group("motion_type").strip()
+    for i, anchor in enumerate(anchors):
+        anchor_idx = int(anchor.group(1))
 
-        start = hm.start()
-        end = header_matches[i + 1].start() if i + 1 < len(header_matches) else len(plain)
-        # The slice [start:end] reaches into the whitespace before the next ruling
-        # header. Trim trailing whitespace so page_end reflects where content really
-        # ends, not where the next ruling begins.
-        content_end = start + len(plain[start:end].rstrip())
-        ruling_text = plain[start:end].strip()
+        # Region in which to look for this anchor's case header:
+        #   from (end of previous anchor's case header, or 0) to (anchor.start)
+        region_start = 0 if i == 0 else (
+            anchors[i - 1].end()  # past the previous TENTATIVE RULING marker
+        )
+        region_end = anchor.start()
+        region = plain[region_start:region_end]
 
-        # Body = between the header line and TENTATIVE RULING #N marker.
-        body = ruling_text
-        body_end = ruling_text.find("TENTATIVE RULING #")
-        if body_end >= 0:
-            body = ruling_text[:body_end].strip()
-            # Drop the two header lines themselves.
-            body_lines = body.splitlines()[2:]
-            body = "\n".join(body_lines).strip()
+        header_match: re.Match[str] | None = None
+        for hm in RULING_HEADER_LINE_RE.finditer(region):
+            if int(hm.group("idx")) == anchor_idx:
+                header_match = hm
+        if header_match is None:
+            # Couldn't find a header for this anchor — skip it (don't crash).
+            continue
 
-        disposition_text = dispositions.get(idx, ("", 0))[0]
-        disposition_clean = REMOTE_BOILERPLATE_RE.sub("", disposition_text).strip()
+        header_start_abs = region_start + header_match.start()
+        header_end_abs = region_start + header_match.end()
+        case_number, case_title = _split_case_header(header_match.group("rest"))
+
+        # Lines after the header are motion-type and then body.
+        after_header = plain[header_end_abs:anchor.start()]
+        # Skip the immediate newline following the header.
+        after_lines = after_header.lstrip("\n").splitlines()
+        motion_type, lines_consumed = _extract_motion_type(after_lines)
+        body_text = "\n".join(after_lines[lines_consumed:]).strip()
+
+        # Disposition runs from this anchor to the next ruling's case header
+        # (or end of doc).
+        if i + 1 < len(anchors):
+            next_header = None
+            next_region = plain[anchors[i].end():anchors[i + 1].start()]
+            for hm in RULING_HEADER_LINE_RE.finditer(next_region):
+                if int(hm.group("idx")) == int(anchors[i + 1].group(1)):
+                    next_header = hm
+                    break
+            if next_header is not None:
+                disposition_end_abs = anchors[i].end() + next_header.start()
+            else:
+                disposition_end_abs = anchors[i + 1].start()
+        else:
+            disposition_end_abs = len(plain)
+
+        disposition_text = plain[anchor.start():disposition_end_abs]
+        # Drop the "TENTATIVE RULING #N:" marker itself from the captured text.
+        disposition_text = disposition_text[anchor.end() - anchor.start():].strip()
+        outcome_text = _strip_boilerplate(disposition_text)
         outcome, conditional, continued_to = _classify(disposition_text)
 
-        page_start = page_for_offset(start)
-        page_end = page_for_offset(max(start, content_end - 1))
+        # Page span — from the case header to the last char of non-whitespace
+        # in the disposition.
+        page_start = page_for_offset(header_start_abs)
+        trimmed_end = anchor.start() + len(plain[anchor.start():disposition_end_abs].rstrip())
+        page_end = max(page_start, page_for_offset(max(header_start_abs, trimmed_end - 1)))
 
+        full_text = plain[header_start_abs:disposition_end_abs].strip()
         ruling_id = hashlib.sha256(
-            f"{source_sha256}:{idx}".encode("utf-8")
+            f"{source_sha256}:{anchor_idx}".encode("utf-8")
         ).hexdigest()[:32]
 
         rulings.append(
@@ -334,20 +587,21 @@ def parse(
                 division=meta.division,
                 dept=meta.dept,
                 hearing_date=meta.hearing_date,
-                ruling_index=idx,
+                ruling_index=anchor_idx,
                 case_number=case_number,
                 case_title=case_title,
                 motion_type=motion_type,
                 outcome=outcome,
-                outcome_text=disposition_clean,
+                outcome_text=outcome_text,
                 conditional=conditional,
                 continued_to=continued_to,
-                body_text=body,
-                full_text=ruling_text,
+                body_text=body_text,
+                full_text=full_text,
                 page_start=page_start,
                 page_end=page_end,
                 source_sha256=source_sha256,
                 source_url=source_url,
+                style=meta.style,
                 parser_version=PARSER_VERSION,
                 ingest_ts=datetime.utcnow(),
             )
@@ -356,10 +610,10 @@ def parse(
     return rulings
 
 
-def parse_file(path: str, source_url: str | None = None) -> list[Ruling]:
+def parse_file(path: str, source_url: str | None = None, dept_hint: str | None = None) -> list[Ruling]:
     """Convenience wrapper for tests and CLI use."""
     with open(path, "rb") as f:
         data = f.read()
     if source_url is None:
         source_url = f"file://{path}"
-    return parse(data, source_url=source_url)
+    return parse(data, source_url=source_url, dept_hint=dept_hint)
