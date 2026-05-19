@@ -22,6 +22,7 @@ import pyarrow.parquet as pq
 
 from counties.el_dorado import scraper as el_dorado
 from counties.contra_costa import scraper as contra_costa
+from counties.placer import scraper as placer
 from schema import Ruling
 
 REPO = Path(__file__).parent.parent
@@ -31,6 +32,7 @@ DATA = REPO / "data"
 PARSERS = {
     "el-dorado": el_dorado.parse,
     "contra-costa": contra_costa.parse,
+    "placer": placer.parse,
 }
 
 
