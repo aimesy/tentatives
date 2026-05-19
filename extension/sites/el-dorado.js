@@ -3,7 +3,7 @@
 
 (function () {
   const COUNTY = "el-dorado";
-  const PDF_PATH_RE = /\/system\/files\/tentative-rulings\/[^/]+\.pdf$/i;
+  const PDF_PATH_RE = /\/system\/files\/tentative-rulings?\/[^/]+\.pdf$/i;
 
   function harvest() {
     const seen = new Set();
@@ -25,9 +25,8 @@
   }
 
   const pdfs = harvest();
-  // Stash on window so the popup can ask for it via scripting.executeScript,
-  // and also push to background for unsolicited badge updates.
   window.__tentatives_pdfs = pdfs;
+  console.log(`[tentatives ${COUNTY}] harvested ${pdfs.length} PDFs from ${location.href}`);
   chrome.runtime.sendMessage({
     type: "page-loaded",
     county: COUNTY,

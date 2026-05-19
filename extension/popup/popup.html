@@ -4,32 +4,52 @@
     <meta charset="utf-8" />
     <title>Tentatives Capture</title>
     <style>
-      body { font: 13px/1.4 system-ui, sans-serif; width: 320px; padding: 12px; margin: 0; }
+      body { font: 13px/1.4 system-ui, sans-serif; width: 360px; padding: 12px; margin: 0; }
       h1 { font-size: 14px; margin: 0 0 8px; }
       .muted { color: #6b7280; }
-      .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; }
+      .small { font-size: 12px; }
+      .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
       button { padding: 6px 10px; cursor: pointer; }
-      ul { list-style: none; padding: 0; margin: 8px 0 0; max-height: 240px; overflow-y: auto; }
+      button[disabled] { cursor: not-allowed; opacity: 0.6; }
+      ul { list-style: none; padding: 0; margin: 8px 0 0; max-height: 200px; overflow-y: auto; }
       li { padding: 4px 0; border-top: 1px solid #e5e7eb; font-size: 12px; }
       li:first-child { border-top: 0; }
       .status-ok { color: #059669; }
       .status-skip { color: #6b7280; }
       .status-err { color: #dc2626; }
+      .status-warn { color: #d97706; }
       a { color: #2563eb; text-decoration: none; }
       a:hover { text-decoration: underline; }
+      .field { font-size: 12px; padding: 4px 0; border-top: 1px solid #f3f4f6; }
+      .field:first-child { border-top: 0; }
+      .field b { display: inline-block; min-width: 90px; color: #374151; }
+      .pill { display: inline-block; padding: 1px 6px; border-radius: 9999px; font-size: 11px; }
+      .pill-ok { background: #d1fae5; color: #065f46; }
+      .pill-warn { background: #fef3c7; color: #92400e; }
+      .pill-err { background: #fee2e2; color: #991b1b; }
     </style>
   </head>
   <body>
     <h1>Tentatives Capture</h1>
-    <div id="county" class="muted"></div>
-    <div class="row">
-      <span id="count">Scanning…</span>
+
+    <div id="diagnostics">
+      <div class="field"><b>Page</b> <span id="d-host" class="muted">checking…</span></div>
+      <div class="field"><b>County</b> <span id="d-county" class="muted">—</span></div>
+      <div class="field"><b>PDFs found</b> <span id="d-pdfcount" class="muted">—</span></div>
+      <div class="field"><b>GitHub config</b> <span id="d-config" class="muted">—</span></div>
+    </div>
+
+    <div class="row" style="margin-top: 12px;">
+      <span id="status" class="small muted"></span>
       <button id="upload" disabled>Upload</button>
     </div>
     <ul id="results"></ul>
-    <div class="row muted" style="margin-top: 12px;">
+
+    <div class="row muted small" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 8px;">
       <a id="opts" href="#">Settings</a>
+      <a id="reload" href="#">Reload page</a>
     </div>
+
     <script src="popup.js" type="module"></script>
   </body>
 </html>
