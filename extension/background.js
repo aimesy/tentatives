@@ -6,6 +6,7 @@
 import { sha256Hex, bufferToBase64 } from "./lib/hash.js";
 import {
   fileExists,
+  getFile,
   putFile,
   appendNdjsonLine,
 } from "./lib/github.js";
@@ -40,7 +41,8 @@ async function uploadOnePdf({ url, filename, county }, config) {
   const sha = await sha256Hex(buffer);
   const archivePath = `archive/${county}/${sha.slice(0, 2)}/${sha}.pdf`;
 
-  // 2. Idempotency: skip if already in repo.
+  // 2. Idempotency: only upload the PDF if it isn't already in the archive.
+  // We always log a capture event though — re-visits are meaningful provenance.
   const exists = await fileExists({
     owner: githubOwner,
     repo: githubRepo,
@@ -48,23 +50,22 @@ async function uploadOnePdf({ url, filename, county }, config) {
     path: archivePath,
     token: githubToken,
   });
-  if (exists) {
-    return { status: "skipped-exists", sha, archivePath };
+
+  if (!exists) {
+    const contentB64 = bufferToBase64(buffer);
+    await putFile({
+      owner: githubOwner,
+      repo: githubRepo,
+      branch: githubBranch,
+      path: archivePath,
+      message: `${county}: capture ${filename} (sha=${sha.slice(0, 8)})`,
+      contentBase64: contentB64,
+      token: githubToken,
+    });
   }
 
-  // 3. PUT the PDF.
-  const contentB64 = bufferToBase64(buffer);
-  await putFile({
-    owner: githubOwner,
-    repo: githubRepo,
-    branch: githubBranch,
-    path: archivePath,
-    message: `${county}: capture ${filename} (sha=${sha.slice(0, 8)})`,
-    contentBase64: contentB64,
-    token: githubToken,
-  });
-
-  // 4. Append a row to captures.ndjson.
+  // 3. Append a capture event to captures.ndjson (always — even when PDF was
+  // already archived, the new visit is provenance worth keeping).
   const capture = {
     source_sha256: sha,
     source_url: url,
@@ -83,17 +84,62 @@ async function uploadOnePdf({ url, filename, county }, config) {
     token: githubToken,
   });
 
-  return { status: "uploaded", sha, archivePath, size: buffer.byteLength };
+  return {
+    status: exists ? "skipped-exists" : "uploaded",
+    sha,
+    archivePath,
+    size: buffer.byteLength,
+  };
+}
+
+async function loadKnownUrls(county, config) {
+  const { githubToken, githubOwner, githubRepo, githubBranch } = config;
+  if (!githubToken || !githubOwner || !githubRepo) return new Set();
+  try {
+    const f = await getFile({
+      owner: githubOwner,
+      repo: githubRepo,
+      branch: githubBranch,
+      path: `archive/${county}/captures.ndjson`,
+      token: githubToken,
+    });
+    const content = atob(f.content.replace(/\n/g, ""));
+    const urls = new Set();
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const row = JSON.parse(trimmed);
+        if (row.source_url) urls.add(row.source_url);
+      } catch { /* skip malformed line */ }
+    }
+    return urls;
+  } catch (e) {
+    if (e.status === 404) return new Set();
+    console.warn("[tentatives bg] could not load captures.ndjson:", e.message);
+    return new Set();
+  }
 }
 
 async function uploadBatch({ pdfs, county }) {
   const config = await getConfig();
+  // Pre-check the manifest so we don't re-download PDFs whose source URL is
+  // already recorded — saves bandwidth on the court site and avoids redundant
+  // commits in the repo.
+  const knownUrls = await loadKnownUrls(county, config);
+  console.log(`[tentatives bg] ${knownUrls.size} URLs already in manifest`);
   const results = [];
   for (const pdf of pdfs) {
+    if (knownUrls.has(pdf.url)) {
+      results.push({ ...pdf, status: "already-captured" });
+      continue;
+    }
     try {
       const r = await uploadOnePdf({ ...pdf, county }, config);
       results.push({ ...pdf, ...r });
+      knownUrls.add(pdf.url);
     } catch (e) {
+      console.error("[tentatives bg] upload error for", pdf.filename, e);
       results.push({ ...pdf, status: "error", error: String(e.message || e) });
     }
   }
