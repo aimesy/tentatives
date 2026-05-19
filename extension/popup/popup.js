@@ -12,6 +12,9 @@ const list = $("results");
 const progressBar = $("progress-bar");
 const progressFill = $("progress-fill");
 const archiveLink = $("archive-link");
+const bulkBtn = $("bulk-scan");
+const bulkStopBtn = $("bulk-stop");
+const bulkStatusEl = $("bulk-status");
 
 $("opts").addEventListener("click", (e) => {
   e.preventDefault();
@@ -29,6 +32,10 @@ const HOST_TO_COUNTY = {
   "placer.courts.ca.gov": "placer",
   "www.placer.courts.ca.gov": "placer",
 };
+
+// Counties whose bulk scan is wired up in the background service worker.
+// Keep in sync with COUNTY_SCAN in background.js.
+const BULK_SUPPORTED = new Set(["el-dorado", "placer"]);
 
 function setPill(el, text, kind = "warn") {
   el.innerHTML = `<span class="pill pill-${kind}">${text}</span>`;
@@ -146,9 +153,12 @@ async function render() {
   progressBar.classList.remove("on");
   archiveLink.style.display = "none";
   statusEl.textContent = "";
+  bulkStatusEl.textContent = "";
   btn.textContent = "Upload";
   btn.disabled = true;
   rescanBtn.disabled = false;
+  bulkBtn.disabled = true;
+  bulkBtn.textContent = "Scan all depts";
 
   const tab = await activeTab();
   const url = tab?.url || "";
@@ -170,6 +180,7 @@ async function render() {
     return { county: null, pdfs: [], cfg };
   }
   setPill(countyEl, county, "ok");
+  bulkBtn.disabled = !(cfg.ok && BULK_SUPPORTED.has(county));
 
   const pdfs = await harvestFromTab(tab.id);
   if (pdfs === null) {
@@ -197,6 +208,91 @@ async function render() {
   return { county, pdfs, cfg };
 }
 
+async function startBulkScan(county, cfg) {
+  btn.disabled = true;
+  rescanBtn.disabled = true;
+  bulkBtn.disabled = true;
+  bulkBtn.textContent = "Scanning…";
+  bulkStopBtn.style.display = "";
+  bulkStopBtn.disabled = false;
+  bulkStatusEl.textContent = "Discovering landing pages…";
+  list.innerHTML = "";
+  statusEl.textContent = "";
+  progressBar.classList.add("on");
+  progressFill.style.width = "0%";
+
+  let totalPages = 0;
+  let pagesDone = 0;
+  const summary = { uploaded: 0, "already-captured": 0, "skipped-exists": 0, error: 0 };
+
+  const port = chrome.runtime.connect({ name: "bulk-scan" });
+  port.postMessage({ type: "start", county });
+
+  return new Promise((resolve) => {
+    const cleanup = () => {
+      bulkStopBtn.style.display = "none";
+      bulkBtn.disabled = !cfg.ok;
+      bulkBtn.textContent = "Scan all depts";
+      rescanBtn.disabled = false;
+      btn.disabled = currentState.pdfs.length === 0 || !cfg.ok;
+      port.disconnect();
+      resolve();
+    };
+
+    bulkStopBtn.onclick = () => {
+      bulkStopBtn.disabled = true;
+      bulkStatusEl.textContent = "Stopping after current page…";
+      try { port.postMessage({ type: "stop" }); } catch { /* port closed */ }
+    };
+
+    port.onMessage.addListener((msg) => {
+      if (msg.type === "landings") {
+        totalPages = msg.urls.length;
+        bulkStatusEl.textContent = totalPages
+          ? `Found ${totalPages} landing page${totalPages === 1 ? "" : "s"}.`
+          : "No landing pages found.";
+      } else if (msg.type === "page-start") {
+        bulkStatusEl.textContent = `Page ${msg.index + 1}/${msg.total}: ${msg.title} — loading…`;
+        const pct = Math.round((msg.index / Math.max(1, msg.total)) * 100);
+        progressFill.style.width = `${pct}%`;
+      } else if (msg.type === "page-harvested") {
+        bulkStatusEl.textContent = `Page ${msg.index + 1}/${totalPages}: ${msg.title} — ${msg.pdfCount} PDF${msg.pdfCount === 1 ? "" : "s"}`;
+        pagesDone = msg.index + 1;
+      } else if (msg.type === "page-error") {
+        const li = document.createElement("li");
+        li.className = "status-err";
+        li.textContent = `✗ ${msg.title}: ${msg.error}`;
+        list.appendChild(li);
+        list.scrollTop = list.scrollHeight;
+      } else if (msg.type === "result") {
+        appendResult(msg.result);
+        summary[msg.result.status] = (summary[msg.result.status] || 0) + 1;
+      } else if (msg.type === "done") {
+        progressFill.style.width = "100%";
+        const parts = [];
+        if (summary.uploaded) parts.push(`${summary.uploaded} new`);
+        if (summary["skipped-exists"]) parts.push(`${summary["skipped-exists"]} logged`);
+        if (summary["already-captured"]) parts.push(`${summary["already-captured"]} dupe`);
+        if (summary.error) parts.push(`${summary.error} err`);
+        const tag = msg.reason === "stopped" ? "Stopped" : "Done";
+        bulkStatusEl.textContent = `${tag} — ${pagesDone}/${totalPages} pages · ${parts.join(", ") || "no changes"}`;
+        if (cfg.ok) {
+          archiveLink.href = `https://github.com/${cfg.owner}/${cfg.repo}/tree/master/archive/${county}`;
+          archiveLink.style.display = "inline";
+        }
+        cleanup();
+      } else if (msg.type === "error") {
+        const li = document.createElement("li");
+        li.className = "status-err";
+        li.textContent = `Fatal: ${msg.error}`;
+        list.appendChild(li);
+        bulkStatusEl.textContent = `Failed: ${msg.error}`;
+        cleanup();
+      }
+    });
+  });
+}
+
 let currentState = { county: null, pdfs: [], cfg: { ok: false } };
 
 rescanBtn.addEventListener("click", async () => {
@@ -207,6 +303,12 @@ rescanBtn.addEventListener("click", async () => {
 btn.addEventListener("click", async () => {
   if (!currentState.county || currentState.pdfs.length === 0 || !currentState.cfg.ok) return;
   await startUpload(currentState.pdfs, currentState.county, currentState.cfg);
+});
+
+bulkBtn.addEventListener("click", async () => {
+  if (!currentState.county || !currentState.cfg.ok) return;
+  if (!BULK_SUPPORTED.has(currentState.county)) return;
+  await startBulkScan(currentState.county, currentState.cfg);
 });
 
 (async () => {

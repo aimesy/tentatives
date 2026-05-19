@@ -5,12 +5,16 @@ const FIELDS = [
   ["branch", "githubBranch"],
 ];
 
+const DEFAULT_DELAY_SECONDS = 5;
+
 async function load() {
-  const keys = FIELDS.map(([, k]) => k);
+  const keys = FIELDS.map(([, k]) => k).concat(["pageLoadDelayMs"]);
   const stored = await chrome.storage.local.get(keys);
   for (const [id, key] of FIELDS) {
     document.getElementById(id).value = stored[key] || "";
   }
+  const ms = Number.isFinite(+stored.pageLoadDelayMs) ? +stored.pageLoadDelayMs : DEFAULT_DELAY_SECONDS * 1000;
+  document.getElementById("delay").value = (ms / 1000).toString();
 }
 
 async function save() {
@@ -18,6 +22,13 @@ async function save() {
   for (const [id, key] of FIELDS) {
     update[key] = document.getElementById(id).value.trim();
   }
+  const raw = document.getElementById("delay").value.trim();
+  const seconds = raw === "" ? DEFAULT_DELAY_SECONDS : Number(raw);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    setStatus("✗ delay must be a non-negative number of seconds.", "err");
+    return;
+  }
+  update.pageLoadDelayMs = Math.round(seconds * 1000);
   await chrome.storage.local.set(update);
   setStatus("✓ saved", "ok");
 }
