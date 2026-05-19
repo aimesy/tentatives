@@ -101,15 +101,23 @@ async function uploadBatch({ pdfs, county }) {
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  console.log("[tentatives bg] message", msg?.type, msg);
   if (msg && msg.type === "upload-batch") {
     uploadBatch({ pdfs: msg.pdfs, county: msg.county })
       .then((results) => sendResponse({ ok: true, results }))
-      .catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+      .catch((e) => {
+        console.error("[tentatives bg] upload failed", e);
+        sendResponse({ ok: false, error: String(e.message || e) });
+      });
     return true; // keep channel open for async response
   }
   if (msg && msg.type === "page-loaded") {
-    // Could update badge with PDF count here; for v1 just acknowledge.
-    chrome.action.setBadgeText({ text: String(msg.pdfs.length) });
-    chrome.action.setBadgeBackgroundColor({ color: "#3b82f6" });
+    const text = msg.pdfs.length ? String(msg.pdfs.length) : "";
+    chrome.action.setBadgeText({ text });
+    chrome.action.setBadgeBackgroundColor({ color: msg.pdfs.length ? "#3b82f6" : "#9ca3af" });
   }
+});
+
+chrome.runtime.onInstalled.addListener((details) => {
+  console.log("[tentatives bg] installed", details.reason);
 });
