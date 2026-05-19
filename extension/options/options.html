@@ -25,8 +25,9 @@
     <h1>Tentatives Capture</h1>
     <p class="muted">
       Uploads court tentative-ruling PDFs to a GitHub archive. Needs a personal
-      access token (PAT) with <code>repo</code> scope (or, for a public repo, fine-grained
-      with <code>contents:write</code>).
+      access token (PAT) with <code>Contents: Read and write</code> on the
+      target repo (fine-grained) or <code>repo</code> scope (classic).
+      <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener">Create one →</a>
     </p>
 
     <label for="token">GitHub PAT</label>
@@ -38,11 +39,12 @@
     <label for="repo">Repo</label>
     <input id="repo" type="text" placeholder="tentatives" />
 
-    <label for="branch">Branch (optional)</label>
-    <input id="branch" type="text" placeholder="main" />
+    <label for="branch">Branch (optional, defaults to the repo default)</label>
+    <input id="branch" type="text" placeholder="master" />
 
     <div class="row">
       <button id="save">Save</button>
+      <button id="test">Test connection</button>
       <span id="status"></span>
     </div>
 

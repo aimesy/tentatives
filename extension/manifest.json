@@ -7,6 +7,7 @@
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": [
     "https://*.eldorado.courts.ca.gov/*",
+    "https://*.placer.courts.ca.gov/*",
     "https://api.github.com/*",
     "https://web.archive.org/*"
   ],
@@ -30,6 +31,13 @@
         "https://*.eldorado.courts.ca.gov/online-services/tentative-rulings/*"
       ],
       "js": ["sites/el-dorado.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.placer.courts.ca.gov/*"
+      ],
+      "js": ["sites/placer.js"],
       "run_at": "document_idle"
     }
   ]
