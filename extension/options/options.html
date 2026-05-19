@@ -42,6 +42,14 @@
     <label for="branch">Branch (optional, defaults to the repo default)</label>
     <input id="branch" type="text" placeholder="master" />
 
+    <label for="delay">Bulk-scan page-load delay (seconds)</label>
+    <input id="delay" type="text" inputmode="decimal" placeholder="5" />
+    <p class="muted" style="margin-top: 4px;">
+      Extra wait after each dept landing page loads, before harvesting PDF
+      links. Increase if the court site is slow or pages render PDFs after
+      load. Default 5 seconds.
+    </p>
+
     <div class="row">
       <button id="save">Save</button>
       <button id="test">Test connection</button>
