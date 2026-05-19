@@ -80,15 +80,18 @@ python -c "import duckdb; print(duckdb.sql(\"SELECT outcome, COUNT(*) FROM 'data
 **[⬇ Download the latest extension zip](https://github.com/aimesy/tentatives/releases/download/extension-latest/tentatives-extension.zip)** — rebuilt automatically on every push to `master` that touches `extension/`.
 
 1. Download `tentatives-extension.zip`, unzip somewhere stable (the folder must stay where Chrome can read it).
-2. `chrome://extensions` → **Developer mode** on → **Load unpacked** → pick the unzipped folder.
+2. **Chrome**: `chrome://extensions` → **Developer mode** on → **Load unpacked** → pick the unzipped folder.
+   **Firefox**: `about:debugging` → **This Firefox** → **Load Temporary Add-on** → pick the unzipped folder's `manifest.json`.
 3. Click the extension's icon → **Settings**.
-4. Paste a GitHub PAT (`repo` scope, or fine-grained with `contents:write` on this repo). Set owner = `aimesy`, repo = `tentatives`, branch = the branch you want commits to land on.
-5. Visit a supported court page (e.g. `https://www.eldorado.courts.ca.gov/online-services/tentative-rulings/tentative-rulings-dept-9`).
-6. Click the extension icon → **Upload**. The popup shows progress per PDF; the badge shows how many PDFs are on the current page.
+4. Paste a GitHub PAT — fine-grained with **Contents: Read and write** on this repo ([create one](https://github.com/settings/tokens?type=beta)), or classic with `repo`. Set owner = `aimesy`, repo = `tentatives`. Click **Test connection** to verify the PAT before uploading.
+5. Visit a supported court page:
+   - El Dorado: `https://www.eldorado.courts.ca.gov/online-services/tentative-rulings/tentative-rulings-dept-<N>`
+   - Placer: any page under `https://www.placer.courts.ca.gov/` that links to PDFs.
+6. Click the extension icon → **Upload**. The popup shows live progress per PDF; the badge on the icon shows how many PDFs are on the current page.
 
-Alternatively, clone the repo and load `extension/` directly as the unpacked extension folder (useful for development).
+The extension dedups by source URL — if a PDF was uploaded before, the next visit skips the download entirely. PDFs are stored content-addressable (`archive/<county>/<sha[:2]>/<sha>.pdf`), so re-captures of the same content from different URLs only write one file.
 
-Each upload is one commit (Contents API). Switching to batched commits (Git Data API) is a planned upgrade for bulk Wayback backfills.
+Each upload is one commit via the Contents API. Switching to batched commits (Git Data API) is a planned upgrade for bulk Wayback backfills.
 
 ## Schema
 
@@ -120,12 +123,15 @@ Each upload is one commit (Contents API). Switching to batched commits (Git Data
 ## Status
 
 - [x] Schema (`Ruling`, `Capture`)
-- [x] El Dorado discover + parse against the live fixture (15 rulings, 4 outcome classes, two case-number formats incl. legacy)
-- [x] Tests against the fixture (11 passing)
-- [x] Ingest orchestrator with idempotent append
-- [x] Browser extension (MV3, EDC adapter, GitHub Contents API)
-- [x] GitHub Action to auto-parse on push
-- [ ] Site / viewer (DuckDB-WASM + PDF.js)
+- [x] El Dorado parser — 4 styles (probate dept-9, law&motion dept-4, probate dept-4, family-law dept-12); 27 tests
+- [x] Contra Costa parser — 5 depts (09, 10, 14, 16, 18); 8 tests
+- [x] Placer parser — 3 fixtures across depts 3, 33, 42; 7 tests
+- [x] Ingest orchestrator with idempotent append, idempotent re-parse
+- [x] Browser extension (MV3) — Chrome + Firefox compatible; EDC + Placer site adapters; URL-based dedup; streaming progress
+- [x] Auto-zip workflow publishing `tentatives-extension.zip` at stable release URL
+- [x] GitHub Action to auto-parse on push (`.github/workflows/parse.yml`)
+- [ ] Contra Costa extension adapter (needs portal-based discovery — `cmsportal.cc-courts.org`)
+- [ ] Site / viewer (DuckDB-WASM + PDF.js, single-click text / double-click PDF page jump)
 - [ ] Wayback backfill mode (`discover_wayback`, batched Git Data API commits)
-- [ ] More counties (Contra Costa, Marin, Placer, Sonoma; forward-only OC/SC/San Mateo)
+- [ ] More counties (Marin, Sonoma; forward-only OC/SC/San Mateo)
 - [ ] Unified cross-county `data/index.parquet`

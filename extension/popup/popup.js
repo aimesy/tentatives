@@ -7,7 +7,11 @@ const countEl = $("d-pdfcount");
 const cfgEl = $("d-config");
 const statusEl = $("status");
 const btn = $("upload");
+const rescanBtn = $("rescan");
 const list = $("results");
+const progressBar = $("progress-bar");
+const progressFill = $("progress-fill");
+const archiveLink = $("archive-link");
 
 $("opts").addEventListener("click", (e) => {
   e.preventDefault();
@@ -22,6 +26,8 @@ $("reload").addEventListener("click", async (e) => {
 const HOST_TO_COUNTY = {
   "eldorado.courts.ca.gov": "el-dorado",
   "www.eldorado.courts.ca.gov": "el-dorado",
+  "placer.courts.ca.gov": "placer",
+  "www.placer.courts.ca.gov": "placer",
 };
 
 function setPill(el, text, kind = "warn") {
@@ -50,108 +56,162 @@ async function getConfigStatus() {
   const { githubToken = "", githubOwner = "", githubRepo = "" } =
     await chrome.storage.local.get(["githubToken", "githubOwner", "githubRepo"]);
   if (githubToken && githubOwner && githubRepo) {
-    return { ok: true, label: `${githubOwner}/${githubRepo}` };
+    return { ok: true, owner: githubOwner, repo: githubRepo };
   }
   const missing = [];
   if (!githubToken) missing.push("PAT");
   if (!githubOwner) missing.push("owner");
   if (!githubRepo) missing.push("repo");
-  return { ok: false, label: `missing: ${missing.join(", ")}` };
+  return { ok: false, missing };
 }
 
-(async () => {
-  console.log("[tentatives popup] opened");
+function statusLabel(status) {
+  switch (status) {
+    case "uploaded": return { cls: "status-ok", label: "✓ uploaded" };
+    case "already-captured": return { cls: "status-skip", label: "• skipped (already captured)" };
+    case "skipped-exists": return { cls: "status-skip", label: "• logged (PDF was already archived)" };
+    case "error": return { cls: "status-err", label: "✗ error" };
+    default: return { cls: "status-skip", label: status || "?" };
+  }
+}
+
+function appendResult(r) {
+  const li = document.createElement("li");
+  const { cls, label } = statusLabel(r.status);
+  li.className = cls;
+  const detail = r.status === "error" ? `: ${r.error}` : "";
+  li.textContent = `${label}${detail} — ${r.filename || r.url}`;
+  list.appendChild(li);
+  list.scrollTop = list.scrollHeight;
+}
+
+async function startUpload(pdfs, county, cfg) {
+  btn.disabled = true;
+  rescanBtn.disabled = true;
+  btn.textContent = "Uploading…";
+  statusEl.textContent = "";
+  list.innerHTML = "";
+  progressBar.classList.add("on");
+  progressFill.style.width = "0%";
+
+  const total = pdfs.length;
+  let done = 0;
+  const summary = { uploaded: 0, "already-captured": 0, "skipped-exists": 0, error: 0 };
+
+  // Open a long-lived port to receive progress events.
+  const port = chrome.runtime.connect({ name: "upload" });
+  port.postMessage({ type: "start", county, pdfs });
+
+  return new Promise((resolve) => {
+    port.onMessage.addListener((msg) => {
+      if (msg.type === "result") {
+        appendResult(msg.result);
+        summary[msg.result.status] = (summary[msg.result.status] || 0) + 1;
+        done += 1;
+        const pct = Math.round((done / total) * 100);
+        progressFill.style.width = `${pct}%`;
+        statusEl.textContent = `Uploading ${done} of ${total} (${pct}%)…`;
+      } else if (msg.type === "done") {
+        const parts = [];
+        if (summary.uploaded) parts.push(`${summary.uploaded} new`);
+        if (summary["skipped-exists"]) parts.push(`${summary["skipped-exists"]} logged`);
+        if (summary["already-captured"]) parts.push(`${summary["already-captured"]} dupe`);
+        if (summary.error) parts.push(`${summary.error} err`);
+        btn.textContent = `Done (${parts.join(", ") || "no changes"})`;
+        statusEl.textContent = `${total} of ${total} processed`;
+        rescanBtn.disabled = false;
+        port.disconnect();
+        if (cfg.ok) {
+          archiveLink.href = `https://github.com/${cfg.owner}/${cfg.repo}/tree/master/archive/${county}`;
+          archiveLink.style.display = "inline";
+        }
+        resolve();
+      } else if (msg.type === "error") {
+        const li = document.createElement("li");
+        li.className = "status-err";
+        li.textContent = `Fatal: ${msg.error}`;
+        list.appendChild(li);
+        btn.textContent = "Retry";
+        btn.disabled = false;
+        rescanBtn.disabled = false;
+        port.disconnect();
+        resolve();
+      }
+    });
+  });
+}
+
+async function render() {
+  list.innerHTML = "";
+  progressBar.classList.remove("on");
+  archiveLink.style.display = "none";
+  statusEl.textContent = "";
+  btn.textContent = "Upload";
+  btn.disabled = true;
+  rescanBtn.disabled = false;
+
   const tab = await activeTab();
   const url = tab?.url || "";
   const host = url ? new URL(url).hostname : "";
   hostEl.textContent = host || "(no tab)";
 
   const cfg = await getConfigStatus();
-  if (cfg.ok) setPill(cfgEl, `✓ ${cfg.label}`, "ok");
-  else setPill(cfgEl, `✗ ${cfg.label}`, "err");
+  if (cfg.ok) {
+    setPill(cfgEl, `✓ ${cfg.owner}/${cfg.repo}`, "ok");
+  } else {
+    setPill(cfgEl, `✗ missing: ${cfg.missing.join(", ")}`, "err");
+  }
 
   const county = HOST_TO_COUNTY[host];
   if (!county) {
     setPill(countyEl, "not a supported court page", "warn");
     countEl.textContent = "—";
-    statusEl.textContent = "Open an EDC tentative-ruling page (e.g. /online-services/tentative-rulings/tentative-rulings-dept-9).";
-    return;
+    statusEl.textContent = "Open an EDC or Placer tentative-ruling page.";
+    return { county: null, pdfs: [], cfg };
   }
   setPill(countyEl, county, "ok");
 
   const pdfs = await harvestFromTab(tab.id);
   if (pdfs === null) {
     setPill(countEl, "harvest failed", "err");
-    statusEl.textContent = "Content script didn't run — try reloading the page.";
-    return;
+    statusEl.textContent = "Content script didn't run — try Reload page.";
+    return { county, pdfs: [], cfg };
   }
+  pdfs.sort((a, b) => (a.filename || a.url).localeCompare(b.filename || b.url));
 
   if (pdfs.length === 0) {
     setPill(countEl, "0 PDFs", "warn");
     statusEl.textContent = "No PDF links on this page. Try a dept landing page directly.";
-    return;
+    return { county, pdfs: [], cfg };
   }
 
   setPill(countEl, `${pdfs.length} PDF${pdfs.length === 1 ? "" : "s"}`, "ok");
   statusEl.textContent = cfg.ok
-    ? "Ready to upload."
+    ? `Ready to upload ${pdfs.length}.`
     : "Set GitHub PAT/owner/repo in Settings before uploading.";
   btn.disabled = !cfg.ok;
+  if (cfg.ok) {
+    archiveLink.href = `https://github.com/${cfg.owner}/${cfg.repo}/tree/master/archive/${county}`;
+    archiveLink.style.display = "inline";
+  }
+  return { county, pdfs, cfg };
+}
 
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    btn.textContent = "Uploading…";
-    statusEl.textContent = "";
-    list.innerHTML = "";
-    let resp;
-    try {
-      resp = await chrome.runtime.sendMessage({
-        type: "upload-batch",
-        county,
-        pdfs,
-      });
-    } catch (e) {
-      console.error("[tentatives popup] sendMessage failed", e);
-      resp = { ok: false, error: String(e.message || e) };
-    }
-    if (!resp?.ok) {
-      const li = document.createElement("li");
-      li.className = "status-err";
-      li.textContent = `Error: ${resp?.error || "unknown"}`;
-      list.appendChild(li);
-      btn.textContent = "Retry";
-      btn.disabled = false;
-      return;
-    }
-    for (const r of resp.results) {
-      const li = document.createElement("li");
-      let cls = "status-ok";
-      let label = "✓ uploaded";
-      if (r.status === "already-captured") {
-        cls = "status-skip";
-        label = "• skipped (already captured)";
-      } else if (r.status === "skipped-exists") {
-        cls = "status-skip";
-        label = "• logged (PDF was already archived)";
-      } else if (r.status === "error") {
-        cls = "status-err";
-        label = `✗ ${r.error}`;
-      }
-      li.className = cls;
-      li.textContent = `${label} — ${r.filename}`;
-      list.appendChild(li);
-    }
-    const uploaded = resp.results.filter((r) => r.status === "uploaded").length;
-    const recovered = resp.results.filter((r) => r.status === "skipped-exists").length;
-    const dupe = resp.results.filter((r) => r.status === "already-captured").length;
-    const errored = resp.results.filter((r) => r.status === "error").length;
-    const parts = [];
-    if (uploaded) parts.push(`${uploaded} new`);
-    if (recovered) parts.push(`${recovered} logged`);
-    if (dupe) parts.push(`${dupe} dupe`);
-    if (errored) parts.push(`${errored} err`);
-    btn.textContent = `Done (${parts.join(", ") || "no changes"})`;
-  });
+let currentState = { county: null, pdfs: [], cfg: { ok: false } };
+
+rescanBtn.addEventListener("click", async () => {
+  rescanBtn.disabled = true;
+  currentState = await render();
+});
+
+btn.addEventListener("click", async () => {
+  if (!currentState.county || currentState.pdfs.length === 0 || !currentState.cfg.ok) return;
+  await startUpload(currentState.pdfs, currentState.county, currentState.cfg);
+});
+
+(async () => {
+  console.log("[tentatives popup] opened");
+  currentState = await render();
 })().catch((e) => {
   console.error("[tentatives popup] fatal", e);
   statusEl.textContent = `Popup error: ${e.message || e}`;

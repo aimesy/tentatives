@@ -121,42 +121,63 @@ async function loadKnownUrls(county, config) {
   }
 }
 
-async function uploadBatch({ pdfs, county }) {
+// Small inter-commit delay smooths over GitHub's eventual consistency on the
+// Contents API; the 409 retry handles the cases where it isn't enough.
+const COMMIT_THROTTLE_MS = 250;
+
+async function uploadBatchStreaming({ pdfs, county, port }) {
   const config = await getConfig();
-  // Pre-check the manifest so we don't re-download PDFs whose source URL is
-  // already recorded — saves bandwidth on the court site and avoids redundant
-  // commits in the repo.
   const knownUrls = await loadKnownUrls(county, config);
   console.log(`[tentatives bg] ${knownUrls.size} URLs already in manifest`);
-  const results = [];
+
   for (const pdf of pdfs) {
+    let result;
     if (knownUrls.has(pdf.url)) {
-      results.push({ ...pdf, status: "already-captured" });
-      continue;
+      result = { ...pdf, status: "already-captured" };
+    } else {
+      try {
+        const r = await uploadOnePdf({ ...pdf, county }, config);
+        result = { ...pdf, ...r };
+        knownUrls.add(pdf.url);
+        // Throttle between commits to ease the eventual-consistency window.
+        if (r.status === "uploaded") {
+          await new Promise((res) => setTimeout(res, COMMIT_THROTTLE_MS));
+        }
+      } catch (e) {
+        console.error("[tentatives bg] upload error for", pdf.filename, e);
+        result = { ...pdf, status: "error", error: String(e.message || e) };
+      }
     }
     try {
-      const r = await uploadOnePdf({ ...pdf, county }, config);
-      results.push({ ...pdf, ...r });
-      knownUrls.add(pdf.url);
-    } catch (e) {
-      console.error("[tentatives bg] upload error for", pdf.filename, e);
-      results.push({ ...pdf, status: "error", error: String(e.message || e) });
+      port.postMessage({ type: "result", result });
+    } catch {
+      // Popup closed mid-upload — keep going but stop streaming.
+      console.warn("[tentatives bg] popup disconnected; finishing silently");
+      return;
     }
   }
-  return results;
+  try {
+    port.postMessage({ type: "done" });
+  } catch { /* popup closed */ }
 }
 
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "upload") return;
+  port.onMessage.addListener(async (msg) => {
+    if (msg.type !== "start") return;
+    try {
+      await uploadBatchStreaming({ pdfs: msg.pdfs, county: msg.county, port });
+    } catch (e) {
+      console.error("[tentatives bg] fatal", e);
+      try {
+        port.postMessage({ type: "error", error: String(e.message || e) });
+      } catch { /* port closed */ }
+    }
+  });
+});
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  console.log("[tentatives bg] message", msg?.type, msg);
-  if (msg && msg.type === "upload-batch") {
-    uploadBatch({ pdfs: msg.pdfs, county: msg.county })
-      .then((results) => sendResponse({ ok: true, results }))
-      .catch((e) => {
-        console.error("[tentatives bg] upload failed", e);
-        sendResponse({ ok: false, error: String(e.message || e) });
-      });
-    return true; // keep channel open for async response
-  }
+  console.log("[tentatives bg] message", msg?.type);
   if (msg && msg.type === "page-loaded") {
     const text = msg.pdfs.length ? String(msg.pdfs.length) : "";
     chrome.action.setBadgeText({ text });
