@@ -1,26 +1,39 @@
-// Popup: shows live diagnostic state for the active tab, plus the Upload action.
+// Popup: shows live diagnostic state for the active tab, plus Upload and
+// Scan-all-depts actions. Streams results from the background service worker
+// into the activity log.
 
 const $ = (id) => document.getElementById(id);
-const hostEl = $("d-host");
-const countyEl = $("d-county");
-const countEl = $("d-pdfcount");
-const cfgEl = $("d-config");
-const statusEl = $("status");
-const btn = $("upload");
-const rescanBtn = $("rescan");
-const list = $("results");
-const progressBar = $("progress-bar");
-const progressFill = $("progress-fill");
-const archiveLink = $("archive-link");
-const bulkBtn = $("bulk-scan");
-const bulkStopBtn = $("bulk-stop");
+
+const hostEl    = $("d-host");
+const countyEl  = $("d-county");
+const countEl   = $("d-pdfcount");
+const connDot   = $("conn-dot");
+const connText  = $("conn-text");
+
+const statusLineEl = $("status-line");
+const progressTextEl = $("progress-text");
 const bulkStatusEl = $("bulk-status");
 
-$("opts").addEventListener("click", (e) => {
+const uploadBtn = $("upload");
+const rescanBtn = $("rescan");
+const bulkBtn   = $("bulk-scan");
+const bulkStopBtn = $("bulk-stop");
+const clearBtn  = $("clear-activity");
+
+const list = $("results");
+
+const progressBar = $("progress-bar");
+const progressFill = $("progress-fill");
+
+const archiveLink = $("archive-link");
+const viewerLink  = $("open-viewer");
+const versionEl   = $("ext-version");
+
+$("open-options").addEventListener("click", (e) => {
   e.preventDefault();
   chrome.runtime.openOptionsPage();
 });
-$("reload").addEventListener("click", async (e) => {
+$("reload-page").addEventListener("click", async (e) => {
   e.preventDefault();
   const tab = await activeTab();
   if (tab) chrome.tabs.reload(tab.id);
@@ -31,14 +44,30 @@ const HOST_TO_COUNTY = {
   "www.eldorado.courts.ca.gov": "el-dorado",
   "placer.courts.ca.gov": "placer",
   "www.placer.courts.ca.gov": "placer",
+  "contracosta.courts.ca.gov": "contra-costa",
+  "www.contracosta.courts.ca.gov": "contra-costa",
+  "cc-courts.org": "contra-costa",
+  "www.cc-courts.org": "contra-costa",
+  "retired.cc-courts.org": "contra-costa",
+};
+
+const COUNTY_LABEL = {
+  "el-dorado": "El Dorado",
+  "placer": "Placer",
+  "contra-costa": "Contra Costa",
 };
 
 // Counties whose bulk scan is wired up in the background service worker.
 // Keep in sync with COUNTY_SCAN in background.js.
-const BULK_SUPPORTED = new Set(["el-dorado", "placer"]);
+const BULK_SUPPORTED = new Set(["el-dorado", "placer", "contra-costa"]);
 
-function setPill(el, text, kind = "warn") {
-  el.innerHTML = `<span class="pill pill-${kind}">${text}</span>`;
+function setPill(el, text, kind = "mute") {
+  el.innerHTML = `<span class="pill ${kind}">${text}</span>`;
+}
+
+function setConn(kind, text) {
+  connDot.className = `dot ${kind}`;
+  connText.textContent = text;
 }
 
 async function activeTab() {
@@ -48,11 +77,22 @@ async function activeTab() {
 
 async function harvestFromTab(tabId) {
   try {
-    const [res] = await chrome.scripting.executeScript({
-      target: { tabId },
+    // allFrames: true so a Contra Costa iframe (cc-courts.org inside the
+    // contracosta.courts.ca.gov shell) contributes its harvested PDFs too.
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
       func: () => window.__tentatives_pdfs || [],
     });
-    return res?.result || [];
+    const seen = new Set();
+    const pdfs = [];
+    for (const res of results || []) {
+      for (const pdf of res?.result || []) {
+        if (!pdf || !pdf.url || seen.has(pdf.url)) continue;
+        seen.add(pdf.url);
+        pdfs.push(pdf);
+      }
+    }
+    return pdfs;
   } catch (e) {
     console.error("[tentatives popup] harvest failed", e);
     return null;
@@ -72,32 +112,73 @@ async function getConfigStatus() {
   return { ok: false, missing };
 }
 
-function statusLabel(status) {
-  switch (status) {
-    case "uploaded": return { cls: "status-ok", label: "✓ uploaded" };
-    case "already-captured": return { cls: "status-skip", label: "• skipped (already captured)" };
-    case "skipped-exists": return { cls: "status-skip", label: "• logged (PDF was already archived)" };
-    case "error": return { cls: "status-err", label: "✗ error" };
-    default: return { cls: "status-skip", label: status || "?" };
-  }
+const STATUS_META = {
+  "uploaded":          { cls: "ok",   icon: "✓", label: "uploaded" },
+  "already-captured":  { cls: "skip", icon: "•", label: "skipped (already captured)" },
+  "skipped-exists":    { cls: "skip", icon: "•", label: "logged (PDF was already archived)" },
+  "error":             { cls: "err",  icon: "✗", label: "error" },
+};
+
+function ensureActivityVisible() {
+  // Drop any "empty" placeholder before appending real activity.
+  for (const el of list.querySelectorAll(".empty")) el.remove();
+  clearBtn.hidden = false;
+}
+
+function resetActivity() {
+  list.innerHTML = `<li class="empty">No uploads yet on this page.</li>`;
+  clearBtn.hidden = true;
 }
 
 function appendResult(r) {
+  ensureActivityVisible();
+  const meta = STATUS_META[r.status] || { cls: "skip", icon: "?", label: r.status || "?" };
   const li = document.createElement("li");
-  const { cls, label } = statusLabel(r.status);
-  li.className = cls;
-  const detail = r.status === "error" ? `: ${r.error}` : "";
-  li.textContent = `${label}${detail} — ${r.filename || r.url}`;
+  li.className = `ev ${meta.cls}`;
+  const detail = r.status === "error" && r.error ? `: ${r.error}` : "";
+  li.innerHTML =
+    `<span class="ev-icon">${meta.icon}</span>` +
+    `<div class="ev-msg">${escapeHtml(meta.label + detail)}` +
+    `<span class="ev-file">${escapeHtml(r.filename || r.url || "")}</span></div>`;
   list.appendChild(li);
   list.scrollTop = list.scrollHeight;
 }
 
+function appendNote(kind, msg) {
+  ensureActivityVisible();
+  const meta = STATUS_META[kind] || { cls: kind, icon: kind === "err" ? "!" : "·", label: "" };
+  const li = document.createElement("li");
+  li.className = `ev ${meta.cls}`;
+  li.innerHTML =
+    `<span class="ev-icon">${meta.icon}</span>` +
+    `<div class="ev-msg">${escapeHtml(msg)}</div>`;
+  list.appendChild(li);
+  list.scrollTop = list.scrollHeight;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+clearBtn.addEventListener("click", resetActivity);
+
+function summaryParts(summary) {
+  const parts = [];
+  if (summary.uploaded)            parts.push(`${summary.uploaded} new`);
+  if (summary["skipped-exists"])   parts.push(`${summary["skipped-exists"]} logged`);
+  if (summary["already-captured"]) parts.push(`${summary["already-captured"]} dupe`);
+  if (summary.error)               parts.push(`${summary.error} err`);
+  return parts.join(", ") || "no changes";
+}
+
 async function startUpload(pdfs, county, cfg) {
-  btn.disabled = true;
+  uploadBtn.disabled = true;
   rescanBtn.disabled = true;
-  btn.textContent = "Uploading…";
-  statusEl.textContent = "";
-  list.innerHTML = "";
+  bulkBtn.disabled = true;
+  uploadBtn.textContent = "Uploading…";
+  statusLineEl.textContent = "";
   progressBar.classList.add("on");
   progressFill.style.width = "0%";
 
@@ -105,7 +186,6 @@ async function startUpload(pdfs, county, cfg) {
   let done = 0;
   const summary = { uploaded: 0, "already-captured": 0, "skipped-exists": 0, error: 0 };
 
-  // Open a long-lived port to receive progress events.
   const port = chrome.runtime.connect({ name: "upload" });
   port.postMessage({ type: "start", county, pdfs });
 
@@ -117,30 +197,24 @@ async function startUpload(pdfs, county, cfg) {
         done += 1;
         const pct = Math.round((done / total) * 100);
         progressFill.style.width = `${pct}%`;
-        statusEl.textContent = `Uploading ${done} of ${total} (${pct}%)…`;
+        progressTextEl.textContent = `${done}/${total} (${pct}%)`;
       } else if (msg.type === "done") {
-        const parts = [];
-        if (summary.uploaded) parts.push(`${summary.uploaded} new`);
-        if (summary["skipped-exists"]) parts.push(`${summary["skipped-exists"]} logged`);
-        if (summary["already-captured"]) parts.push(`${summary["already-captured"]} dupe`);
-        if (summary.error) parts.push(`${summary.error} err`);
-        btn.textContent = `Done (${parts.join(", ") || "no changes"})`;
-        statusEl.textContent = `${total} of ${total} processed`;
+        uploadBtn.textContent = `Done · ${summaryParts(summary)}`;
+        progressTextEl.textContent = `${total}/${total} done`;
         rescanBtn.disabled = false;
+        bulkBtn.disabled = !(cfg.ok && BULK_SUPPORTED.has(county));
         port.disconnect();
         if (cfg.ok) {
           archiveLink.href = `https://github.com/${cfg.owner}/${cfg.repo}/tree/master/archive/${county}`;
-          archiveLink.style.display = "inline";
+          archiveLink.hidden = false;
         }
         resolve();
       } else if (msg.type === "error") {
-        const li = document.createElement("li");
-        li.className = "status-err";
-        li.textContent = `Fatal: ${msg.error}`;
-        list.appendChild(li);
-        btn.textContent = "Retry";
-        btn.disabled = false;
+        appendNote("err", `Fatal: ${msg.error}`);
+        uploadBtn.textContent = "Retry";
+        uploadBtn.disabled = false;
         rescanBtn.disabled = false;
+        bulkBtn.disabled = !(cfg.ok && BULK_SUPPORTED.has(county));
         port.disconnect();
         resolve();
       }
@@ -148,76 +222,15 @@ async function startUpload(pdfs, county, cfg) {
   });
 }
 
-async function render() {
-  list.innerHTML = "";
-  progressBar.classList.remove("on");
-  archiveLink.style.display = "none";
-  statusEl.textContent = "";
-  bulkStatusEl.textContent = "";
-  btn.textContent = "Upload";
-  btn.disabled = true;
-  rescanBtn.disabled = false;
-  bulkBtn.disabled = true;
-  bulkBtn.textContent = "Scan all depts";
-
-  const tab = await activeTab();
-  const url = tab?.url || "";
-  const host = url ? new URL(url).hostname : "";
-  hostEl.textContent = host || "(no tab)";
-
-  const cfg = await getConfigStatus();
-  if (cfg.ok) {
-    setPill(cfgEl, `✓ ${cfg.owner}/${cfg.repo}`, "ok");
-  } else {
-    setPill(cfgEl, `✗ missing: ${cfg.missing.join(", ")}`, "err");
-  }
-
-  const county = HOST_TO_COUNTY[host];
-  if (!county) {
-    setPill(countyEl, "not a supported court page", "warn");
-    countEl.textContent = "—";
-    statusEl.textContent = "Open an EDC or Placer tentative-ruling page.";
-    return { county: null, pdfs: [], cfg };
-  }
-  setPill(countyEl, county, "ok");
-  bulkBtn.disabled = !(cfg.ok && BULK_SUPPORTED.has(county));
-
-  const pdfs = await harvestFromTab(tab.id);
-  if (pdfs === null) {
-    setPill(countEl, "harvest failed", "err");
-    statusEl.textContent = "Content script didn't run — try Reload page.";
-    return { county, pdfs: [], cfg };
-  }
-  pdfs.sort((a, b) => (a.filename || a.url).localeCompare(b.filename || b.url));
-
-  if (pdfs.length === 0) {
-    setPill(countEl, "0 PDFs", "warn");
-    statusEl.textContent = "No PDF links on this page. Try a dept landing page directly.";
-    return { county, pdfs: [], cfg };
-  }
-
-  setPill(countEl, `${pdfs.length} PDF${pdfs.length === 1 ? "" : "s"}`, "ok");
-  statusEl.textContent = cfg.ok
-    ? `Ready to upload ${pdfs.length}.`
-    : "Set GitHub PAT/owner/repo in Settings before uploading.";
-  btn.disabled = !cfg.ok;
-  if (cfg.ok) {
-    archiveLink.href = `https://github.com/${cfg.owner}/${cfg.repo}/tree/master/archive/${county}`;
-    archiveLink.style.display = "inline";
-  }
-  return { county, pdfs, cfg };
-}
-
 async function startBulkScan(county, cfg) {
-  btn.disabled = true;
+  uploadBtn.disabled = true;
   rescanBtn.disabled = true;
   bulkBtn.disabled = true;
   bulkBtn.textContent = "Scanning…";
-  bulkStopBtn.style.display = "";
+  bulkStopBtn.hidden = false;
   bulkStopBtn.disabled = false;
   bulkStatusEl.textContent = "Discovering landing pages…";
-  list.innerHTML = "";
-  statusEl.textContent = "";
+  statusLineEl.textContent = "";
   progressBar.classList.add("on");
   progressFill.style.width = "0%";
 
@@ -230,11 +243,11 @@ async function startBulkScan(county, cfg) {
 
   return new Promise((resolve) => {
     const cleanup = () => {
-      bulkStopBtn.style.display = "none";
-      bulkBtn.disabled = !cfg.ok;
+      bulkStopBtn.hidden = true;
       bulkBtn.textContent = "Scan all depts";
+      bulkBtn.disabled = !(cfg.ok && BULK_SUPPORTED.has(county));
       rescanBtn.disabled = false;
-      btn.disabled = currentState.pdfs.length === 0 || !cfg.ok;
+      uploadBtn.disabled = currentState.pdfs.length === 0 || !cfg.ok;
       port.disconnect();
       resolve();
     };
@@ -249,48 +262,105 @@ async function startBulkScan(county, cfg) {
       if (msg.type === "landings") {
         totalPages = msg.urls.length;
         bulkStatusEl.textContent = totalPages
-          ? `Found ${totalPages} landing page${totalPages === 1 ? "" : "s"}.`
-          : "No landing pages found.";
+          ? `Found ${totalPages} page${totalPages === 1 ? "" : "s"}`
+          : "No pages to scan";
       } else if (msg.type === "page-start") {
-        bulkStatusEl.textContent = `Page ${msg.index + 1}/${msg.total}: ${msg.title} — loading…`;
+        bulkStatusEl.textContent = `Page ${msg.index + 1}/${msg.total}: ${msg.title}`;
         const pct = Math.round((msg.index / Math.max(1, msg.total)) * 100);
         progressFill.style.width = `${pct}%`;
       } else if (msg.type === "page-harvested") {
         bulkStatusEl.textContent = `Page ${msg.index + 1}/${totalPages}: ${msg.title} — ${msg.pdfCount} PDF${msg.pdfCount === 1 ? "" : "s"}`;
         pagesDone = msg.index + 1;
       } else if (msg.type === "page-error") {
-        const li = document.createElement("li");
-        li.className = "status-err";
-        li.textContent = `✗ ${msg.title}: ${msg.error}`;
-        list.appendChild(li);
-        list.scrollTop = list.scrollHeight;
+        appendNote("err", `${msg.title}: ${msg.error}`);
       } else if (msg.type === "result") {
         appendResult(msg.result);
         summary[msg.result.status] = (summary[msg.result.status] || 0) + 1;
       } else if (msg.type === "done") {
         progressFill.style.width = "100%";
-        const parts = [];
-        if (summary.uploaded) parts.push(`${summary.uploaded} new`);
-        if (summary["skipped-exists"]) parts.push(`${summary["skipped-exists"]} logged`);
-        if (summary["already-captured"]) parts.push(`${summary["already-captured"]} dupe`);
-        if (summary.error) parts.push(`${summary.error} err`);
         const tag = msg.reason === "stopped" ? "Stopped" : "Done";
-        bulkStatusEl.textContent = `${tag} — ${pagesDone}/${totalPages} pages · ${parts.join(", ") || "no changes"}`;
+        bulkStatusEl.textContent = `${tag} · ${pagesDone}/${totalPages} pages · ${summaryParts(summary)}`;
         if (cfg.ok) {
           archiveLink.href = `https://github.com/${cfg.owner}/${cfg.repo}/tree/master/archive/${county}`;
-          archiveLink.style.display = "inline";
+          archiveLink.hidden = false;
         }
         cleanup();
       } else if (msg.type === "error") {
-        const li = document.createElement("li");
-        li.className = "status-err";
-        li.textContent = `Fatal: ${msg.error}`;
-        list.appendChild(li);
+        appendNote("err", `Fatal: ${msg.error}`);
         bulkStatusEl.textContent = `Failed: ${msg.error}`;
         cleanup();
       }
     });
   });
+}
+
+async function render() {
+  progressBar.classList.remove("on");
+  archiveLink.hidden = true;
+  statusLineEl.textContent = "";
+  bulkStatusEl.textContent = "";
+  progressTextEl.textContent = "";
+  uploadBtn.textContent = "Upload";
+  uploadBtn.disabled = true;
+  rescanBtn.disabled = false;
+  bulkBtn.disabled = true;
+  bulkBtn.textContent = "Scan all depts";
+
+  const tab = await activeTab();
+  const url = tab?.url || "";
+  let host = "";
+  try { host = url ? new URL(url).hostname : ""; } catch { /* leave blank */ }
+  hostEl.textContent = host || "(no tab)";
+
+  const cfg = await getConfigStatus();
+  if (cfg.ok) {
+    setConn("ok", `${cfg.owner}/${cfg.repo}`);
+  } else {
+    setConn("err", `Missing: ${cfg.missing.join(", ")} — open Settings`);
+  }
+
+  const county = HOST_TO_COUNTY[host];
+  if (!county) {
+    setPill(countyEl, "not a supported court page", "warn");
+    setPill(countEl, "—", "mute");
+    statusLineEl.textContent = "Open an EDC, Placer, or Contra Costa tentative-ruling page.";
+    if (cfg.ok) {
+      archiveLink.href = `https://github.com/${cfg.owner}/${cfg.repo}/tree/master/archive`;
+      archiveLink.hidden = false;
+    }
+    return { county: null, pdfs: [], cfg };
+  }
+  setPill(countyEl, COUNTY_LABEL[county] || county, "ok");
+  bulkBtn.disabled = !(cfg.ok && BULK_SUPPORTED.has(county));
+
+  const pdfs = await harvestFromTab(tab.id);
+  if (pdfs === null) {
+    setPill(countEl, "harvest failed", "err");
+    statusLineEl.textContent = "Content script didn't run — try Reload page.";
+    return { county, pdfs: [], cfg };
+  }
+  pdfs.sort((a, b) => (a.filename || a.url).localeCompare(b.filename || b.url));
+
+  if (pdfs.length === 0) {
+    setPill(countEl, "0 PDFs", "warn");
+    statusLineEl.textContent = "No PDF links on this page. Try a dept landing page directly.";
+    if (cfg.ok) {
+      archiveLink.href = `https://github.com/${cfg.owner}/${cfg.repo}/tree/master/archive/${county}`;
+      archiveLink.hidden = false;
+    }
+    return { county, pdfs: [], cfg };
+  }
+
+  setPill(countEl, `${pdfs.length} PDF${pdfs.length === 1 ? "" : "s"}`, "ok");
+  statusLineEl.textContent = cfg.ok
+    ? `Ready to upload ${pdfs.length}.`
+    : "Set GitHub PAT/owner/repo in Settings before uploading.";
+  uploadBtn.disabled = !cfg.ok;
+  if (cfg.ok) {
+    archiveLink.href = `https://github.com/${cfg.owner}/${cfg.repo}/tree/master/archive/${county}`;
+    archiveLink.hidden = false;
+  }
+  return { county, pdfs, cfg };
 }
 
 let currentState = { county: null, pdfs: [], cfg: { ok: false } };
@@ -300,7 +370,7 @@ rescanBtn.addEventListener("click", async () => {
   currentState = await render();
 });
 
-btn.addEventListener("click", async () => {
+uploadBtn.addEventListener("click", async () => {
   if (!currentState.county || currentState.pdfs.length === 0 || !currentState.cfg.ok) return;
   await startUpload(currentState.pdfs, currentState.county, currentState.cfg);
 });
@@ -311,11 +381,27 @@ bulkBtn.addEventListener("click", async () => {
   await startBulkScan(currentState.county, currentState.cfg);
 });
 
+function initStaticBits() {
+  const manifest = chrome.runtime.getManifest?.();
+  if (manifest?.version) versionEl.textContent = manifest.version;
+
+  // Site viewer link: prefer user's configured owner/repo, fall back to a
+  // generic GitHub Pages search hint.
+  chrome.storage.local.get(["githubOwner", "githubRepo"]).then((s) => {
+    if (s.githubOwner && s.githubRepo) {
+      viewerLink.href = `https://${s.githubOwner}.github.io/${s.githubRepo}/`;
+    } else {
+      viewerLink.href = "https://aimesy.github.io/tentatives/";
+    }
+  });
+}
+
 (async () => {
   console.log("[tentatives popup] opened");
+  initStaticBits();
   currentState = await render();
 })().catch((e) => {
   console.error("[tentatives popup] fatal", e);
-  statusEl.textContent = `Popup error: ${e.message || e}`;
-  statusEl.className = "small status-err";
+  statusLineEl.textContent = `Popup error: ${e.message || e}`;
+  setConn("err", "Popup error");
 });

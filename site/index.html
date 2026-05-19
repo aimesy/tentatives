@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>California Tentative Rulings</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="hdr">
+      <div class="hdr-title">California Tentative Rulings</div>
+      <div class="hdr-stats" id="stats">loading…</div>
+      <div class="hdr-right">
+        <a class="link" id="repo-link" href="https://github.com/aimesy/tentatives" target="_blank" rel="noopener">Repo →</a>
+      </div>
+    </header>
+
+    <section class="toolbar" id="toolbar" hidden>
+      <span class="chip">
+        <label for="q">Search</label>
+        <input id="q" type="search" placeholder="case #, title, motion, body…" />
+      </span>
+      <span class="chip">
+        <label for="county">County</label>
+        <select id="county"><option value="">All</option></select>
+      </span>
+      <span class="chip">
+        <label for="dept">Dept</label>
+        <select id="dept"><option value="">All</option></select>
+      </span>
+      <span class="chip">
+        <label for="outcome">Outcome</label>
+        <select id="outcome"><option value="">All</option></select>
+      </span>
+      <span class="chip">
+        <label for="from">From</label>
+        <input id="from" type="date" />
+      </span>
+      <span class="chip">
+        <label for="to">To</label>
+        <input id="to" type="date" />
+      </span>
+      <span class="sep"></span>
+      <button class="btn" id="reset">Reset</button>
+      <button class="btn" id="permalink" title="Copy a URL for the current view">Copy link</button>
+    </section>
+
+    <section class="banner" id="loading-banner">
+      <div id="loading-msg">Loading rulings…</div>
+      <div class="stages" id="stages"></div>
+    </section>
+
+    <section class="results-wrap" id="results-wrap" hidden>
+      <div class="table-scroll">
+        <table id="results-table">
+          <thead>
+            <tr>
+              <th data-col="county">County <span class="sort-marker"></span></th>
+              <th data-col="dept">Dept <span class="sort-marker"></span></th>
+              <th data-col="hearing_date">Date <span class="sort-marker">↓</span></th>
+              <th data-col="case_number">Case # <span class="sort-marker"></span></th>
+              <th data-col="case_title">Title <span class="sort-marker"></span></th>
+              <th data-col="motion_type">Motion <span class="sort-marker"></span></th>
+              <th data-col="outcome">Outcome <span class="sort-marker"></span></th>
+              <th>PDF</th>
+            </tr>
+          </thead>
+          <tbody id="results-body"></tbody>
+        </table>
+      </div>
+      <div class="ftr">
+        <span id="result-count" class="muted">—</span>
+        <div class="pager">
+          <button class="btn" id="prev-page">‹ Prev</button>
+          <span id="page-info" class="muted">page 1</span>
+          <button class="btn" id="next-page">Next ›</button>
+          <span class="sep" style="height: 16px; background: var(--border);"></span>
+          <label class="muted" for="page-size">Page size</label>
+          <select id="page-size" class="btn" style="padding: 3px 6px;">
+            <option>50</option>
+            <option selected>100</option>
+            <option>250</option>
+            <option>500</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <div class="drawer" id="drawer">
+      <div class="drawer-panel">
+        <div class="drawer-head">
+          <span class="case" id="d-case"></span>
+          <span class="title" id="d-title"></span>
+          <button class="x" id="d-close" aria-label="Close">×</button>
+        </div>
+        <div class="drawer-body">
+          <dl class="kv" id="d-kv"></dl>
+          <h3>Disposition</h3>
+          <pre id="d-outcome"></pre>
+          <h3>Full text</h3>
+          <pre id="d-full"></pre>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

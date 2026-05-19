@@ -29,6 +29,20 @@ const COUNTY_SCAN = {
       /^\/online-services\/tentative-rulings\/[a-z][a-z0-9-]*\/?$/i.test(path)
       && path.replace(/\/$/, "") !== "/online-services/tentative-rulings",
   },
+  "contra-costa": {
+    // The CCC public landing page is just an iframe shell. The interesting
+    // page is the iframe target on cc-courts.org: current rulings live at
+    // motions-hearings-tentative.aspx, and historical at the archive page.
+    // Walking both gives us everything that's currently linkable.
+    root: "https://contracosta.courts.ca.gov/online-services/tentative-rulings",
+    landings: [
+      "https://contracosta.courts.ca.gov/online-services/tentative-rulings",
+      "https://contracosta.courts.ca.gov/tentative-rulings-archive",
+      "https://www.cc-courts.org/civil/motions-hearings-tentative.aspx",
+      "https://www.cc-courts.org/civil/motions-hearings-tentative-archive.aspx",
+    ],
+    pathTest: () => true, // landings supplied explicitly
+  },
 };
 
 const DEFAULT_PAGE_LOAD_DELAY_MS = 5000;
@@ -209,6 +223,11 @@ function landingTitle(url) {
 async function discoverLandingPages(county) {
   const cfg = COUNTY_SCAN[county];
   if (!cfg) throw new Error(`bulk scan not configured for county "${county}"`);
+  // Counties whose landing pages can't be reached by a static href crawl
+  // (e.g. iframe-based portals) ship an explicit list instead.
+  if (Array.isArray(cfg.landings) && cfg.landings.length) {
+    return [...cfg.landings];
+  }
   const r = await fetch(cfg.root, { credentials: "omit" });
   if (!r.ok) throw new Error(`fetch ${cfg.root}: HTTP ${r.status}`);
   const html = await r.text();
@@ -252,11 +271,22 @@ async function waitForTabComplete(tabId, { timeoutMs = 60000, pollMs = 200 } = {
 }
 
 async function harvestFromTab(tabId) {
-  const [res] = await chrome.scripting.executeScript({
-    target: { tabId },
+  // allFrames: true so cross-origin iframes (e.g. Contra Costa's cc-courts.org
+  // iframe inside contracosta.courts.ca.gov) contribute their PDFs too.
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
     func: () => window.__tentatives_pdfs || [],
   });
-  return res?.result || [];
+  const seen = new Set();
+  const pdfs = [];
+  for (const res of results || []) {
+    for (const pdf of res?.result || []) {
+      if (!pdf || !pdf.url || seen.has(pdf.url)) continue;
+      seen.add(pdf.url);
+      pdfs.push(pdf);
+    }
+  }
+  return pdfs;
 }
 
 // Set by the popup via a "stop" message. Checked between pages and between

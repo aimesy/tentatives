@@ -1,73 +1,71 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Tentatives Capture</title>
-    <style>
-      body { font: 13px/1.4 system-ui, sans-serif; width: 380px; padding: 12px; margin: 0; }
-      h1 { font-size: 14px; margin: 0 0 8px; }
-      .muted { color: #6b7280; }
-      .small { font-size: 12px; }
-      .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
-      button { padding: 6px 10px; cursor: pointer; }
-      button[disabled] { cursor: not-allowed; opacity: 0.6; }
-      ul { list-style: none; padding: 0; margin: 8px 0 0; max-height: 220px; overflow-y: auto; }
-      li { padding: 4px 0; border-top: 1px solid #e5e7eb; font-size: 12px; word-break: break-word; }
-      li:first-child { border-top: 0; }
-      .status-ok { color: #059669; }
-      .status-skip { color: #6b7280; }
-      .status-err { color: #dc2626; }
-      .status-warn { color: #d97706; }
-      a { color: #2563eb; text-decoration: none; }
-      a:hover { text-decoration: underline; }
-      .field { font-size: 12px; padding: 4px 0; border-top: 1px solid #f3f4f6; }
-      .field:first-child { border-top: 0; }
-      .field b { display: inline-block; min-width: 90px; color: #374151; }
-      .pill { display: inline-block; padding: 1px 6px; border-radius: 9999px; font-size: 11px; }
-      .pill-ok { background: #d1fae5; color: #065f46; }
-      .pill-warn { background: #fef3c7; color: #92400e; }
-      .pill-err { background: #fee2e2; color: #991b1b; }
-      .progress-bar { width: 100%; height: 4px; background: #e5e7eb; border-radius: 2px; overflow: hidden; margin: 4px 0; display: none; }
-      .progress-bar.on { display: block; }
-      .progress-fill { height: 100%; background: #3b82f6; transition: width 200ms; width: 0; }
-      .links { display: flex; gap: 12px; }
-    </style>
+    <link rel="stylesheet" href="../styles/popup.css" />
   </head>
   <body>
-    <h1>Tentatives Capture</h1>
-
-    <div id="diagnostics">
-      <div class="field"><b>Page</b> <span id="d-host" class="muted">checking…</span></div>
-      <div class="field"><b>County</b> <span id="d-county" class="muted">—</span></div>
-      <div class="field"><b>PDFs found</b> <span id="d-pdfcount" class="muted">—</span></div>
-      <div class="field"><b>GitHub config</b> <span id="d-config" class="muted">—</span></div>
-    </div>
-
-    <div class="progress-bar" id="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-
-    <div class="row" style="margin-top: 12px;">
-      <span id="status" class="small muted"></span>
-      <div>
-        <button id="rescan" title="Re-scan the current page for PDFs">↻</button>
-        <button id="upload" disabled>Upload</button>
+    <header class="hdr">
+      <div class="hdr-title">Tentatives Capture</div>
+      <div class="hdr-conn">
+        <span class="dot" id="conn-dot"></span>
+        <span id="conn-text">Checking GitHub config…</span>
       </div>
-    </div>
-    <div class="row small" style="margin-top: 4px;">
-      <span id="bulk-status" class="muted"></span>
-      <div>
-        <button id="bulk-stop" style="display:none">Stop</button>
-        <button id="bulk-scan" title="Open every dept landing page for this county in sequence and upload their PDFs">Scan all depts</button>
+      <div class="hdr-row">
+        <a class="link" id="open-options" href="#">Settings</a>
+        <span class="sep">·</span>
+        <a class="link" id="reload-page" href="#">Reload page</a>
+        <span class="sep">·</span>
+        <a class="link" id="open-viewer" href="#" target="_blank" rel="noopener">Open viewer</a>
       </div>
-    </div>
-    <ul id="results"></ul>
+    </header>
 
-    <div class="row muted small" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 8px;">
-      <div class="links">
-        <a id="opts" href="#">Settings</a>
-        <a id="reload" href="#">Reload page</a>
+    <section class="status-card">
+      <dl class="kv">
+        <dt>Page</dt>
+        <dd id="d-host" class="muted">checking…</dd>
+        <dt>County</dt>
+        <dd id="d-county"><span class="pill mute">—</span></dd>
+        <dt>PDFs found</dt>
+        <dd id="d-pdfcount"><span class="pill mute">—</span></dd>
+      </dl>
+    </section>
+
+    <section class="controls">
+      <div class="row split">
+        <span class="progress" id="progress-text"></span>
+        <div class="row">
+          <button class="btn icon" id="rescan" title="Re-scan the current page for PDFs">↻</button>
+          <button class="btn primary" id="upload" disabled>Upload</button>
+        </div>
       </div>
-      <a id="archive-link" href="#" target="_blank" rel="noopener" style="display:none">Archive →</a>
-    </div>
+      <div class="row split">
+        <span class="progress" id="bulk-status"></span>
+        <div class="row">
+          <button class="btn" id="bulk-stop" hidden>Stop</button>
+          <button class="btn" id="bulk-scan" disabled title="Open every dept landing page for this county and upload their PDFs">Scan all depts</button>
+        </div>
+      </div>
+      <div class="progress-bar" id="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+      <div class="status-line" id="status-line"></div>
+    </section>
+
+    <section class="activity">
+      <div class="section-head">
+        <h2 class="section-title">Recent activity</h2>
+        <button class="btn-link" id="clear-activity" hidden>Clear</button>
+      </div>
+      <ul class="activity-list" id="results" aria-live="polite">
+        <li class="empty">No uploads yet on this page.</li>
+      </ul>
+    </section>
+
+    <footer class="ftr">
+      <span class="muted">v<span id="ext-version">0.0.0</span></span>
+      <a class="link" id="archive-link" href="#" target="_blank" rel="noopener" hidden>Archive →</a>
+    </footer>
 
     <script src="popup.js" type="module"></script>
   </body>

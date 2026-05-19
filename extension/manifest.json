@@ -1,13 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Tentatives Capture",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Capture California superior court tentative rulings PDFs to a GitHub archive. Single-page upload or bulk scan across every dept.",
 
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": [
     "https://*.eldorado.courts.ca.gov/*",
     "https://*.placer.courts.ca.gov/*",
+    "https://*.contracosta.courts.ca.gov/*",
+    "https://*.cc-courts.org/*",
     "https://api.github.com/*",
     "https://web.archive.org/*"
   ],
@@ -39,6 +41,15 @@
       ],
       "js": ["sites/placer.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.contracosta.courts.ca.gov/*",
+        "https://*.cc-courts.org/*"
+      ],
+      "js": ["sites/contra-costa.js"],
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ]
 }

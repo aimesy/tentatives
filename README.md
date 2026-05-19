@@ -43,7 +43,9 @@ archive/<county>/<sha[:2]>/      content-addressable PDF store
 archive/<county>/captures.ndjson append-only log of fetch events
 data/<county>/rulings.parquet    one row per (case × motion)
 extension/                       Chrome MV3 capture extension
+site/                            Static viewer (hyparquet, no backend)
 .github/workflows/parse.yml      auto-runs orchestrator on new PDFs
+.github/workflows/site.yml       deploys site/ + data/*.parquet to Pages
 .github/workflows/test.yml       runs parser tests on PRs
 ```
 
@@ -87,11 +89,28 @@ python -c "import duckdb; print(duckdb.sql(\"SELECT outcome, COUNT(*) FROM 'data
 5. Visit a supported court page:
    - El Dorado: `https://www.eldorado.courts.ca.gov/online-services/tentative-rulings/tentative-rulings-dept-<N>`
    - Placer: any page under `https://www.placer.courts.ca.gov/` that links to PDFs.
+   - Contra Costa: `https://contracosta.courts.ca.gov/online-services/tentative-rulings` (the page is mostly an iframe loading `cc-courts.org` with many collapsibles — the extension expands them and harvests PDFs from every dept).
 6. Click the extension icon → **Upload**. The popup shows live progress per PDF; the badge on the icon shows how many PDFs are on the current page.
 
 The extension dedups by source URL — if a PDF was uploaded before, the next visit skips the download entirely. PDFs are stored content-addressable (`archive/<county>/<sha[:2]>/<sha>.pdf`), so re-captures of the same content from different URLs only write one file.
 
 Each upload is one commit via the Contents API. Switching to batched commits (Git Data API) is a planned upgrade for bulk Wayback backfills.
+
+## Site viewer
+
+`site/` is a static, single-page viewer that loads `data/<county>/rulings.parquet` straight from the browser using [hyparquet](https://github.com/hyparam/hyparquet). No backend, no SQL engine bundled — just one fetch per county plus client-side filter/sort/page.
+
+To run locally:
+
+```bash
+# Serve from the repo root so site/index.html and data/<county>/ are siblings.
+python -m http.server 8000
+# → http://localhost:8000/site/
+```
+
+The page detects whether it's served at the repo root (dev) or alongside `data/` (the Pages build) and adjusts the parquet URL accordingly. Filters round-trip through query parameters, so the **Copy link** button gives you a shareable URL of any view.
+
+The Pages deploy is wired up in `.github/workflows/site.yml` and ships at `https://<owner>.github.io/<repo>/` on every push to `main`/`master` that touches `site/` or `data/`.
 
 ## Schema
 
@@ -127,11 +146,11 @@ Each upload is one commit via the Contents API. Switching to batched commits (Gi
 - [x] Contra Costa parser — 5 depts (09, 10, 14, 16, 18); 8 tests
 - [x] Placer parser — 3 fixtures across depts 3, 33, 42; 7 tests
 - [x] Ingest orchestrator with idempotent append, idempotent re-parse
-- [x] Browser extension (MV3) — Chrome + Firefox compatible; EDC + Placer site adapters; URL-based dedup; streaming progress
+- [x] Browser extension (MV3) — Chrome + Firefox compatible; EDC + Placer + Contra Costa site adapters; cross-origin iframe + collapsible expansion; URL-based dedup; streaming progress
 - [x] Auto-zip workflow publishing `tentatives-extension.zip` at stable release URL
 - [x] GitHub Action to auto-parse on push (`.github/workflows/parse.yml`)
-- [ ] Contra Costa extension adapter (needs portal-based discovery — `cmsportal.cc-courts.org`)
-- [ ] Site / viewer (DuckDB-WASM + PDF.js, single-click text / double-click PDF page jump)
+- [x] Static site viewer (`site/`) — hyparquet, filter / sort / paginate, deep-link to PDF page
+- [x] GitHub Pages deploy workflow (`.github/workflows/site.yml`)
 - [ ] Wayback backfill mode (`discover_wayback`, batched Git Data API commits)
 - [ ] More counties (Marin, Sonoma; forward-only OC/SC/San Mateo)
 - [ ] Unified cross-county `data/index.parquet`

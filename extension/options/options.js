@@ -1,55 +1,57 @@
 const FIELDS = [
   ["token", "githubToken"],
   ["owner", "githubOwner"],
-  ["repo", "githubRepo"],
+  ["repo",  "githubRepo"],
   ["branch", "githubBranch"],
 ];
 
 const DEFAULT_DELAY_SECONDS = 5;
 
+const $ = (id) => document.getElementById(id);
+
 async function load() {
   const keys = FIELDS.map(([, k]) => k).concat(["pageLoadDelayMs"]);
   const stored = await chrome.storage.local.get(keys);
   for (const [id, key] of FIELDS) {
-    document.getElementById(id).value = stored[key] || "";
+    $(id).value = stored[key] || "";
   }
   const ms = Number.isFinite(+stored.pageLoadDelayMs) ? +stored.pageLoadDelayMs : DEFAULT_DELAY_SECONDS * 1000;
-  document.getElementById("delay").value = (ms / 1000).toString();
+  $("delay").value = (ms / 1000).toString();
 }
 
-async function save() {
+async function save(event) {
+  if (event) event.preventDefault();
   const update = {};
   for (const [id, key] of FIELDS) {
-    update[key] = document.getElementById(id).value.trim();
+    update[key] = $(id).value.trim();
   }
-  const raw = document.getElementById("delay").value.trim();
+  const raw = $("delay").value.trim();
   const seconds = raw === "" ? DEFAULT_DELAY_SECONDS : Number(raw);
   if (!Number.isFinite(seconds) || seconds < 0) {
-    setStatus("✗ delay must be a non-negative number of seconds.", "err");
+    setStatus("delay must be a non-negative number of seconds.", "err");
     return;
   }
   update.pageLoadDelayMs = Math.round(seconds * 1000);
   await chrome.storage.local.set(update);
-  setStatus("✓ saved", "ok");
+  setStatus("Saved.", "ok");
 }
 
 function setStatus(text, cls = "") {
-  const el = document.getElementById("status");
+  const el = $("status");
   el.textContent = text;
-  el.className = cls;
+  el.className = `status ${cls}`.trim();
 }
 
 async function testConnection() {
-  const token = document.getElementById("token").value.trim();
-  const owner = document.getElementById("owner").value.trim();
-  const repo = document.getElementById("repo").value.trim();
+  const token = $("token").value.trim();
+  const owner = $("owner").value.trim();
+  const repo  = $("repo").value.trim();
   if (!token || !owner || !repo) {
     setStatus("Fill in PAT, owner, and repo first.", "err");
     return;
   }
   setStatus("Testing…");
   try {
-    // Probe the repo metadata — succeeds if PAT can read it.
     const r = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
       headers: {
         Accept: "application/vnd.github+json",
@@ -59,25 +61,31 @@ async function testConnection() {
     });
     const body = await r.json().catch(() => ({}));
     if (!r.ok) {
-      setStatus(`✗ ${r.status}: ${body.message || r.statusText}`, "err");
+      setStatus(`${r.status}: ${body.message || r.statusText}`, "err");
       return;
     }
-    // Check write permission. The repo response includes `permissions` when
-    // authenticated as a collaborator/owner; absent on read-only PATs.
     const canWrite = body.permissions?.push === true;
     if (!canWrite) {
       setStatus(
-        `Connected (read-only). PAT can read ${owner}/${repo} but not write — add "Contents: Read and write".`,
+        `Read-only. PAT can read ${owner}/${repo} but not write — add Contents: Read & Write.`,
         "err",
       );
       return;
     }
-    setStatus(`✓ connected to ${owner}/${repo} (default branch: ${body.default_branch})`, "ok");
+    setStatus(`Connected to ${owner}/${repo} (default branch: ${body.default_branch}).`, "ok");
   } catch (e) {
-    setStatus(`✗ ${e.message || e}`, "err");
+    setStatus(`${e.message || e}`, "err");
   }
 }
 
-document.getElementById("save").addEventListener("click", save);
-document.getElementById("test").addEventListener("click", testConnection);
+$("settings-form").addEventListener("submit", save);
+$("test").addEventListener("click", testConnection);
+
+$("reveal-token").addEventListener("click", () => {
+  const input = $("token");
+  const showing = input.type === "text";
+  input.type = showing ? "password" : "text";
+  $("reveal-token").textContent = showing ? "Show" : "Hide";
+});
+
 load();
