@@ -77,11 +77,16 @@ python -c "import duckdb; print(duckdb.sql(\"SELECT outcome, COUNT(*) FROM 'data
 
 ## Loading the extension
 
-1. `chrome://extensions` → **Developer mode** on → **Load unpacked** → pick `extension/`.
-2. Click the extension's icon → **Settings**.
-3. Paste a GitHub PAT (`repo` scope, or fine-grained with `contents:write` on this repo). Set owner = `aimesy`, repo = `tentatives`, branch = the branch you want commits to land on.
-4. Visit a supported court page (e.g. `https://www.eldorado.courts.ca.gov/online-services/tentative-rulings/tentative-rulings-dept-9`).
-5. Click the extension icon → **Upload**. The popup shows progress per PDF; the badge shows how many PDFs are on the current page.
+**[⬇ Download the latest extension zip](https://github.com/aimesy/tentatives/releases/download/extension-latest/tentatives-extension.zip)** — rebuilt automatically on every push to `master` that touches `extension/`.
+
+1. Download `tentatives-extension.zip`, unzip somewhere stable (the folder must stay where Chrome can read it).
+2. `chrome://extensions` → **Developer mode** on → **Load unpacked** → pick the unzipped folder.
+3. Click the extension's icon → **Settings**.
+4. Paste a GitHub PAT (`repo` scope, or fine-grained with `contents:write` on this repo). Set owner = `aimesy`, repo = `tentatives`, branch = the branch you want commits to land on.
+5. Visit a supported court page (e.g. `https://www.eldorado.courts.ca.gov/online-services/tentative-rulings/tentative-rulings-dept-9`).
+6. Click the extension icon → **Upload**. The popup shows progress per PDF; the badge shows how many PDFs are on the current page.
+
+Alternatively, clone the repo and load `extension/` directly as the unpacked extension folder (useful for development).
 
 Each upload is one commit (Contents API). Switching to batched commits (Git Data API) is a planned upgrade for bulk Wayback backfills.
 
