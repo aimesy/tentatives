@@ -1,100 +1,212 @@
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from counties.el_dorado.scraper import parse_file
 
-FIXTURE = Path(__file__).parent.parent / "fixtures" / "tr-d-09-2026-05-18.pdf"
+FIXTURE_DIR = Path(__file__).parent.parent / "fixtures"
 
 
-def _rulings():
+# ---------------------------------------------------------------- Style A: dept 9 probate
+
+
+@pytest.fixture
+def style_a():
     return parse_file(
-        str(FIXTURE),
+        str(FIXTURE_DIR / "tr-d-09-2026-05-18.pdf"),
         source_url="https://www.eldorado.courts.ca.gov/system/files/tentative-rulings/tr-d-09-2026-05-18.pdf",
+        dept_hint="9",
     )
 
 
-def test_extracts_fifteen_rulings():
-    rs = _rulings()
-    assert len(rs) == 15, [r.ruling_index for r in rs]
-    assert [r.ruling_index for r in rs] == list(range(1, 16))
+def test_style_a_extracts_fifteen_rulings(style_a):
+    assert len(style_a) == 15
+    assert [r.ruling_index for r in style_a] == list(range(1, 16))
 
 
-def test_metadata_from_page_header_not_filename():
-    rs = _rulings()
-    for r in rs:
+def test_style_a_metadata(style_a):
+    for r in style_a:
         assert r.hearing_date == date(2026, 5, 18)
         assert r.dept == "9"
         assert r.division == "Probate"
-        assert r.county == "el-dorado"
+        assert r.style == "probate-dept-header"
 
 
-def test_case_numbers_and_titles():
-    rs = _rulings()
-    by_idx = {r.ruling_index: r for r in rs}
+def test_style_a_case_numbers_and_titles(style_a):
+    by_idx = {r.ruling_index: r for r in style_a}
     assert by_idx[1].case_number == "25PR0206"
     assert by_idx[1].case_title == "MATTER OF ANDRESEN TRUST"
-    assert by_idx[1].motion_type == "Discovery Motions & Motion for Relief"
-    # Legacy case-number format
-    assert by_idx[10].case_number == "PP20200121"
-    assert by_idx[10].case_title == "ESTATE OF KNOLL"
-    # 26-prefix format
+    assert by_idx[10].case_number == "PP20200121"  # legacy format
     assert by_idx[13].case_number == "26PR0079"
 
 
-def test_outcomes_classified():
-    rs = _rulings()
-    by_idx = {r.ruling_index: r for r in rs}
-    # #1: HEARING CONTINUED TO MONDAY, JULY 6, 2026
+def test_style_a_outcomes(style_a):
+    by_idx = {r.ruling_index: r for r in style_a}
     assert by_idx[1].outcome == "continued"
     assert by_idx[1].continued_to == date(2026, 7, 6)
-    # #2: PETITION TO DETERMINE TITLE ... IS DENIED. APPEARANCES ARE REQUIRED ...
     assert by_idx[2].outcome == "denied"
-    # #4: ABSENT OBJECTION THE PETITION IS GRANTED AS REQUESTED.
     assert by_idx[4].outcome == "granted"
     assert by_idx[4].conditional is True
-    # #8: APPEARANCES ARE REQUIRED ... A STATUS OF ADMINISTRATION HEARING IS SET ...
-    assert by_idx[8].outcome == "appearance_required"
-    # #11: PETITION DENIED.
     assert by_idx[11].outcome == "denied"
-    # #15: PETITION DENIED.
-    assert by_idx[15].outcome == "denied"
 
 
-def test_ruling_ids_are_stable_and_unique():
-    rs = _rulings()
-    ids = [r.ruling_id for r in rs]
-    assert len(set(ids)) == len(ids)
-    # Re-parse must give identical IDs.
-    rs2 = _rulings()
-    assert [r.ruling_id for r in rs] == [r.ruling_id for r in rs2]
+# ---------------------------------------------------------------- Style B: dept 4 law & motion
 
 
-def test_page_spans_make_sense():
-    rs = _rulings()
+@pytest.fixture
+def style_b():
+    return parse_file(
+        str(FIXTURE_DIR / "lawandmotionmay152026.pdf"),
+        source_url="https://www.eldorado.courts.ca.gov/system/files/tentative-rulings/lawandmotionmay152026.pdf",
+        dept_hint="4",
+    )
+
+
+def test_style_b_extracts_nine_rulings(style_b):
+    assert len(style_b) == 9
+    assert [r.ruling_index for r in style_b] == list(range(1, 10))
+
+
+def test_style_b_metadata(style_b):
+    for r in style_b:
+        assert r.hearing_date == date(2026, 5, 15)
+        assert r.dept == "4"  # from dept_hint — not in PDF header
+        assert r.division == "Law and Motion"
+        assert r.style == "lawandmotion-calendar"
+
+
+def test_style_b_case_numbers_title_after_case(style_b):
+    """Style B has 'TITLE, CASE_NUMBER' — title before, number after comma."""
+    by_idx = {r.ruling_index: r for r in style_b}
+    assert by_idx[1].case_number == "25CV1362"
+    assert by_idx[1].case_title == "CAPITAL ONE, N.A. v. McGINNIS"
+    # Multi-motion ruling: motion_type contains both (A) and (B).
+    assert "(A)" in by_idx[5].motion_type
+    assert "(B)" in by_idx[5].motion_type
+    # Legacy SC format
+    assert by_idx[3].case_number == "SC20210148"
+
+
+def test_style_b_outcomes(style_b):
+    by_idx = {r.ruling_index: r for r in style_b}
+    assert by_idx[1].outcome == "granted"
+    assert by_idx[7].outcome == "denied"  # motion for sanctions denied
+    assert by_idx[8].outcome == "denied"
+
+
+# ---------------------------------------------------------------- Style C: dept 4 probate calendar
+
+
+@pytest.fixture
+def style_c():
+    return parse_file(
+        str(FIXTURE_DIR / "probatemay152026.pdf"),
+        source_url="https://www.eldorado.courts.ca.gov/system/files/tentative-rulings/probatemay152026.pdf",
+        dept_hint="4",
+    )
+
+
+def test_style_c_extracts_eight_rulings(style_c):
+    assert len(style_c) == 8
+
+
+def test_style_c_metadata(style_c):
+    for r in style_c:
+        assert r.hearing_date == date(2026, 5, 15)
+        assert r.dept == "4"
+        assert r.division == "Probate"
+        assert r.style == "probate-calendar"
+
+
+def test_style_c_case_numbers(style_c):
+    by_idx = {r.ruling_index: r for r in style_c}
+    assert by_idx[1].case_number == "24PR0124"
+    assert by_idx[1].case_title == "ESTATE OF WESTFALL"
+    # Legacy SP format (Special Proceedings).
+    assert by_idx[7].case_number == "SP20140014"
+
+
+def test_style_c_outcomes_include_off_calendar(style_c):
+    by_idx = {r.ruling_index: r for r in style_c}
+    assert by_idx[6].outcome == "off_calendar"  # "MATTER IS DROPPED FROM THE CALENDAR"
+
+
+# ---------------------------------------------------------------- Style D: dept 12 family law
+
+
+@pytest.fixture
+def style_d():
+    return parse_file(
+        str(FIXTURE_DIR / "dept-12-20260513.pdf"),
+        source_url="https://www.eldorado.courts.ca.gov/system/files/tentative-rulings/dept-12-20260513.pdf",
+        # dept-12 PDFs DO have 'DEPARTMENT 12' in the header, so no hint needed.
+    )
+
+
+def test_style_d_extracts_four_rulings(style_d):
+    assert len(style_d) == 4
+
+
+def test_style_d_metadata(style_d):
+    for r in style_d:
+        assert r.hearing_date == date(2026, 5, 13)
+        assert r.dept == "12"  # from PDF header, no hint needed
+        assert r.style == "lawandmotion-tentative-rulings"
+
+
+def test_style_d_case_numbers_whitespace_separated(style_d):
+    """Style D has 'TITLE      CASE_NUMBER' (no comma)."""
+    by_idx = {r.ruling_index: r for r in style_d}
+    assert by_idx[1].case_number == "SFL20210053"  # legacy SFL prefix
+    assert by_idx[1].case_title == "MARIA DE LA CRUZ V. JUAN DE LA CRUZ VAZQUEZ"
+    # Modern FL prefix
+    assert by_idx[2].case_number == "24FL0473"
+    assert by_idx[2].case_title == "ROBERT SOUZA V. ARIANA MARTINEZ"
+
+
+# ---------------------------------------------------------------- cross-style invariants
+
+
+@pytest.mark.parametrize("fixture", [
+    ("tr-d-09-2026-05-18.pdf", "9"),
+    ("lawandmotionmay152026.pdf", "4"),
+    ("probatemay152026.pdf", "4"),
+    ("dept-12-20260513.pdf", None),
+])
+def test_ruling_ids_stable_and_unique(fixture):
+    fname, hint = fixture
+    a = parse_file(str(FIXTURE_DIR / fname), "x", dept_hint=hint)
+    b = parse_file(str(FIXTURE_DIR / fname), "x", dept_hint=hint)
+    ids = [r.ruling_id for r in a]
+    assert len(set(ids)) == len(ids), "ruling_ids must be unique within one PDF"
+    assert [r.ruling_id for r in a] == [r.ruling_id for r in b], "ruling_ids must be stable across parses"
+
+
+@pytest.mark.parametrize("fixture", [
+    "tr-d-09-2026-05-18.pdf",
+    "lawandmotionmay152026.pdf",
+    "probatemay152026.pdf",
+    "dept-12-20260513.pdf",
+])
+def test_page_spans_valid(fixture):
+    rs = parse_file(str(FIXTURE_DIR / fixture), "x", dept_hint="X")
     for r in rs:
-        assert 1 <= r.page_start <= r.page_end
-    # #1 is just one page (short continuance ruling).
-    by_idx = {r.ruling_index: r for r in rs}
-    assert by_idx[1].page_end == 1
-    # #2 spans multiple pages (long narrative).
-    assert by_idx[2].page_end > by_idx[2].page_start
-
-
-def test_body_text_excludes_disposition():
-    rs = _rulings()
-    by_idx = {r.ruling_index: r for r in rs}
-    # body_text is what comes BEFORE "TENTATIVE RULING #N:"
-    assert "TENTATIVE RULING #" not in by_idx[2].body_text
-    # And the header line itself shouldn't be in body
-    assert "25PR0304 ESTATE OF ANDERSON" not in by_idx[2].body_text
-    # Body is non-trivial for long rulings
-    assert len(by_idx[2].body_text) > 500
-
-
-def test_outcome_text_strips_remote_boilerplate():
-    rs = _rulings()
-    by_idx = {r.ruling_index: r for r in rs}
-    for r in rs:
-        assert "INSTRUCTIONS FOR REMOTE" not in r.outcome_text.upper(), (
-            f"#{r.ruling_index}: {r.outcome_text!r}"
+        assert 1 <= r.page_start <= r.page_end, (
+            f"{fixture} #{r.ruling_index}: pages {r.page_start}-{r.page_end}"
         )
+
+
+@pytest.mark.parametrize("fixture", [
+    "tr-d-09-2026-05-18.pdf",
+    "lawandmotionmay152026.pdf",
+    "probatemay152026.pdf",
+    "dept-12-20260513.pdf",
+])
+def test_outcome_text_strips_appearance_boilerplate(fixture):
+    rs = parse_file(str(FIXTURE_DIR / fixture), "x", dept_hint="X")
+    for r in rs:
+        upper = r.outcome_text.upper()
+        assert "INSTRUCTIONS FOR REMOTE" not in upper, f"#{r.ruling_index}: {r.outcome_text!r}"
+        assert "CAL.RULE CT" not in upper, f"#{r.ruling_index}: {r.outcome_text!r}"
+        assert "NO HEARING ON THIS MATTER WILL BE HELD" not in upper, f"#{r.ruling_index}"

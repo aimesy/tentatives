@@ -45,17 +45,21 @@ class Capture:
 
 @dataclass(frozen=True)
 class Ruling:
-    """One ruling extracted from a PDF. Stable across re-parses via ruling_id."""
+    """One ruling extracted from a PDF. Stable across re-parses via ruling_id.
+
+    `dept` and `division` are Optional because some PDF styles don't carry the
+    dept in the header (callers can supply via dept_hint from the discovery URL).
+    """
 
     ruling_id: str          # sha256(source_sha256 + ruling_index)
     county: str             # e.g. "el-dorado"
-    division: str | None    # "Probate", "Civil", "Family Law", ...; from PDF header
-    dept: str               # e.g. "9"
+    division: str | None    # "Probate", "Law and Motion", "Civil", "Family Law", ...
+    dept: str | None        # e.g. "9", "12"
     hearing_date: date
     ruling_index: int       # 1-based position within the PDF
-    case_number: str        # e.g. "25PR0206"
+    case_number: str        # e.g. "25PR0206", "SFL20210053"
     case_title: str         # e.g. "MATTER OF ANDRESEN TRUST"
-    motion_type: str        # e.g. "Discovery Motions & Motion for Relief"
+    motion_type: str        # e.g. "Discovery Motions & Motion for Relief". May be empty.
     outcome: str            # one of OUTCOME_CHOICES (primary disposition)
     outcome_text: str       # raw disposition text (verbatim, may be multi-line)
     conditional: bool       # True for "ABSENT OBJECTION ... GRANTED"
@@ -66,7 +70,8 @@ class Ruling:
     page_end: int
     source_sha256: str      # FK → Capture.source_sha256
     source_url: str         # canonical court URL of the source PDF
-    parser_version: str = "el-dorado-v1"
+    style: str = ""         # e.g. "probate-dept-header", "lawandmotion-calendar"
+    parser_version: str = "el-dorado-v2"
     ingest_ts: datetime = field(default_factory=datetime.utcnow)
 
     def to_row(self) -> dict[str, Any]:
