@@ -1,4 +1,4 @@
-// Background service worker. Receives upload requests from the popup,
+// Background service worker. Receives upload requests from the sidebar,
 // fetches PDFs (with host_permissions, no CORS issue), hashes them, checks
 // GitHub for existence, uploads new ones via the Contents API, and appends
 // a row to captures.ndjson.
@@ -10,40 +10,7 @@ import {
   putFile,
   appendNdjsonLine,
 } from "./lib/github.js";
-
-// Per-county bulk-scan config. The root URL is fetched once at the start of a
-// scan; pathTest is applied to each href on the page to decide whether it's a
-// dept/calendar landing page worth walking.
-const COUNTY_SCAN = {
-  "el-dorado": {
-    root: "https://www.eldorado.courts.ca.gov/online-services/tentative-rulings",
-    pathTest: (path) =>
-      /^\/online-services\/tentative-rulings\/tentative-rulings-dept-\d+\/?$/i.test(path),
-  },
-  "placer": {
-    root: "https://www.placer.courts.ca.gov/online-services/tentative-rulings",
-    // Any subpage of /online-services/tentative-rulings/<slug> — covers
-    // tentative-rulings-law-and-motion, civil-osc-calendar, etc. The trailing
-    // anchor keeps deeper paths out.
-    pathTest: (path) =>
-      /^\/online-services\/tentative-rulings\/[a-z][a-z0-9-]*\/?$/i.test(path)
-      && path.replace(/\/$/, "") !== "/online-services/tentative-rulings",
-  },
-  "contra-costa": {
-    // The CCC public landing page is just an iframe shell. The interesting
-    // page is the iframe target on cc-courts.org: current rulings live at
-    // motions-hearings-tentative.aspx, and historical at the archive page.
-    // Walking both gives us everything that's currently linkable.
-    root: "https://contracosta.courts.ca.gov/online-services/tentative-rulings",
-    landings: [
-      "https://contracosta.courts.ca.gov/online-services/tentative-rulings",
-      "https://contracosta.courts.ca.gov/tentative-rulings-archive",
-      "https://www.cc-courts.org/civil/motions-hearings-tentative.aspx",
-      "https://www.cc-courts.org/civil/motions-hearings-tentative-archive.aspx",
-    ],
-    pathTest: () => true, // landings supplied explicitly
-  },
-};
+import { COUNTY_SCAN, DEFAULT_GITHUB } from "./lib/counties.js";
 
 const DEFAULT_PAGE_LOAD_DELAY_MS = 5000;
 
@@ -293,7 +260,7 @@ async function harvestFromTab(tabId) {
 // PDFs so cancel is responsive without aborting an in-flight commit.
 let bulkScanCancel = false;
 
-async function scanAllStreaming({ county, port }) {
+async function scanAllStreaming({ county, port, explicitUrls = null }) {
   bulkScanCancel = false;
   const config = await getConfig();
   if (!config.githubToken || !config.githubOwner || !config.githubRepo) {
@@ -307,7 +274,11 @@ async function scanAllStreaming({ county, port }) {
     : DEFAULT_PAGE_LOAD_DELAY_MS;
 
   port.postMessage({ type: "phase", phase: "discovering" });
-  const landingUrls = await discoverLandingPages(county);
+  // Caller can pass an explicit list (sidebar "Fetch" on a single landing
+  // page) to skip the index-page crawl entirely.
+  const landingUrls = explicitUrls && explicitUrls.length
+    ? [...explicitUrls]
+    : await discoverLandingPages(county);
   port.postMessage({ type: "landings", urls: landingUrls });
   if (landingUrls.length === 0) {
     port.postMessage({ type: "done", reason: "no-landings" });
@@ -434,7 +405,11 @@ chrome.runtime.onConnect.addListener((port) => {
       }
       if (msg.type !== "start") return;
       try {
-        await scanAllStreaming({ county: msg.county, port });
+        await scanAllStreaming({
+          county: msg.county,
+          port,
+          explicitUrls: Array.isArray(msg.urls) ? msg.urls : null,
+        });
       } catch (e) {
         console.error("[tentatives bg] bulk scan fatal", e);
         try {
@@ -446,15 +421,69 @@ chrome.runtime.onConnect.addListener((port) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, _sendResponse) => {
   console.log("[tentatives bg] message", msg?.type);
   if (msg && msg.type === "page-loaded") {
     const text = msg.pdfs.length ? String(msg.pdfs.length) : "";
-    chrome.action.setBadgeText({ text });
-    chrome.action.setBadgeBackgroundColor({ color: msg.pdfs.length ? "#3b82f6" : "#9ca3af" });
+    // Per-tab badge: a global setBadgeText would overwrite badges on other
+    // tabs as the user moves around. tabId comes from the content-script sender.
+    const tabId = sender?.tab?.id;
+    const colorOpts = { color: msg.pdfs.length ? "#3b82f6" : "#9ca3af" };
+    if (tabId !== undefined) {
+      chrome.action.setBadgeText({ text, tabId });
+      chrome.action.setBadgeBackgroundColor({ ...colorOpts, tabId });
+    } else {
+      chrome.action.setBadgeText({ text });
+      chrome.action.setBadgeBackgroundColor(colorOpts);
+    }
   }
 });
 
-chrome.runtime.onInstalled.addListener((details) => {
+// On install / update: pre-seed GitHub config so a fresh install only needs a
+// PAT — the canonical repo is aimesy/tentatives@master and there's no reason
+// to make every user type that in. Existing values are preserved.
+async function seedDefaults() {
+  const stored = await chrome.storage.local.get([
+    "githubOwner", "githubRepo", "githubBranch",
+  ]);
+  const updates = {};
+  if (!stored.githubOwner)  updates.githubOwner  = DEFAULT_GITHUB.owner;
+  if (!stored.githubRepo)   updates.githubRepo   = DEFAULT_GITHUB.repo;
+  if (!stored.githubBranch) updates.githubBranch = DEFAULT_GITHUB.branch;
+  if (Object.keys(updates).length) {
+    await chrome.storage.local.set(updates);
+    console.log("[tentatives bg] seeded defaults:", updates);
+  }
+}
+
+// Chrome 116+: clicking the action icon opens the side panel. Older Chrome
+// users get the default behavior (no popup), which on Chromium means the user
+// has to open the side panel from the toolbar menu — fine as a fallback.
+async function setupSidePanel() {
+  if (chrome.sidePanel?.setPanelBehavior) {
+    try {
+      await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    } catch (e) {
+      console.warn("[tentatives bg] sidePanel.setPanelBehavior failed:", e);
+    }
+  }
+}
+
+// Firefox uses browser.sidebarAction; clicking the toolbar action there can
+// toggle the sidebar. globalThis.browser is defined in Firefox but not Chrome.
+if (typeof globalThis.browser !== "undefined" && globalThis.browser.sidebarAction?.toggle) {
+  chrome.action.onClicked.addListener(async () => {
+    try { await globalThis.browser.sidebarAction.toggle(); }
+    catch (e) { console.warn("[tentatives bg] sidebarAction.toggle failed:", e); }
+  });
+}
+
+chrome.runtime.onInstalled.addListener(async (details) => {
   console.log("[tentatives bg] installed", details.reason);
+  await seedDefaults();
+  await setupSidePanel();
 });
+
+// Also run once on service-worker startup so updates / reloads pick up the
+// side-panel behavior without waiting for the next onInstalled.
+setupSidePanel();

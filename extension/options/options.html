@@ -43,7 +43,7 @@
           </div>
           <div class="field">
             <label for="branch">Branch</label>
-            <input id="branch" name="branch" type="text" placeholder="master (or leave empty for repo default)" />
+            <input id="branch" name="branch" type="text" placeholder="master" />
           </div>
           <div class="field">
             <label for="token">Personal access token</label>
@@ -61,6 +61,7 @@
           <div class="row actions">
             <button type="submit" class="btn primary" id="save">Save</button>
             <button type="button" class="btn" id="test">Test connection</button>
+            <button type="button" class="btn" id="reset-defaults" title="Restore owner/repo/branch to aimesy/tentatives@master">Reset defaults</button>
             <span class="status" id="status"></span>
           </div>
         </form>
@@ -69,7 +70,7 @@
       <section class="card">
         <h2>Bulk scan</h2>
         <p class="muted">
-          When you click <em>Scan all depts</em> in the popup, the extension
+          When you click <em>Scan all</em> in the side panel, the extension
           opens each known landing page for that county in a background tab and
           waits for it to settle before harvesting PDFs. Bump this up if the
           court site is slow or renders PDFs after load.

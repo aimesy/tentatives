@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Tentatives Capture",
-  "version": "0.3.0",
-  "description": "Capture California superior court tentative rulings PDFs to a GitHub archive. Single-page upload or bulk scan across every dept.",
+  "version": "0.4.0",
+  "description": "Capture California superior court tentative rulings PDFs to a GitHub archive. Side-panel UI with per-county quick-fetch.",
 
-  "permissions": ["storage", "activeTab", "scripting"],
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel"],
   "host_permissions": [
     "https://*.eldorado.courts.ca.gov/*",
     "https://*.placer.courts.ca.gov/*",
@@ -21,8 +21,16 @@
   },
 
   "action": {
+    "default_title": "Tentatives Capture — open sidebar"
+  },
+
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
+  },
+
+  "sidebar_action": {
     "default_title": "Tentatives Capture",
-    "default_popup": "popup/popup.html"
+    "default_panel": "sidepanel/sidepanel.html"
   },
 
   "options_page": "options/options.html",

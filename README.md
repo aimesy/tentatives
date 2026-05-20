@@ -84,13 +84,13 @@ python -c "import duckdb; print(duckdb.sql(\"SELECT outcome, COUNT(*) FROM 'data
 1. Download `tentatives-extension.zip`, unzip somewhere stable (the folder must stay where Chrome can read it).
 2. **Chrome**: `chrome://extensions` → **Developer mode** on → **Load unpacked** → pick the unzipped folder.
    **Firefox**: `about:debugging` → **This Firefox** → **Load Temporary Add-on** → pick the unzipped folder's `manifest.json`.
-3. Click the extension's icon → **Settings**.
-4. Paste a GitHub PAT — fine-grained with **Contents: Read and write** on this repo ([create one](https://github.com/settings/tokens?type=beta)), or classic with `repo`. Set owner = `aimesy`, repo = `tentatives`. Click **Test connection** to verify the PAT before uploading.
-5. Visit a supported court page:
+3. Click the extension's toolbar icon. **Chrome 116+** opens the side panel on the right; **older Chrome** users open it from the puzzle-icon menu. **Firefox** uses a sidebar — toggle it with `Ctrl/Cmd-Shift-B` or from View → Sidebar.
+4. In the sidebar, click **Settings** to open the options page. Owner/repo/branch are pre-filled with `aimesy / tentatives / master` — all you need to paste is a GitHub PAT (fine-grained with **Contents: Read and write** on this repo, or classic with `repo`). Click **Test connection** to verify.
+5. Visit a supported court page (or use the **Pages** list in the sidebar to jump to one):
    - El Dorado: `https://www.eldorado.courts.ca.gov/online-services/tentative-rulings/tentative-rulings-dept-<N>`
    - Placer: any page under `https://www.placer.courts.ca.gov/` that links to PDFs.
-   - Contra Costa: `https://contracosta.courts.ca.gov/online-services/tentative-rulings` (the page is mostly an iframe loading `cc-courts.org` with many collapsibles — the extension expands them and harvests PDFs from every dept).
-6. Click the extension icon → **Upload**. The popup shows live progress per PDF; the badge on the icon shows how many PDFs are on the current page.
+   - Contra Costa: `https://contracosta.courts.ca.gov/online-services/tentative-rulings` (an iframe shell loading `cc-courts.org` with many collapsibles — the extension expands them and harvests PDFs from every dept).
+6. Use the sidebar's **Upload** button to capture the active tab's PDFs, or per-county **Fetch** / **Scan all** to background-fetch landing pages without leaving the current tab. Progress streams live into the Recent-activity log; the toolbar icon shows a per-tab badge with the PDF count.
 
 The extension dedups by source URL — if a PDF was uploaded before, the next visit skips the download entirely. PDFs are stored content-addressable (`archive/<county>/<sha[:2]>/<sha>.pdf`), so re-captures of the same content from different URLs only write one file.
 

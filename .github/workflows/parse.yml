@@ -6,7 +6,7 @@ name: Parse new PDFs
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
     paths:
       - "archive/**/*.pdf"
       - "archive/**/captures.ndjson"

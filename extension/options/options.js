@@ -1,7 +1,9 @@
+import { DEFAULT_GITHUB } from "../lib/counties.js";
+
 const FIELDS = [
-  ["token", "githubToken"],
-  ["owner", "githubOwner"],
-  ["repo",  "githubRepo"],
+  ["token",  "githubToken"],
+  ["owner",  "githubOwner"],
+  ["repo",   "githubRepo"],
   ["branch", "githubBranch"],
 ];
 
@@ -12,10 +14,24 @@ const $ = (id) => document.getElementById(id);
 async function load() {
   const keys = FIELDS.map(([, k]) => k).concat(["pageLoadDelayMs"]);
   const stored = await chrome.storage.local.get(keys);
+
+  // First-run convenience: prefill owner/repo/branch with the canonical
+  // defaults so all the user has to type is the PAT. Background's onInstalled
+  // also seeds these, but rendering them here guarantees the form is never
+  // confusingly blank — even if the user opens Settings before background
+  // runs, or after manually clearing storage.
+  const fallback = {
+    githubToken:  "",
+    githubOwner:  DEFAULT_GITHUB.owner,
+    githubRepo:   DEFAULT_GITHUB.repo,
+    githubBranch: DEFAULT_GITHUB.branch,
+  };
   for (const [id, key] of FIELDS) {
-    $(id).value = stored[key] || "";
+    $(id).value = stored[key] ?? fallback[key] ?? "";
   }
-  const ms = Number.isFinite(+stored.pageLoadDelayMs) ? +stored.pageLoadDelayMs : DEFAULT_DELAY_SECONDS * 1000;
+  const ms = Number.isFinite(+stored.pageLoadDelayMs)
+    ? +stored.pageLoadDelayMs
+    : DEFAULT_DELAY_SECONDS * 1000;
   $("delay").value = (ms / 1000).toString();
 }
 
@@ -78,8 +94,23 @@ async function testConnection() {
   }
 }
 
+async function resetDefaults() {
+  for (const [id, key] of FIELDS) {
+    if (key === "githubToken") continue; // never auto-clear the PAT
+    if (DEFAULT_GITHUB[key.replace("github", "").toLowerCase()]) {
+      $(id).value = DEFAULT_GITHUB[key.replace("github", "").toLowerCase()];
+    }
+  }
+  $("owner").value  = DEFAULT_GITHUB.owner;
+  $("repo").value   = DEFAULT_GITHUB.repo;
+  $("branch").value = DEFAULT_GITHUB.branch;
+  $("delay").value  = String(DEFAULT_DELAY_SECONDS);
+  setStatus("Defaults restored. Save to apply.", "ok");
+}
+
 $("settings-form").addEventListener("submit", save);
 $("test").addEventListener("click", testConnection);
+$("reset-defaults")?.addEventListener("click", resetDefaults);
 
 $("reveal-token").addEventListener("click", () => {
   const input = $("token");
