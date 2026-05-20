@@ -23,6 +23,7 @@ import pyarrow.parquet as pq
 from counties.amador import scraper as amador
 from counties.el_dorado import scraper as el_dorado
 from counties.contra_costa import scraper as contra_costa
+from counties.nevada import scraper as nevada
 from counties.placer import scraper as placer
 from schema import Ruling
 
@@ -34,6 +35,7 @@ PARSERS = {
     "amador": amador.parse,
     "el-dorado": el_dorado.parse,
     "contra-costa": contra_costa.parse,
+    "nevada": nevada.parse,
     "placer": placer.parse,
 }
 
