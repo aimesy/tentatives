@@ -4,6 +4,9 @@ California superior court tentative rulings, archived as original court files an
 
 This repo is the multi-county generalization of [`aimesy/sfsc-tentatives`](https://github.com/aimesy/sfsc-tentatives). The important split is simple:
 
+- Live viewer: [aimesy.github.io/tentatives](https://aimesy.github.io/tentatives/)
+- Extension zip: [tentatives-extension.zip](https://github.com/aimesy/tentatives/releases/download/extension-latest/tentatives-extension.zip)
+
 - Capture support means the extension or backfill CLI can find and archive the court's ruling files.
 - Parser support means archived PDFs become normalized rows in `data/<county>/rulings.parquet`.
 
@@ -62,7 +65,7 @@ site/                            static parquet viewer
 
 ## Capture With The Extension
 
-Install the extension from the release zip or load `extension/` unpacked.
+Install the extension from the [latest release zip](https://github.com/aimesy/tentatives/releases/download/extension-latest/tentatives-extension.zip), or load `extension/` unpacked for local development.
 
 1. Open Settings and set a GitHub token with Contents read/write access.
 2. Visit a supported court page, or use the Pages list in the side panel.
@@ -127,9 +130,12 @@ python -m ingest.orchestrate --county el-dorado --dry-run
 
 `ingest.orchestrate` only parses counties in its `PARSERS` registry. Capture-only counties are archived but skipped until a parser is added and tested.
 
-## Site Viewer
+## Live Viewer
 
-Serve from the repo root:
+The live viewer is published at [https://aimesy.github.io/tentatives/](https://aimesy.github.io/tentatives/). The Pages workflow deploys `site/` and `data/**/rulings.parquet` from `master`.
+
+For local development, serve from the repo root:
+
 
 ```bash
 python -m http.server 8000
@@ -137,7 +143,7 @@ python -m http.server 8000
 
 Then open `http://localhost:8000/site/`.
 
-The deployed Pages site loads `data/<county>/rulings.parquet` directly in the browser through hyparquet. Counties without parquet files are skipped.
+The viewer loads `data/<county>/rulings.parquet` directly in the browser through hyparquet. Counties without parquet files are skipped.
 
 ## Adding A County
 

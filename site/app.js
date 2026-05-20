@@ -1,4 +1,4 @@
-// California Tentative Rulings — static viewer.
+// California Tentative Rulings - static viewer.
 //
 // Reads data/<county>/rulings.parquet from the same origin via hyparquet,
 // merges everything into one in-memory array, and drives a filter/sort/page
@@ -10,7 +10,7 @@ const { asyncBufferFromUrl, parquetReadObjects } = await import(
   "https://cdn.jsdelivr.net/npm/hyparquet@1.18.0/src/hyparquet.min.js"
 );
 
-// Counties we know about. Any whose parquet 404s is skipped silently — the
+// Counties we know about. Any whose parquet 404s is skipped silently - the
 // page works fine with whatever subset is published.
 const KNOWN_COUNTIES = [
   { slug: "el-dorado",    label: "El Dorado" },
@@ -82,7 +82,7 @@ async function resolveDataRoot() {
 async function fetchAndParse(county) {
   const root = await resolveDataRoot();
   const url = `${root}/${county.slug}/rulings.parquet`;
-  setStage(county.label, "downloading…", "active");
+  setStage(county.label, "downloading...", "active");
   let head;
   try {
     head = await fetch(url, { method: "HEAD" });
@@ -102,7 +102,7 @@ async function fetchAndParse(county) {
   // parquets this is mostly equivalent to slurping the whole thing, but is
   // future-proof if a county's file grows.
   const file = await asyncBufferFromUrl({ url });
-  setStage(county.label, "parsing…", "active");
+  setStage(county.label, "parsing...", "active");
   const rows = await parquetReadObjects({ file });
   setStage(county.label, `${rows.length.toLocaleString()} rulings`, "done");
   return rows;
@@ -203,7 +203,7 @@ function render() {
   }
 
   $("stats").textContent =
-    `${state.rows.length.toLocaleString()} rulings · ` +
+    `${state.rows.length.toLocaleString()} rulings | ` +
     `${new Set(state.rows.map((r) => r.county)).size} counties`;
 }
 
@@ -222,11 +222,11 @@ function pdfHref(r) {
 
 function renderRow(r, idx) {
   const outcomeClass = r.outcome || "other";
-  const condBadge = r.conditional ? `<span class="cond" title="ABSENT OBJECTION → granted">⚠ cond.</span>` : "";
+  const condBadge = r.conditional ? `<span class="cond" title="ABSENT OBJECTION -> granted">cond.</span>` : "";
   const pdf = pdfHref(r);
   const pdfCell = pdf
     ? `<a href="${escapeHtml(pdf)}" target="_blank" rel="noopener">PDF${r.page_start ? ` p.${r.page_start}` : ""}</a>`
-    : "—";
+    : "-";
   return `
     <tr data-idx="${idx}">
       <td>${escapeHtml(COUNTY_LABEL[r.county] || r.county || "")}</td>
@@ -235,7 +235,7 @@ function renderRow(r, idx) {
       <td class="case">${escapeHtml(r.case_number || "")}</td>
       <td class="title" title="${escapeHtml(r.case_title || "")}">${escapeHtml(r.case_title || "")}</td>
       <td>${escapeHtml(r.motion_type || "")}</td>
-      <td class="outcome"><span class="outcome-pill ${outcomeClass}">${escapeHtml(r.outcome || "—")}</span>${condBadge}</td>
+      <td class="outcome"><span class="outcome-pill ${outcomeClass}">${escapeHtml(r.outcome || "-")}</span>${condBadge}</td>
       <td>${pdfCell}</td>
     </tr>`;
 }
@@ -256,8 +256,8 @@ function openDrawer(idx) {
     ["Motion", r.motion_type],
     ["Outcome", r.outcome + (r.conditional ? " (conditional)" : "")],
     ["Continued to", r.continued_to],
-    ["Pages", r.page_start === r.page_end ? r.page_start : `${r.page_start}–${r.page_end}`],
-    ["Source", r.source_url ? `<a href="${escapeHtml(r.source_url)}" target="_blank" rel="noopener">PDF</a>` : "—"],
+    ["Pages", r.page_start === r.page_end ? r.page_start : `${r.page_start}-${r.page_end}`],
+    ["Source", r.source_url ? `<a href="${escapeHtml(r.source_url)}" target="_blank" rel="noopener">PDF</a>` : "-"],
     ["Parser", r.parser_version],
   ];
   kv.innerHTML = rows
