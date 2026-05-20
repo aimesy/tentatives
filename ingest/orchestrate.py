@@ -25,6 +25,7 @@ from counties.el_dorado import scraper as el_dorado
 from counties.contra_costa import scraper as contra_costa
 from counties.nevada import scraper as nevada
 from counties.placer import scraper as placer
+from counties.shasta import scraper as shasta
 from counties.solano import scraper as solano
 from schema import Ruling
 
@@ -38,6 +39,7 @@ PARSERS = {
     "contra-costa": contra_costa.parse,
     "nevada": nevada.parse,
     "placer": placer.parse,
+    "shasta": shasta.parse,
     "solano": solano.parse,
 }
 
