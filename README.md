@@ -2,7 +2,7 @@
 
 California superior court tentative rulings, court calendar notes, and other perishable ruling-adjacent material.
 
-The point is preservation first, parsing second. The archive keeps the court source material. The data pipeline normalizes what it can without pretending every county is solved.
+The point is preservation first, parsing second. The archive keeps the court source material. The data pipeline normalizes counties only after the parser has fixtures and tests.
 
 - Viewer: [aimesy.github.io/tentatives](https://aimesy.github.io/tentatives/)
 - Chrome extension: [tentatives-extension.zip](https://github.com/aimesy/tentatives/releases/download/extension-latest/tentatives-extension.zip)
