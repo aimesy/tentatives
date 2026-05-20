@@ -26,6 +26,7 @@ from counties.contra_costa import scraper as contra_costa
 from counties.nevada import scraper as nevada
 from counties.orange import scraper as orange
 from counties.placer import scraper as placer
+from counties.san_francisco import scraper as san_francisco
 from counties.santa_clara import scraper as santa_clara
 from counties.shasta import scraper as shasta
 from counties.solano import scraper as solano
@@ -42,6 +43,7 @@ PARSERS = {
     "nevada": nevada.parse,
     "orange": orange.parse,
     "placer": placer.parse,
+    "san-francisco": san_francisco.parse,
     "santa-clara": santa_clara.parse,
     "shasta": shasta.parse,
     "solano": solano.parse,
