@@ -1,7 +1,8 @@
 name: Build extension
 
-# Zips extension/ on every push to master and publishes it as a release asset
-# at a stable tag (extension-latest), so README can link to a fixed download URL.
+# Zips browser-specific extension packages on every push to master and publishes
+# them as release assets at a stable tag (extension-latest), so README can link
+# to fixed download URLs.
 
 on:
   push:
@@ -27,18 +28,49 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "manifest version: $v"
 
-      - name: Zip extension
+      - name: Zip extension packages
         run: |
-          cd extension
-          zip -r ../tentatives-extension.zip . -x '*.DS_Store'
-          cd ..
-          ls -la tentatives-extension.zip
+          rm -rf build
+          mkdir -p build/chrome build/firefox
+
+          cp -R extension/. build/chrome/
+          cp -R extension/. build/firefox/
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("build/chrome/manifest.json")
+          manifest = json.loads(path.read_text())
+          permissions = manifest.setdefault("permissions", [])
+          if "sidePanel" not in permissions:
+              permissions.append("sidePanel")
+          manifest.pop("sidebar_action", None)
+          manifest["side_panel"] = {
+              "default_path": "sidepanel/sidepanel.html",
+          }
+          manifest["description"] = manifest["description"].replace(
+              "Sidebar UI",
+              "Side-panel UI",
+          )
+          manifest["action"]["default_title"] = "Tentatives Capture - open side panel"
+          path.write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+
+          (cd build/chrome && zip -r ../../tentatives-extension.zip . -x '*.DS_Store')
+          cp tentatives-extension.zip tentatives-extension-chrome.zip
+          (cd build/firefox && zip -r ../../tentatives-extension-firefox.zip . -x '*.DS_Store')
+
+          ls -la tentatives-extension*.zip
 
       - name: Upload as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: tentatives-extension
-          path: tentatives-extension.zip
+          path: |
+            tentatives-extension.zip
+            tentatives-extension-chrome.zip
+            tentatives-extension-firefox.zip
           if-no-files-found: error
 
       - name: Publish to extension-latest release
@@ -52,14 +84,23 @@ jobs:
 
             **Install**
 
-            1. Download `tentatives-extension.zip` below and unzip somewhere stable
+            1. Chrome: download `tentatives-extension.zip` or
+               `tentatives-extension-chrome.zip` below and unzip somewhere stable
                (the folder has to stay where Chrome can read it).
-            2. Chrome: open `chrome://extensions`, toggle **Developer mode** on,
+            2. Firefox: download `tentatives-extension-firefox.zip` below to avoid
+               Chrome-only `sidePanel` manifest warnings.
+            3. Chrome: open `chrome://extensions`, toggle **Developer mode** on,
                click **Load unpacked**, and select the unzipped folder.
-            3. Click the extension icon, open **Settings**, and paste a GitHub PAT
+            4. Firefox: open `about:debugging#/runtime/this-firefox`, click
+               **Load Temporary Add-on**, and select `manifest.json` from the
+               unzipped Firefox package.
+            5. Click the extension icon, open **Settings**, and paste a GitHub PAT
                with `contents:write` on this repo; set owner = `aimesy`, repo = `tentatives`.
-            4. Visit a supported court page and click **Upload**.
-          files: tentatives-extension.zip
+            6. Visit a supported court page and click **Upload**.
+          files: |
+            tentatives-extension.zip
+            tentatives-extension-chrome.zip
+            tentatives-extension-firefox.zip
           overwrite_files: true
           make_latest: true
           prerelease: false
