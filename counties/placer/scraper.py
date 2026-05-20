@@ -274,6 +274,7 @@ def parse(
     source_url: str,
     source_sha256: str | None = None,
     dept_hint: str | None = None,
+    division_hint: str | None = None,
 ) -> list[Ruling]:
     if source_sha256 is None:
         source_sha256 = hashlib.sha256(pdf_bytes).hexdigest()

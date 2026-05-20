@@ -294,6 +294,7 @@ def parse(
     source_url: str,
     source_sha256: str | None = None,
     dept_hint: str | None = None,
+    division_hint: str | None = None,
 ) -> list[Ruling]:
     """Extract all rulings from one CCC tentative-rulings PDF."""
     if source_sha256 is None:

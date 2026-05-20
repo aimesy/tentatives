@@ -469,12 +469,14 @@ def parse(
     source_url: str,
     source_sha256: str | None = None,
     dept_hint: str | None = None,
+    division_hint: str | None = None,
 ) -> list[Ruling]:
     """Extract all rulings from one EDC tentative-rulings PDF.
 
     `dept_hint`: department number ("9", "12", ...) supplied by the discovery
     layer (which knows what dept page the PDF was linked from). Used when the
     PDF header doesn't include the dept (Styles B, C).
+    `division_hint`: ignored - EDC PDFs always carry division in their header.
     """
     if source_sha256 is None:
         source_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
