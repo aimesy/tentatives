@@ -91,7 +91,7 @@ Use the local backfill command for live pulls and Wayback pulls:
 
 ```bash
 python -m ingest.backfill --county amador --live --dry-run
-python -m ingest.backfill --county amador --wayback --from-year 2020 --to-year 2022
+python -m ingest.backfill --county amador --wayback --url-from-year 2020 --url-to-year 2022
 python -m ingest.backfill --county orange --live --wayback --limit 25
 ```
 
@@ -114,7 +114,7 @@ solano
 tuolumne
 ```
 
-Amador has a county-level Wayback prefix for `www.amadorcourt.org/tentativeRulings/*`. Orange uses exact Wayback queries against the stable current PDF URLs discovered from its live index pages. Other counties can use the same pattern once their live discovery modules expose stable PDF refs.
+Amador has a county-level Wayback wildcard for `www.amadorcourt.org/tentativeRulings/*`. Use `--url-from-year` and `--url-to-year` when the ruling year is in the court URL but the Wayback capture happened later. Orange uses exact Wayback queries and the Availability API against the stable current PDF URLs discovered from its live index pages. Other counties can use the same pattern once their live discovery modules expose stable PDF refs.
 
 ## Parse Locally
 

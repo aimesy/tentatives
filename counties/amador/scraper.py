@@ -67,3 +67,12 @@ def discover_live(html: str, page_url: str | None = None, base_url: str = BASE) 
             )
         )
     return unique_refs(refs)
+
+
+def ref_from_wayback_url(url: str, wayback_ts: str | None = None) -> PdfRef:
+    return PdfRef(
+        url=url,
+        filename=filename_from_url(url),
+        wayback_ts=wayback_ts,
+        division_hint=_division_for(url, None),
+    )

@@ -1,4 +1,4 @@
-from counties.amador.scraper import discover_live
+from counties.amador.scraper import discover_live, ref_from_wayback_url
 
 
 def test_discovers_dropdown_option_pdfs_with_divisions():
@@ -35,3 +35,13 @@ def test_deduplicates_repeated_urls():
     </select>
     """
     assert len(discover_live(html)) == 1
+
+
+def test_ref_from_wayback_url_infers_division_from_path():
+    ref = ref_from_wayback_url(
+        "https://www.amadorcourt.org/tentativeRulings/CivilLawAndMotion/2022/041122.pdf",
+        wayback_ts="20230324203624",
+    )
+    assert ref.filename == "041122.pdf"
+    assert ref.wayback_ts == "20230324203624"
+    assert ref.division_hint == "Civil Law and Motion"

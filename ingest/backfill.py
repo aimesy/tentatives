@@ -18,10 +18,12 @@ import argparse
 import hashlib
 import importlib
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlparse
 import requests
 
 from counties.common import PdfRef, filename_from_url, unique_refs
@@ -30,6 +32,7 @@ from schema import Capture
 REPO = Path(__file__).parent.parent
 ARCHIVE = REPO / "archive"
 CDX_ENDPOINT = "https://web.archive.org/cdx"
+AVAILABILITY_ENDPOINT = "https://archive.org/wayback/available"
 
 COUNTY_MODULES = {
     "amador": "counties.amador.scraper",
@@ -107,6 +110,42 @@ def _replay_url(ref: PdfRef) -> str:
     return f"https://web.archive.org/web/{ref.wayback_ts}id_/{ref.url}"
 
 
+def _wayback_timestamp(from_year: int | None, to_year: int | None) -> str | None:
+    if to_year:
+        return f"{to_year}1231235959"
+    if from_year:
+        return f"{from_year}0101000000"
+    return None
+
+
+def _ref_from_available(
+    ref: PdfRef,
+    *,
+    session: requests.Session,
+    timestamp: str | None = None,
+) -> PdfRef | None:
+    params = {"url": ref.url}
+    if timestamp:
+        params["timestamp"] = timestamp
+    r = session.get(AVAILABILITY_ENDPOINT, params=params, timeout=60)
+    if r.status_code == 429:
+        print(f"  Wayback availability rate-limited for {ref.url}", file=sys.stderr)
+        return None
+    r.raise_for_status()
+    closest = r.json().get("archived_snapshots", {}).get("closest")
+    if not closest or not closest.get("available") or closest.get("status") != "200":
+        return None
+    return PdfRef(
+        url=ref.url,
+        filename=ref.filename,
+        wayback_ts=closest.get("timestamp") or None,
+        dept_hint=ref.dept_hint,
+        division_hint=ref.division_hint,
+        link_text=ref.link_text,
+        source_page_url=ref.source_page_url,
+    )
+
+
 def fetch_ref(ref: PdfRef, session: requests.Session) -> tuple[bytes, str]:
     r = session.get(_replay_url(ref), timeout=90)
     r.raise_for_status()
@@ -166,6 +205,36 @@ def _cdx_rows(
     return [dict(zip(header, row)) for row in data[1:]]
 
 
+def _source_url_year(ref: PdfRef) -> int | None:
+    path = urlparse(ref.url).path
+    for part in path.split("/"):
+        if re.fullmatch(r"(?:19|20)\d{2}", part):
+            return int(part)
+    return None
+
+
+def _filter_source_url_years(
+    refs: list[PdfRef],
+    *,
+    from_year: int | None,
+    to_year: int | None,
+) -> list[PdfRef]:
+    if from_year is None and to_year is None:
+        return refs
+    out: list[PdfRef] = []
+    for ref in refs:
+        year = _source_url_year(ref)
+        if year is None:
+            out.append(ref)
+            continue
+        if from_year is not None and year < from_year:
+            continue
+        if to_year is not None and year > to_year:
+            continue
+        out.append(ref)
+    return out
+
+
 def discover_wayback_refs(
     county: str,
     session: requests.Session,
@@ -178,36 +247,56 @@ def discover_wayback_refs(
     refs: list[PdfRef] = []
 
     for pattern in getattr(module, "WAYBACK_PDF_PATTERNS", []):
-        prefix_query = pattern.endswith("*")
-        url_pattern = pattern[:-1] if prefix_query else pattern
+        # CDX treats '*' in the url parameter as a wildcard. Passing
+        # matchType=prefix here looks tempting but misses captures on some
+        # hosts, including Amador's tentativeRulings tree.
         for row in _cdx_rows(
-            url_pattern,
-            from_year=from_year,
-            to_year=to_year,
-            match_type="prefix" if prefix_query else None,
-            session=session,
-        ):
-            original = row.get("original", "")
-            if not original.lower().split("?", 1)[0].endswith(".pdf"):
-                continue
-            refs.append(
-                PdfRef(
-                    url=original,
-                    filename=filename_from_url(original),
-                    wayback_ts=row.get("timestamp") or None,
-                )
-            )
-
-    # Counties with stable "current" PDF URLs, especially Orange, need exact
-    # CDX queries for each live URL to recover prior contents.
-    for live_ref in live_refs:
-        for row in _cdx_rows(
-            live_ref.url,
+            pattern,
             from_year=from_year,
             to_year=to_year,
             match_type=None,
             session=session,
         ):
+            original = row.get("original", "")
+            if not original.lower().split("?", 1)[0].endswith(".pdf"):
+                continue
+            ref_from_wayback_url = getattr(module, "ref_from_wayback_url", None)
+            if ref_from_wayback_url:
+                refs.append(
+                    ref_from_wayback_url(
+                        original,
+                        wayback_ts=row.get("timestamp") or None,
+                    )
+                )
+            else:
+                refs.append(
+                    PdfRef(
+                        url=original,
+                        filename=filename_from_url(original),
+                        wayback_ts=row.get("timestamp") or None,
+                    )
+                )
+
+    # Counties with stable "current" PDF URLs, especially Orange, need exact
+    # CDX queries for each live URL to recover prior contents.
+    for live_ref in live_refs:
+        rows = _cdx_rows(
+            live_ref.url,
+            from_year=from_year,
+            to_year=to_year,
+            match_type=None,
+            session=session,
+        )
+        if not rows:
+            available = _ref_from_available(
+                live_ref,
+                session=session,
+                timestamp=_wayback_timestamp(from_year, to_year),
+            )
+            if available:
+                refs.append(available)
+            continue
+        for row in rows:
             original = row.get("original") or live_ref.url
             refs.append(
                 PdfRef(
@@ -260,7 +349,12 @@ def run(args: argparse.Namespace) -> int:
     if not args.live and not args.wayback:
         refs = live_refs
 
-    refs = _limit(unique_refs(refs), args.limit)
+    refs = _filter_source_url_years(
+        unique_refs(refs),
+        from_year=args.url_from_year,
+        to_year=args.url_to_year,
+    )
+    refs = _limit(refs, args.limit)
     print(f"{args.county}: {len(refs)} refs")
     existing = _existing_capture_keys(args.county)
     wrote = 0
@@ -293,6 +387,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--wayback", action="store_true", help="Fetch matching Wayback PDF captures")
     parser.add_argument("--from-year", type=int, help="First Wayback capture year, e.g. 2020")
     parser.add_argument("--to-year", type=int, help="Last Wayback capture year, e.g. 2022")
+    parser.add_argument("--url-from-year", type=int, help="First year embedded in the source PDF URL")
+    parser.add_argument("--url-to-year", type=int, help="Last year embedded in the source PDF URL")
     parser.add_argument("--limit", type=int, help="Maximum refs to fetch after discovery")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
