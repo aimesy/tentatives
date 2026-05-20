@@ -2,13 +2,7 @@
 //
 // Reads data/<county>/rulings.parquet from the same origin via hyparquet,
 // merges everything into one in-memory array, and drives a filter/sort/page
-// view. All filtering happens client-side.
-
-// hyparquet ships as a single ES module; load from the official CDN. Pinned
-// version so a breaking minor doesn't surprise the deployed site.
-const { asyncBufferFromUrl, parquetReadObjects } = await import(
-  "https://cdn.jsdelivr.net/npm/hyparquet@1.18.0/src/hyparquet.min.js"
-);
+// view. It never downloads the archived PDFs during startup.
 
 // Counties we know about. Any whose parquet 404s is skipped silently - the
 // page works fine with whatever subset is published.
@@ -59,23 +53,43 @@ function setStage(name, value, kind = "active") {
 // First successful HEAD wins; resolved once and reused for every county.
 const DATA_ROOT_CANDIDATES = ["data", "../data"];
 let resolvedDataRoot = null;
+let resolvedDataRootPromise = null;
+let parquetModulePromise = null;
+
+async function loadParquetModule() {
+  if (!parquetModulePromise) {
+    setStage("Engine", "loading parquet reader...", "active");
+    // hyparquet ships as a single ES module; load from the official CDN.
+    // Pinned version so a breaking minor doesn't surprise the deployed site.
+    parquetModulePromise = Promise.all([
+      import("https://cdn.jsdelivr.net/npm/hyparquet@1.18.0/src/hyparquet.min.js"),
+      import("https://cdn.jsdelivr.net/npm/hyparquet-compressors@1.1.1/+esm"),
+    ]).then(([parquet, compressorMod]) => {
+      setStage("Engine", "ready", "done");
+      return { ...parquet, compressors: compressorMod.compressors };
+    });
+  }
+  return parquetModulePromise;
+}
 
 async function resolveDataRoot() {
   if (resolvedDataRoot) return resolvedDataRoot;
-  for (const root of DATA_ROOT_CANDIDATES) {
-    for (const county of KNOWN_COUNTIES) {
-      try {
-        const r = await fetch(`${root}/${county.slug}/rulings.parquet`, { method: "HEAD" });
-        if (r.ok) {
-          resolvedDataRoot = root;
-          return root;
+  if (!resolvedDataRootPromise) {
+    resolvedDataRootPromise = (async () => {
+      for (const root of DATA_ROOT_CANDIDATES) {
+        for (const county of KNOWN_COUNTIES) {
+          try {
+            const r = await fetch(`${root}/${county.slug}/rulings.parquet`, { method: "HEAD" });
+            if (r.ok) return root;
+          } catch { /* ignore network errors per candidate */ }
         }
-      } catch { /* ignore network errors per candidate */ }
-    }
+      }
+      // No data found at either layout. Default to production so the per-county
+      // 404 stages render correctly.
+      return DATA_ROOT_CANDIDATES[0];
+    })();
   }
-  // No data found at either layout. Default to production so the per-county
-  // 404 stages render correctly.
-  resolvedDataRoot = DATA_ROOT_CANDIDATES[0];
+  resolvedDataRoot = await resolvedDataRootPromise;
   return resolvedDataRoot;
 }
 
@@ -98,31 +112,34 @@ async function fetchAndParse(county) {
     setStage(county.label, `HTTP ${head.status}`, "err");
     return [];
   }
+  const { asyncBufferFromUrl, parquetReadObjects, compressors } = await loadParquetModule();
   // asyncBufferFromUrl lets hyparquet do range requests; for our small (<1MB)
   // parquets this is mostly equivalent to slurping the whole thing, but is
   // future-proof if a county's file grows.
   const file = await asyncBufferFromUrl({ url });
   setStage(county.label, "parsing...", "active");
-  const rows = await parquetReadObjects({ file });
+  const rows = await parquetReadObjects({ file, compressors });
   setStage(county.label, `${rows.length.toLocaleString()} rulings`, "done");
   return rows;
 }
 
 async function loadAll() {
-  setStage("Discover", "checking county parquets", "active");
-  let total = 0;
-  for (const county of KNOWN_COUNTIES) {
+  setStage("Discover", "checking county parquets in parallel", "active");
+  const batches = await Promise.all(KNOWN_COUNTIES.map(async (county) => {
     try {
       const rows = await fetchAndParse(county);
-      for (const r of rows) {
-        // Normalize: hearing_date stored as string ISO; keep as-is for sort.
-        state.rows.push(r);
-      }
-      total += rows.length;
+      return rows;
     } catch (e) {
       console.error(`Failed to load ${county.slug}:`, e);
       setStage(county.label, `error: ${e.message || e}`, "err");
+      return [];
     }
+  }));
+  let total = 0;
+  for (const rows of batches) {
+    // Normalize: hearing_date stored as string ISO; keep as-is for sort.
+    state.rows.push(...rows);
+    total += rows.length;
   }
   setStage("Discover", `${total.toLocaleString()} total rulings`, "done");
   return total;
@@ -220,12 +237,19 @@ function pdfHref(r) {
   return r.page_start ? `${base}#page=${r.page_start}` : base;
 }
 
+function sourceLabel(r) {
+  if (String(r.style || "").startsWith("html-")) return "Page";
+  const source = String(r.source_url || "").split("?", 1)[0].toLowerCase();
+  return source.endsWith(".pdf") ? "PDF" : "Source";
+}
+
 function renderRow(r, idx) {
   const outcomeClass = r.outcome || "other";
   const condBadge = r.conditional ? `<span class="cond" title="ABSENT OBJECTION -> granted">cond.</span>` : "";
   const pdf = pdfHref(r);
+  const sourceText = sourceLabel(r);
   const pdfCell = pdf
-    ? `<a href="${escapeHtml(pdf)}" target="_blank" rel="noopener">PDF${r.page_start ? ` p.${r.page_start}` : ""}</a>`
+    ? `<a href="${escapeHtml(pdf)}" target="_blank" rel="noopener">${sourceText}${r.page_start ? ` p.${r.page_start}` : ""}</a>`
     : "-";
   return `
     <tr data-idx="${idx}">
@@ -256,8 +280,8 @@ function openDrawer(idx) {
     ["Motion", r.motion_type],
     ["Outcome", r.outcome + (r.conditional ? " (conditional)" : "")],
     ["Continued to", r.continued_to],
-    ["Pages", r.page_start === r.page_end ? r.page_start : `${r.page_start}-${r.page_end}`],
-    ["Source", r.source_url ? `<a href="${escapeHtml(r.source_url)}" target="_blank" rel="noopener">PDF</a>` : "-"],
+    ["Pages", r.page_start ? (r.page_start === r.page_end ? r.page_start : `${r.page_start}-${r.page_end}`) : ""],
+    ["Source", r.source_url ? `<a href="${escapeHtml(r.source_url)}" target="_blank" rel="noopener">${escapeHtml(sourceLabel(r))}</a>` : "-"],
     ["Parser", r.parser_version],
   ];
   kv.innerHTML = rows

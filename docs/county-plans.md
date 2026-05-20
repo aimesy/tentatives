@@ -19,7 +19,7 @@ This file separates source structure from implementation status. It is not a par
 | Santa Clara | `https://santaclara.courts.ca.gov/online-services/tentative-rulings` | Index links department pages; department pages link stable PDF files. | Capture department pages for civil, probate, and complex departments. |
 | Shasta | `https://shasta.courts.ca.gov/online-services/tentative-rulings` | Static department list with direct PDFs under `/system/files/tentative/`. | Capture direct PDFs and map old department labels when filenames expose them. |
 | Solano | `https://solano.courts.ca.gov/divisions/civil-court/tentative-rulings` | Static civil/probate page with direct department PDFs. | Capture the five ruling PDFs and skip request-for-argument forms. |
-| Tuolumne | `https://www.tuolumne.courts.ca.gov/online-services/tentative-rulings-and-case-notes` | Static tentative-ruling and case-note links. | Capture tentative-ruling PDFs and exclude case notes. |
+| Tuolumne | `https://www.tuolumne.courts.ca.gov/online-services/tentative-rulings-and-case-notes` | Static tentative-ruling and case-note links. | Capture tentative-ruling PDFs and Case Notes, tagged by division hint. |
 
 ## Researched Backlog
 

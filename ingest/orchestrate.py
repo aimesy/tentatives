@@ -35,6 +35,10 @@ PARSERS = {
     "placer": placer.parse,
 }
 
+PAGE_PARSERS = {
+    "contra-costa": contra_costa.parse_page_capture,
+}
+
 
 def existing_ruling_ids(parquet_path: Path) -> set[str]:
     if not parquet_path.exists():
@@ -44,6 +48,17 @@ def existing_ruling_ids(parquet_path: Path) -> set[str]:
         return set(table.column("ruling_id").to_pylist())
     except Exception as e:
         print(f"warning: could not read {parquet_path}: {e}", file=sys.stderr)
+        return set()
+
+
+def existing_source_shas(parquet_path: Path) -> set[str]:
+    if not parquet_path.exists():
+        return set()
+    try:
+        table = pq.read_table(parquet_path, columns=["source_sha256"])
+        return {sha for sha in table.column("source_sha256").to_pylist() if sha}
+    except Exception as e:
+        print(f"warning: could not read source shas from {parquet_path}: {e}", file=sys.stderr)
         return set()
 
 
@@ -65,7 +80,28 @@ def captures_index(county_dir: Path) -> dict[str, dict]:
     return by_sha
 
 
-def process_county(county: str, dry_run: bool = False) -> int:
+def page_captures(county_dir: Path) -> list[dict]:
+    ndjson = county_dir / "page-captures.ndjson"
+    if not ndjson.exists():
+        return []
+    rows: list[dict] = []
+    for line in ndjson.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return rows
+
+
+def process_county(
+    county: str,
+    dry_run: bool = False,
+    reparse_existing: bool = False,
+    max_sources: int | None = None,
+) -> int:
     """Parse any unprocessed PDFs for the given county. Returns count of new rulings."""
     parser = PARSERS.get(county)
     if parser is None:
@@ -81,13 +117,21 @@ def process_county(county: str, dry_run: bool = False) -> int:
         return 0
 
     seen_ids = existing_ruling_ids(parquet_path)
+    seen_source_shas = set() if reparse_existing else existing_source_shas(parquet_path)
     captures = captures_index(county_archive)
 
     new_rulings: list[dict] = []
     pdf_paths = sorted(county_archive.glob("*/*.pdf"))
+    skipped_existing = 0
+    parsed_sources = 0
     for pdf_path in pdf_paths:
+        if max_sources is not None and parsed_sources >= max_sources:
+            break
         # sha256 is in the filename; verify by recomputing.
         declared_sha = pdf_path.stem
+        if declared_sha in seen_source_shas:
+            skipped_existing += 1
+            continue
         content = pdf_path.read_bytes()
         actual_sha = hashlib.sha256(content).hexdigest()
         if declared_sha != actual_sha:
@@ -96,6 +140,9 @@ def process_county(county: str, dry_run: bool = False) -> int:
                 f"(declared {declared_sha}, actual {actual_sha})",
                 file=sys.stderr,
             )
+        if actual_sha in seen_source_shas:
+            skipped_existing += 1
+            continue
         cap = captures.get(actual_sha, {})
         source_url = cap.get("source_url") or f"archive://{county}/{actual_sha}.pdf"
 
@@ -105,15 +152,50 @@ def process_county(county: str, dry_run: bool = False) -> int:
             source_sha256=actual_sha,
             dept_hint=cap.get("dept_hint"),
         )
+        parsed_sources += 1
         unseen = [r.to_row() for r in rulings if r.ruling_id not in seen_ids]
         new_rulings.extend(unseen)
+        seen_ids.update(row["ruling_id"] for row in unseen)
         if rulings:
             print(
                 f"  {pdf_path.name}: {len(rulings)} rulings"
                 f" ({len(unseen)} new)"
             )
 
-    print(f"\n{county}: {len(new_rulings)} new rulings across {len(pdf_paths)} PDFs")
+    page_parser = PAGE_PARSERS.get(county)
+    page_rows = page_captures(county_archive) if page_parser else []
+    for cap in page_rows:
+        if max_sources is not None and parsed_sources >= max_sources:
+            break
+        archive_rel = cap.get("archive_path")
+        source_sha = cap.get("source_sha256")
+        if source_sha in seen_source_shas:
+            skipped_existing += 1
+            continue
+        if not archive_rel:
+            continue
+        page_path = REPO / archive_rel
+        if not page_path.exists():
+            print(f"WARN: missing page capture {archive_rel}", file=sys.stderr)
+            continue
+        html = page_path.read_text(encoding="utf-8", errors="replace")
+        rulings = page_parser(html, cap)
+        parsed_sources += 1
+        unseen = [r.to_row() for r in rulings if r.ruling_id not in seen_ids]
+        new_rulings.extend(unseen)
+        seen_ids.update(row["ruling_id"] for row in unseen)
+        if rulings:
+            print(
+                f"  {page_path.name}: {len(rulings)} page rows"
+                f" ({len(unseen)} new)"
+            )
+
+    print(
+        f"\n{county}: {len(new_rulings)} new rows across "
+        f"{len(pdf_paths)} PDFs and {len(page_rows)} page captures"
+        f" ({skipped_existing} existing source hashes skipped,"
+        f" {parsed_sources} sources parsed)"
+    )
 
     if not new_rulings:
         return 0
@@ -148,13 +230,28 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Parse but don't write parquet",
     )
+    parser.add_argument(
+        "--reparse-existing",
+        action="store_true",
+        help="Re-parse sources already represented in parquet",
+    )
+    parser.add_argument(
+        "--max-sources-per-county",
+        type=int,
+        help="Maximum unprocessed source hashes to parse per county",
+    )
     args = parser.parse_args(argv)
 
     started = datetime.utcnow()
     counties = [args.county] if args.county else list(PARSERS)
     total = 0
     for c in counties:
-        total += process_county(c, dry_run=args.dry_run)
+        total += process_county(
+            c,
+            dry_run=args.dry_run,
+            reparse_existing=args.reparse_existing,
+            max_sources=args.max_sources_per_county,
+        )
     elapsed = (datetime.utcnow() - started).total_seconds()
     print(f"\ntotal: {total} new rulings in {elapsed:.1f}s")
     return 0

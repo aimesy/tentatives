@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from counties.contra_costa.scraper import parse_file
+from counties.contra_costa.scraper import parse_file, parse_page_capture
 
 FIXTURE_DIR = Path(__file__).parent.parent / "fixtures"
 
@@ -48,3 +48,27 @@ def test_ruling_ids_unique_and_stable():
     ids = [r.ruling_id for r in rs1]
     assert len(set(ids)) == len(ids)
     assert [r.ruling_id for r in rs1] == [r.ruling_id for r in rs2]
+
+
+def test_parse_probate_calendar_note_page_capture():
+    html = """
+    <!doctype html>
+    <title>Probate Calendar</title>
+    <h1>Probate Calendar Notes</h1>
+    <p>Estate of Test Person, case P24-00001. Appearance required.</p>
+    """
+    rows = parse_page_capture(html, {
+        "source_sha256": "a" * 64,
+        "source_url": "https://contracosta.courts.ca.gov/probate-calendar",
+        "page_kind": "probate_calendar_notes",
+        "title": "Probate Calendar",
+        "captured_at": "2026-05-20T12:00:00",
+    })
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.division == "Probate Calendar Notes"
+    assert row.motion_type == "Calendar note"
+    assert row.case_title == "Probate Calendar"
+    assert row.hearing_date == date(2026, 5, 20)
+    assert row.page_start == 0
+    assert "Estate of Test Person" in row.full_text

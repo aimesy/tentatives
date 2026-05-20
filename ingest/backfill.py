@@ -321,14 +321,11 @@ def _wayback_needs_live_refs(county: str) -> bool:
     return not bool(getattr(module, "WAYBACK_PDF_PATTERNS", []))
 
 
-def run(args: argparse.Namespace) -> int:
-    session = requests.Session()
-    session.headers.update({"User-Agent": "aimesy-tentatives/1.0"})
-
+def _run_county(args: argparse.Namespace, county: str, session: requests.Session) -> int:
     do_live = args.live or not args.wayback
-    needs_live_for_wayback = args.wayback and _wayback_needs_live_refs(args.county)
+    needs_live_for_wayback = args.wayback and _wayback_needs_live_refs(county)
     live_refs: list[PdfRef] = (
-        discover_live_refs(args.county, session) if do_live or needs_live_for_wayback else []
+        discover_live_refs(county, session) if do_live or needs_live_for_wayback else []
     )
     refs: list[PdfRef] = []
     if args.live:
@@ -339,7 +336,7 @@ def run(args: argparse.Namespace) -> int:
             wayback_live_refs = _limit(live_refs, args.limit)
         refs.extend(
             discover_wayback_refs(
-                args.county,
+                county,
                 session,
                 from_year=args.from_year,
                 to_year=args.to_year,
@@ -355,8 +352,8 @@ def run(args: argparse.Namespace) -> int:
         to_year=args.url_to_year,
     )
     refs = _limit(refs, args.limit)
-    print(f"{args.county}: {len(refs)} refs")
-    existing = _existing_capture_keys(args.county)
+    print(f"{county}: {len(refs)} refs")
+    existing = _existing_capture_keys(county)
     wrote = 0
     for ref in refs:
         try:
@@ -364,7 +361,7 @@ def run(args: argparse.Namespace) -> int:
         except Exception as e:
             print(f"  ERROR fetch {ref.url} wayback={ref.wayback_ts or '-'}: {e}", file=sys.stderr)
             continue
-        archive_path = ARCHIVE / args.county / sha[:2] / f"{sha}.pdf"
+        archive_path = ARCHIVE / county / sha[:2] / f"{sha}.pdf"
         key = (sha, ref.url, ref.wayback_ts)
         if args.dry_run:
             print(f"  would store {ref.filename} sha={sha[:12]} from {ref.url}")
@@ -373,16 +370,33 @@ def run(args: argparse.Namespace) -> int:
         if not archive_path.exists():
             archive_path.write_bytes(content)
         if key not in existing:
-            _append_capture(args.county, ref, sha, len(content), dry_run=False)
+            _append_capture(county, ref, sha, len(content), dry_run=False)
             existing.add(key)
         wrote += 1
-    print(f"{args.county}: archived/logged {wrote} refs")
+    print(f"{county}: archived/logged {wrote} refs")
     return 0
+
+
+def run(args: argparse.Namespace) -> int:
+    session = requests.Session()
+    session.headers.update({"User-Agent": "aimesy-tentatives/1.0"})
+
+    counties = sorted(COUNTY_MODULES) if args.county == "all" else [args.county]
+    status = 0
+    for county in counties:
+        try:
+            status |= _run_county(args, county, session)
+        except Exception as e:
+            print(f"{county}: ERROR {e}", file=sys.stderr)
+            status = 1
+            if not args.continue_on_error:
+                break
+    return status
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--county", required=True, choices=sorted(COUNTY_MODULES))
+    parser.add_argument("--county", required=True, choices=["all", *sorted(COUNTY_MODULES)])
     parser.add_argument("--live", action="store_true", help="Fetch PDFs from configured live landing pages")
     parser.add_argument("--wayback", action="store_true", help="Fetch matching Wayback PDF captures")
     parser.add_argument("--from-year", type=int, help="First Wayback capture year, e.g. 2020")
@@ -390,6 +404,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--url-from-year", type=int, help="First year embedded in the source PDF URL")
     parser.add_argument("--url-to-year", type=int, help="Last year embedded in the source PDF URL")
     parser.add_argument("--limit", type=int, help="Maximum refs to fetch after discovery")
+    parser.add_argument("--continue-on-error", action="store_true", help="Keep processing remaining counties after a county-level failure")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     return run(args)

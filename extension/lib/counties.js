@@ -59,8 +59,15 @@ export const HOST_TO_COUNTY = {
   "www.tuolumne.courts.ca.gov": "tuolumne",
 };
 
+export const VOLATILE_URL_COUNTIES = new Set([
+  "orange",
+  "santa-clara",
+  "shasta",
+  "tuolumne",
+]);
+
 // Bulk-scan config used by background.js. `landings`, when present, overrides
-// a static href crawl of `root` so one-page and iframe portals work too.
+// a static href crawl of `root` so one-page and iframe-driven pages work too.
 export const COUNTY_SCAN = {
   "el-dorado": {
     root: "https://www.eldorado.courts.ca.gov/online-services/tentative-rulings",
@@ -78,8 +85,7 @@ export const COUNTY_SCAN = {
     landings: [
       "https://contracosta.courts.ca.gov/online-services/tentative-rulings",
       "https://contracosta.courts.ca.gov/tentative-rulings-archive",
-      "https://www.cc-courts.org/civil/motions-hearings-tentative.aspx",
-      "https://www.cc-courts.org/civil/motions-hearings-tentative-archive.aspx",
+      "https://contracosta.courts.ca.gov/probate-calendar",
     ],
     pathTest: () => true,
   },
@@ -176,10 +182,9 @@ export const SIDEBAR_PAGES = {
     { label: "Tentative rulings (index)", url: "https://www.placer.courts.ca.gov/online-services/tentative-rulings" },
   ],
   "contra-costa": [
-    { label: "Current rulings (shell)", url: "https://contracosta.courts.ca.gov/online-services/tentative-rulings" },
-    { label: "Archive (shell)", url: "https://contracosta.courts.ca.gov/tentative-rulings-archive" },
-    { label: "Current rulings (portal)", url: "https://www.cc-courts.org/civil/motions-hearings-tentative.aspx" },
-    { label: "Archive (portal)", url: "https://www.cc-courts.org/civil/motions-hearings-tentative-archive.aspx" },
+    { label: "Current rulings", url: "https://contracosta.courts.ca.gov/online-services/tentative-rulings" },
+    { label: "Rulings archive", url: "https://contracosta.courts.ca.gov/tentative-rulings-archive" },
+    { label: "Probate calendar notes", url: "https://contracosta.courts.ca.gov/probate-calendar" },
   ],
   "amador": [
     { label: "Legacy dropdowns", url: "https://www.amadorcourt.org/os-tentativerulings.aspx" },

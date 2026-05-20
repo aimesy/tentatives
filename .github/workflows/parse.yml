@@ -10,6 +10,8 @@ on:
     paths:
       - "archive/**/*.pdf"
       - "archive/**/captures.ndjson"
+      - "archive/**/pages/**/*.html"
+      - "archive/**/page-captures.ndjson"
       - "counties/**/*.py"
       - "schema/**/*.py"
       - "ingest/**/*.py"
@@ -17,6 +19,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: parse-new-captures-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   parse:
@@ -32,8 +38,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Parse new PDFs
-        run: python -m ingest.orchestrate
+      - name: Parse new captures
+        run: python -m ingest.orchestrate --max-sources-per-county 50
 
       - name: Commit updated parquet
         run: |
@@ -45,4 +51,5 @@ jobs:
           git config user.email "tentatives-bot@users.noreply.github.com"
           git add data/
           git commit -m "ingest: update rulings.parquet"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
           git push

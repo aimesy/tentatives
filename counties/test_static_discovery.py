@@ -72,12 +72,15 @@ def test_solano_discovers_department_pdfs_but_skips_forms():
     assert refs[0].dept_hint == "22"
 
 
-def test_tuolumne_discovers_tentatives_but_skips_case_notes():
+def test_tuolumne_discovers_tentatives_and_case_notes():
     refs = tuolumne.discover_live(
         """
         <a href="/system/files/tentative-rulings/tr_d5_01212026.pdf">Tentative Ruling - Department 5</a>
         <a href="/system/files/tentative-rulings/casenote_d5.pdf">Case Notes - Department 5</a>
         """
     )
-    assert [ref.filename for ref in refs] == ["tr_d5_01212026.pdf"]
+    assert [ref.filename for ref in refs] == ["tr_d5_01212026.pdf", "casenote_d5.pdf"]
     assert refs[0].dept_hint == "5"
+    assert refs[0].division_hint == "Civil Law and Motion"
+    assert refs[1].dept_hint == "5"
+    assert refs[1].division_hint == "Case Notes"

@@ -13,8 +13,15 @@ LANDING_PAGES = [BASE]
 
 def _dept_hint(parsed: ParseResult, text: str, _page_url: str) -> str | None:
     hay = f"{parsed.path} {text}"
-    m = re.search(r"(?:department|dept|tr_d)(?:[-_ ]?)(\d+)", hay, re.I)
+    m = re.search(r"(?:department|dept|tr[-_ ]?d|case[-_ ]?notes?[-_ ]?d)(?:[-_ ]?)(\d+)", hay, re.I)
     return m.group(1) if m else None
+
+
+def _division_hint(parsed: ParseResult, text: str, _page_url: str) -> str | None:
+    hay = f"{parsed.path} {text}"
+    if re.search(r"case[-_ ]?notes?", hay, re.I):
+        return "Case Notes"
+    return "Civil Law and Motion"
 
 
 def discover_live(html: str, page_url: str | None = None, base_url: str = BASE):
@@ -24,8 +31,7 @@ def discover_live(html: str, page_url: str | None = None, base_url: str = BASE):
         allowed_hosts={"www.tuolumne.courts.ca.gov", "tuolumne.courts.ca.gov"},
         path_test=lambda parsed, text: (
             "/system/files/tentative-rulings/" in parsed.path
-            and "case notes" not in text.lower()
         ),
-        default_division="Civil Law and Motion",
         dept_hint=_dept_hint,
+        division_hint=_division_hint,
     )

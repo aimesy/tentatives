@@ -122,12 +122,81 @@
       if (seen.has(href)) continue;
       seen.add(href);
       const filename = decodeURIComponent(href.split("/").pop().split("?")[0]);
-      links.push({ url: href, filename });
+      const labelHint = cleanText(a.textContent || "");
+      const item = { url: href, filename, sourcePageUrl: location.href };
+      if (labelHint) item.labelHint = labelHint;
+      if (document.title) item.pageTitleHint = cleanText(document.title);
+      links.push(item);
     }
     return links;
   }
 
+  function cleanText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function escapeHtml(value) {
+    return String(value || "").replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    }[c]));
+  }
+
+  function pageKindFor(url) {
+    let u;
+    try { u = new URL(url); } catch { return null; }
+    const path = u.pathname.toLowerCase().replace(/\/$/, "");
+    if (path === "/probate-calendar") return "probate_calendar_notes";
+    if (path === "/online-services/tentative-rulings") return "tentative_rulings_page";
+    if (path === "/tentative-rulings-archive") return "tentative_rulings_archive";
+    if (/\/civil\/motions-hearings-tentative(?:-archive)?\.aspx$/i.test(path)) {
+      return path.includes("archive") ? "tentative_rulings_archive" : "tentative_rulings_page";
+    }
+    return null;
+  }
+
+  function titleForKind(kind) {
+    if (kind === "probate_calendar_notes") return "Probate Calendar Notes";
+    if (kind === "tentative_rulings_archive") return "Tentative Rulings Archive";
+    return "Tentative Rulings";
+  }
+
+  function buildPageSnapshot(pdfs) {
+    const pageKind = pageKindFor(location.href);
+    if (!pageKind) return [];
+    if (pageKind.startsWith("tentative_rulings") && (!pdfs || pdfs.length === 0)) {
+      return [];
+    }
+    const text = cleanText(document.body?.innerText || document.documentElement?.innerText || "");
+    if (!text) return [];
+
+    // Store visible text, not the live DOM. That keeps hashes tied to court
+    // content changes rather than scripts, trackers, or framework noise.
+    const title = cleanText(document.title) || titleForKind(pageKind);
+    const html =
+      "<!doctype html>\n" +
+      "<html><head><meta charset=\"utf-8\">" +
+      `<title>${escapeHtml(title)}</title>` +
+      "</head><body>" +
+      `<h1>${escapeHtml(title)}</h1>` +
+      `<p><strong>Source:</strong> <a href="${escapeHtml(location.href)}">${escapeHtml(location.href)}</a></p>` +
+      `<pre>${escapeHtml(text)}</pre>` +
+      "</body></html>\n";
+    return [{
+      url: location.href,
+      title,
+      pageKind,
+      html,
+      text,
+    }];
+  }
+
   function report(pdfs) {
+    const pages = buildPageSnapshot(pdfs);
+    window.__tentatives_pages = pages;
     window.__tentatives_pdfs = pdfs;
     try {
       chrome.runtime.sendMessage({
@@ -135,6 +204,7 @@
         county: COUNTY,
         url: location.href,
         pdfs,
+        pages,
       });
     } catch { /* extension context invalidated, etc. */ }
   }

@@ -48,7 +48,14 @@
     <section class="pages">
       <div class="section-head">
         <h2 class="section-title">Pages</h2>
-        <span class="progress muted" id="bulk-status"></span>
+        <div class="section-actions">
+          <label class="check">
+            <input type="checkbox" id="select-all-courts" checked />
+            <span>All</span>
+          </label>
+          <button class="btn small" id="scan-selected" type="button">Scan selected</button>
+          <span class="progress muted" id="bulk-status"></span>
+        </div>
       </div>
       <div id="county-blocks"></div>
     </section>

@@ -1,0 +1,99 @@
+name: Backfill captures
+
+on:
+  workflow_dispatch:
+    inputs:
+      county:
+        description: County slug, or all
+        required: true
+        default: all
+      mode:
+        description: live, wayback, or both
+        required: true
+        default: wayback
+        type: choice
+        options:
+          - live
+          - wayback
+          - both
+      from_year:
+        description: First Wayback capture year
+        required: false
+      to_year:
+        description: Last Wayback capture year
+        required: false
+      url_from_year:
+        description: First source-URL year, for counties with year folders
+        required: false
+      url_to_year:
+        description: Last source-URL year, for counties with year folders
+        required: false
+      limit:
+        description: Optional max refs per county/discovery run
+        required: false
+  schedule:
+    # Forward-capture public static pages daily without a browser.
+    - cron: "27 9 * * *"
+    # Re-check Wayback weekly; existing current URLs may acquire new archived
+    # versions over time.
+    - cron: "17 11 * * 0"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: backfill-captures
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run backfill
+        env:
+          COUNTY: ${{ github.event.inputs.county || 'all' }}
+          MODE: ${{ github.event.inputs.mode || (github.event.schedule == '17 11 * * 0' && 'wayback' || 'live') }}
+          FROM_YEAR: ${{ github.event.inputs.from_year }}
+          TO_YEAR: ${{ github.event.inputs.to_year }}
+          URL_FROM_YEAR: ${{ github.event.inputs.url_from_year }}
+          URL_TO_YEAR: ${{ github.event.inputs.url_to_year }}
+          LIMIT: ${{ github.event.inputs.limit || (github.event.schedule == '17 11 * * 0' && '50' || '') }}
+        run: |
+          args=(--county "$COUNTY" --continue-on-error)
+          case "$MODE" in
+            live) args+=(--live) ;;
+            wayback) args+=(--wayback) ;;
+            both) args+=(--live --wayback) ;;
+            *) echo "invalid mode: $MODE" >&2; exit 2 ;;
+          esac
+          [ -n "$FROM_YEAR" ] && args+=(--from-year "$FROM_YEAR")
+          [ -n "$TO_YEAR" ] && args+=(--to-year "$TO_YEAR")
+          [ -n "$URL_FROM_YEAR" ] && args+=(--url-from-year "$URL_FROM_YEAR")
+          [ -n "$URL_TO_YEAR" ] && args+=(--url-to-year "$URL_TO_YEAR")
+          [ -n "$LIMIT" ] && args+=(--limit "$LIMIT")
+          python -m ingest.backfill "${args[@]}"
+
+      - name: Commit archive updates
+        run: |
+          if git diff --quiet -- archive/; then
+            echo "no archive changes"
+            exit 0
+          fi
+          git config user.name "tentatives-bot"
+          git config user.email "tentatives-bot@users.noreply.github.com"
+          git add archive/
+          git commit -m "archive: backfill captures"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push

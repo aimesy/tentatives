@@ -57,6 +57,8 @@
         if (path.includes("civil")) return "Civil";
         return null;
       },
+      dateHint: (u, text, _source, pageUrl) =>
+        extractDateHint(text, u.pathname, pageUrl.pathname, document.title),
     },
     {
       county: "calaveras",
@@ -135,6 +137,8 @@
         if (/department-(19|22)-/i.test(pageUrl.pathname)) return "Complex Civil";
         return "Civil Law and Motion";
       },
+      dateHint: (u, text, _source, pageUrl) =>
+        extractDateHint(text, u.pathname, pageUrl.pathname, document.title),
     },
     {
       county: "shasta",
@@ -152,6 +156,8 @@
         return null;
       },
       divisionHint: () => "Civil / Probate / Family Law",
+      dateHint: (u, text, _source, pageUrl) =>
+        extractDateHint(text, u.pathname, pageUrl.pathname, document.title),
     },
     {
       county: "solano",
@@ -175,13 +181,20 @@
       pageHosts: ["tuolumne.courts.ca.gov", "www.tuolumne.courts.ca.gov"],
       pdfHosts: ["tuolumne.courts.ca.gov", "www.tuolumne.courts.ca.gov"],
       match: (u, text) =>
-        /\/system\/files\/tentative-rulings\/.+\.pdf$/i.test(u.pathname)
-        && !/case notes/i.test(text || ""),
+        /\/system\/files\/tentative-rulings\/.+\.pdf$/i.test(u.pathname),
       deptHint: (u, text) => {
-        const m = `${u.pathname} ${text || ""}`.match(/(?:department|dept|tr_d)(?:[-_ ]?)(\d+)/i);
+        const m = `${u.pathname} ${text || ""}`.match(
+          /(?:department|dept|tr[-_ ]?d|case[-_ ]?notes?[-_ ]?d)(?:[-_ ]?)(\d+)/i,
+        );
         return m ? m[1] : null;
       },
-      divisionHint: () => "Civil Law and Motion",
+      divisionHint: (u, text, source) => {
+        const hay = `${u.pathname} ${text || ""} ${source || ""}`;
+        if (/case[-_ ]?notes?/i.test(hay)) return "Case Notes";
+        return "Civil Law and Motion";
+      },
+      dateHint: (u, text, _source, pageUrl) =>
+        extractDateHint(text, u.pathname, pageUrl.pathname, document.title),
     },
   ];
 
@@ -206,6 +219,72 @@
     return parts[parts.length - 1] || "tentative-ruling.pdf";
   }
 
+  function cleanText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function pad2(value) {
+    return String(value).padStart(2, "0");
+  }
+
+  function normalizedYear(value) {
+    const text = String(value || "");
+    return text.length === 2 ? `20${text}` : text;
+  }
+
+  function formatDateHint(year, month, day) {
+    const y = Number(normalizedYear(year));
+    const m = Number(month);
+    const d = Number(day);
+    if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return null;
+    if (y < 2000 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+    return `${y}-${pad2(m)}-${pad2(d)}`;
+  }
+
+  function monthNumber(value) {
+    const key = String(value || "").toLowerCase().replace(/\./g, "").slice(0, 3);
+    return {
+      jan: 1,
+      feb: 2,
+      mar: 3,
+      apr: 4,
+      may: 5,
+      jun: 6,
+      jul: 7,
+      aug: 8,
+      sep: 9,
+      oct: 10,
+      nov: 11,
+      dec: 12,
+    }[key] || null;
+  }
+
+  function extractDateHint(...parts) {
+    const hay = cleanText(parts.filter(Boolean).join(" "));
+    if (!hay) return null;
+
+    let m = hay.match(/\b(20\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/);
+    if (m) return formatDateHint(m[1], m[2], m[3]);
+
+    m = hay.match(/\b(0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])[-/.](20\d{2}|\d{2})\b/);
+    if (m) return formatDateHint(m[3], m[1], m[2]);
+
+    m = hay.match(/(?:^|[^\d])(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?=$|[^\d])/);
+    if (m) return formatDateHint(m[1], m[2], m[3]);
+
+    m = hay.match(/(?:^|[^\d])(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(20\d{2})(?=$|[^\d])/);
+    if (m) return formatDateHint(m[3], m[1], m[2]);
+
+    const monthName = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+    m = hay.match(new RegExp(`\\b${monthName}\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(20\\d{2})\\b`, "i"));
+    if (m) return formatDateHint(m[3], monthNumber(m[1]), m[2]);
+
+    m = hay.match(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+${monthName}\\.?\\s+(20\\d{2})\\b`, "i"));
+    if (m) return formatDateHint(m[3], monthNumber(m[2]), m[1]);
+
+    return null;
+  }
+
   function addCandidate(out, seen, rawUrl, text, source) {
     const u = tryUrl(rawUrl);
     if (!u) return;
@@ -219,10 +298,16 @@
       filename: filenameFor(u),
       sourcePageUrl: location.href,
     };
+    const labelHint = cleanText(text);
+    const pageTitleHint = cleanText(document.title);
+    if (labelHint) item.labelHint = labelHint;
+    if (pageTitleHint) item.pageTitleHint = pageTitleHint;
     const deptHint = rule.deptHint?.(u, text, source, pageUrl);
     const divisionHint = rule.divisionHint?.(u, text, source, pageUrl);
+    const dateHint = rule.dateHint?.(u, text, source, pageUrl);
     if (deptHint) item.deptHint = deptHint;
     if (divisionHint) item.divisionHint = divisionHint;
+    if (dateHint) item.dateHint = dateHint;
     out.push(item);
   }
 

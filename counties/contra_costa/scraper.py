@@ -25,8 +25,9 @@ Case-number formats seen:
     MSC21-02266              (legacy: 2-3 letters + YY + dash + 5 digits)
     N23-0180                 (1-letter + YY + dash + 4 digits)
 
-Discovery for CCC is portal-driven (iframe + cmsportal.cc-courts.org); not yet
-implemented — the user uploads PDFs directly via the extension for now.
+Discovery for CCC is iframe-driven from the public Contra Costa pages. CLI
+discovery is not implemented yet; the extension handles the public page and
+its frames.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ import io
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
+from html.parser import HTMLParser
 from typing import Iterator
 
 import pypdf
@@ -56,10 +58,92 @@ class PdfRef:
 
 
 def discover_live(html: str, page_url: str | None = None) -> list[PdfRef]:
-    """Placeholder — CCC tentative rulings live in an iframe served by a
-    portal (cmsportal.cc-courts.org / kiosk-cacontracosta). Discovery will
-    require driving the portal; not yet implemented."""
+    """Placeholder: CCC tentative rulings are exposed through iframes on the
+    public court pages. CLI discovery needs a browser or a direct frame adapter."""
     return []
+
+
+class _VisibleTextParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() in {"script", "style", "noscript"}:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in {"script", "style", "noscript"} and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip_depth:
+            text = " ".join(data.split())
+            if text:
+                self.parts.append(text)
+
+
+def _html_text(html: str) -> str:
+    parser = _VisibleTextParser()
+    parser.feed(html)
+    return "\n".join(parser.parts)
+
+
+def parse_page_capture(html: str, capture: dict) -> list[Ruling]:
+    """Normalize one captured Contra Costa HTML page.
+
+    These are not PDF rulings. They are changed-hash page captures for
+    perishable pages such as probate calendar notes.
+    """
+    source_sha256 = capture.get("source_sha256") or hashlib.sha256(html.encode("utf-8")).hexdigest()
+    source_url = capture.get("source_url") or ""
+    page_kind = capture.get("page_kind") or "page_capture"
+    title = capture.get("title") or "Contra Costa page capture"
+    captured_at_raw = capture.get("captured_at") or capture.get("fetched_at")
+    try:
+        captured_at = datetime.fromisoformat(str(captured_at_raw).replace("Z", "+00:00"))
+    except Exception:
+        captured_at = datetime.utcnow()
+    text = _html_text(html).strip()
+    if not text:
+        return []
+
+    division = {
+        "probate_calendar_notes": "Probate Calendar Notes",
+        "tentative_rulings_archive": "Tentative Rulings Archive",
+        "tentative_rulings_page": "Tentative Rulings Page",
+    }.get(page_kind, "Court Page")
+
+    ruling_id = hashlib.sha256(
+        f"{source_sha256}:{source_url}:{page_kind}".encode("utf-8")
+    ).hexdigest()[:32]
+    return [
+        Ruling(
+            ruling_id=ruling_id,
+            county=COUNTY_SLUG,
+            division=division,
+            dept=None,
+            hearing_date=captured_at.date(),
+            ruling_index=1,
+            case_number="",
+            case_title=title,
+            motion_type="Calendar note" if page_kind == "probate_calendar_notes" else "Page capture",
+            outcome="other",
+            outcome_text="",
+            conditional=False,
+            continued_to=None,
+            body_text=text,
+            full_text=text,
+            page_start=0,
+            page_end=0,
+            source_sha256=source_sha256,
+            source_url=source_url,
+            style=f"html-{page_kind}",
+            parser_version=PARSER_VERSION,
+            ingest_ts=datetime.utcnow(),
+        )
+    ]
 
 
 # ============================================================ PARSE

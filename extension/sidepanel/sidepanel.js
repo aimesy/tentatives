@@ -24,6 +24,10 @@ const bulkStatusEl = $("bulk-status");
 const uploadBtn = $("upload");
 const rescanBtn = $("rescan");
 const bulkStopBtn = $("bulk-stop");
+const scanSelectedBtn = $("scan-selected");
+const selectAllCourtsEl = $("select-all-courts");
+const bulkPauseBtn = document.createElement("button");
+const bulkControlsEl = document.createElement("span");
 const clearBtn = $("clear-activity");
 const countyBlocks = $("county-blocks");
 
@@ -36,6 +40,8 @@ const viewerLink = $("open-viewer");
 const versionEl = $("ext-version");
 
 const pageActionButtons = new Set();
+const countySelectionInputs = new Set();
+const selectedCountyState = new Map();
 const CONFIG_KEYS = new Set([
   "githubToken",
   "githubOwner",
@@ -48,6 +54,15 @@ let pendingRefreshAfterBusy = false;
 let renderTimer = null;
 let renderInFlight = false;
 let renderAgain = false;
+
+bulkPauseBtn.className = "btn small";
+bulkPauseBtn.type = "button";
+bulkPauseBtn.textContent = "Pause scan";
+bulkPauseBtn.title = "Pause the current bulk scan";
+bulkControlsEl.className = "row";
+bulkControlsEl.hidden = true;
+bulkStopBtn.parentElement.insertBefore(bulkControlsEl, bulkStopBtn);
+bulkControlsEl.append(bulkPauseBtn, bulkStopBtn);
 
 $("open-options").addEventListener("click", (e) => {
   e.preventDefault();
@@ -67,6 +82,31 @@ function setPageActionsDisabled(disabled) {
   for (const btn of pageActionButtons) {
     btn.disabled = disabled || btn.dataset.configOk !== "true";
   }
+  for (const input of countySelectionInputs) {
+    input.disabled = disabled;
+  }
+  selectAllCourtsEl.disabled = disabled;
+  scanSelectedBtn.disabled = disabled
+    || !currentState.cfg.ok
+    || selectedScanCounties().length === 0;
+}
+
+function isCountySelected(county) {
+  return selectedCountyState.get(county) !== false;
+}
+
+function selectedScanCounties() {
+  return Object.keys(SIDEBAR_PAGES).filter((county) =>
+    isCountySelected(county) && !!COUNTY_SCAN[county]
+  );
+}
+
+function syncSelectionControls(cfg = currentState.cfg) {
+  const allCounties = Object.keys(SIDEBAR_PAGES).filter((county) => !!COUNTY_SCAN[county]);
+  const selected = selectedScanCounties();
+  selectAllCourtsEl.checked = allCounties.length > 0 && selected.length === allCounties.length;
+  selectAllCourtsEl.indeterminate = selected.length > 0 && selected.length < allCounties.length;
+  scanSelectedBtn.disabled = busy || !cfg.ok || selected.length === 0;
 }
 
 function countyForUrl(url) {
@@ -152,6 +192,12 @@ const STATUS_META = {
   "uploaded": { cls: "ok", icon: "✓", label: "uploaded" },
   "already-captured": { cls: "skip", icon: "•", label: "skipped (already captured)" },
   "skipped-exists": { cls: "skip", icon: "•", label: "logged (PDF was already archived)" },
+  "page-captured": { cls: "ok", icon: "✓", label: "captured page snapshot" },
+  "page-logged": { cls: "skip", icon: "•", label: "logged page snapshot" },
+  "page-unchanged": { cls: "skip", icon: "•", label: "skipped unchanged page" },
+  "layout-captured": { cls: "ok", icon: "✓", label: "captured page layout" },
+  "layout-logged": { cls: "skip", icon: "•", label: "logged page layout" },
+  "layout-unchanged": { cls: "skip", icon: "•", label: "skipped unchanged layout" },
   "error": { cls: "err", icon: "✗", label: "error" },
 };
 
@@ -203,11 +249,33 @@ function escapeHtml(s) {
 
 clearBtn.addEventListener("click", resetActivity);
 
+selectAllCourtsEl.addEventListener("change", () => {
+  const checked = selectAllCourtsEl.checked;
+  for (const county of Object.keys(SIDEBAR_PAGES)) {
+    selectedCountyState.set(county, checked);
+  }
+  for (const input of countySelectionInputs) {
+    input.checked = checked;
+  }
+  syncSelectionControls();
+});
+
+scanSelectedBtn.addEventListener("click", async () => {
+  if (busy || !currentState.cfg.ok) return;
+  await startSelectedScan(currentState.cfg);
+});
+
 function summaryParts(summary) {
   const parts = [];
   if (summary.uploaded) parts.push(`${summary.uploaded} new`);
   if (summary["skipped-exists"]) parts.push(`${summary["skipped-exists"]} logged`);
   if (summary["already-captured"]) parts.push(`${summary["already-captured"]} dupe`);
+  if (summary["page-captured"]) parts.push(`${summary["page-captured"]} pages`);
+  if (summary["page-logged"]) parts.push(`${summary["page-logged"]} page logs`);
+  if (summary["page-unchanged"]) parts.push(`${summary["page-unchanged"]} unchanged pages`);
+  if (summary["layout-captured"]) parts.push(`${summary["layout-captured"]} layouts`);
+  if (summary["layout-logged"]) parts.push(`${summary["layout-logged"]} layout logs`);
+  if (summary["layout-unchanged"]) parts.push(`${summary["layout-unchanged"]} unchanged layouts`);
   if (summary.error) parts.push(`${summary.error} err`);
   return parts.join(", ") || "no changes";
 }
@@ -281,6 +349,11 @@ async function startUpload(pdfs, county, cfg) {
 async function startBulkScan(county, cfg, urls = null, label = "Scan") {
   setBusy(true, cfg, county);
   uploadBtn.disabled = true;
+  bulkControlsEl.hidden = false;
+  bulkPauseBtn.hidden = false;
+  bulkPauseBtn.disabled = false;
+  bulkPauseBtn.textContent = "Pause scan";
+  bulkPauseBtn.title = "Pause the current bulk scan";
   bulkStopBtn.hidden = false;
   bulkStopBtn.disabled = false;
   bulkStatusEl.textContent = urls?.length ? `Fetching ${label}` : "Discovering landing pages…";
@@ -290,40 +363,77 @@ async function startBulkScan(county, cfg, urls = null, label = "Scan") {
 
   let totalPages = 0;
   let pagesDone = 0;
+  let bulkPaused = false;
   const summary = { uploaded: 0, "already-captured": 0, "skipped-exists": 0, error: 0 };
 
   const port = chrome.runtime.connect({ name: "bulk-scan" });
   port.postMessage({ type: "start", county, urls });
 
   return new Promise((resolve) => {
-    const cleanup = () => {
+    const cleanup = (reason = "completed") => {
+      bulkControlsEl.hidden = true;
+      bulkPauseBtn.disabled = true;
       bulkStopBtn.hidden = true;
+      bulkPauseBtn.onclick = null;
+      bulkStopBtn.onclick = null;
       setBusy(false, cfg, county);
-      port.disconnect();
-      resolve();
+      try { port.disconnect(); } catch { /* already closed */ }
+      resolve(reason);
+    };
+
+    bulkPauseBtn.onclick = () => {
+      const type = bulkPaused ? "resume" : "pause";
+      bulkPauseBtn.disabled = true;
+      bulkStatusEl.textContent = bulkPaused ? "Resuming scan..." : "Pausing scan...";
+      try { port.postMessage({ type }); } catch { /* port closed */ }
     };
 
     bulkStopBtn.onclick = () => {
       bulkStopBtn.disabled = true;
-      bulkStatusEl.textContent = "Stopping after current page…";
+      bulkPauseBtn.disabled = true;
       try { port.postMessage({ type: "stop" }); } catch { /* port closed */ }
+      bulkStatusEl.textContent = "Stopping scan...";
     };
 
     port.onMessage.addListener((msg) => {
-      if (msg.type === "landings") {
+      if (msg.type === "control-state") {
+        bulkPaused = !!msg.paused;
+        bulkPauseBtn.disabled = !!msg.stopped;
+        bulkPauseBtn.textContent = bulkPaused ? "Resume scan" : "Pause scan";
+        bulkPauseBtn.title = bulkPaused ? "Resume the current bulk scan" : "Pause the current bulk scan";
+        if (msg.stopped) {
+          bulkStatusEl.textContent = "Stopping scan...";
+        } else if (bulkPaused) {
+          bulkStatusEl.textContent = "Paused - resume when ready";
+        }
+      } else if (msg.type === "landings") {
         totalPages = msg.urls.length;
         bulkStatusEl.textContent = totalPages
           ? `Found ${totalPages} page${totalPages === 1 ? "" : "s"}`
           : "No pages to scan";
       } else if (msg.type === "page-start") {
-        bulkStatusEl.textContent = `Page ${msg.index + 1}/${msg.total}: ${msg.title}`;
+        const retryLabel = msg.attempt > 1
+          ? ` (retry ${msg.attempt - 1}/${Math.max(1, msg.maxAttempts - 1)})`
+          : "";
+        bulkStatusEl.textContent = `Page ${msg.index + 1}/${msg.total}${retryLabel}: ${msg.title}`;
         const pct = Math.round((msg.index / Math.max(1, msg.total)) * 100);
         progressFill.style.width = `${pct}%`;
       } else if (msg.type === "page-harvested") {
+        const pagePart = msg.pageSnapshotCount
+          ? `, ${msg.pageSnapshotCount} page snapshot${msg.pageSnapshotCount === 1 ? "" : "s"}`
+          : "";
+        const layoutPart = msg.layoutCount
+          ? `, ${msg.layoutCount} layout${msg.layoutCount === 1 ? "" : "s"}`
+          : "";
         bulkStatusEl.textContent =
-          `Page ${msg.index + 1}/${totalPages}: ${msg.title} — ${msg.pdfCount} PDF${msg.pdfCount === 1 ? "" : "s"}`;
+          `Page ${msg.index + 1}/${totalPages}: ${msg.title} — ${msg.pdfCount} PDF${msg.pdfCount === 1 ? "" : "s"}${pagePart}${layoutPart}`;
         pagesDone = msg.index + 1;
+      } else if (msg.type === "page-retry") {
+        const text = `Retry ${msg.retry}/${msg.maxRetries}: ${msg.title} (${msg.error})`;
+        bulkStatusEl.textContent = text;
+        appendNote("warn", text);
       } else if (msg.type === "page-error") {
+        pagesDone = Math.max(pagesDone, msg.index + 1);
         appendNote("err", `${msg.title}: ${msg.error}`);
       } else if (msg.type === "result") {
         appendResult(msg.result);
@@ -333,19 +443,33 @@ async function startBulkScan(county, cfg, urls = null, label = "Scan") {
         const tag = msg.reason === "stopped" ? "Stopped" : "Done";
         bulkStatusEl.textContent =
           `${tag} · ${pagesDone}/${totalPages} pages · ${summaryParts(summary)}`;
-        cleanup();
+        cleanup(msg.reason || "completed");
       } else if (msg.type === "error") {
         appendNote("err", `Fatal: ${msg.error}`);
         bulkStatusEl.textContent = `Failed: ${msg.error}`;
-        cleanup();
+        cleanup("error");
       }
     });
   });
 }
 
+async function startSelectedScan(cfg) {
+  const counties = selectedScanCounties();
+  if (!cfg.ok || counties.length === 0) return;
+  appendNote("warn", `Scanning ${counties.length} selected court${counties.length === 1 ? "" : "s"}.`);
+  for (let i = 0; i < counties.length; i++) {
+    const county = counties[i];
+    const label = COUNTY_LABEL[county] || county;
+    bulkStatusEl.textContent = `Selected ${i + 1}/${counties.length}: ${label}`;
+    const reason = await startBulkScan(county, cfg, null, label);
+    if (reason === "stopped" || reason === "error") break;
+  }
+}
+
 function renderCountyPages(cfg) {
   countyBlocks.innerHTML = "";
   pageActionButtons.clear();
+  countySelectionInputs.clear();
 
   for (const [county, pages] of Object.entries(SIDEBAR_PAGES)) {
     const block = document.createElement("section");
@@ -353,14 +477,31 @@ function renderCountyPages(cfg) {
 
     const head = document.createElement("div");
     head.className = "county-head";
-    head.innerHTML =
-      `<h3>${escapeHtml(COUNTY_LABEL[county] || county)}</h3>` +
-      `<button class="btn small" type="button" title="Fetch every known landing page for this county">Scan all</button>`;
-    const scanBtn = head.querySelector("button");
+    const selectLabel = document.createElement("label");
+    selectLabel.className = "county-select";
+    const selectInput = document.createElement("input");
+    selectInput.type = "checkbox";
+    selectInput.checked = isCountySelected(county);
+    selectInput.disabled = busy;
+    selectInput.addEventListener("change", () => {
+      selectedCountyState.set(county, selectInput.checked);
+      syncSelectionControls(cfg);
+    });
+    const countyName = document.createElement("span");
+    countyName.textContent = COUNTY_LABEL[county] || county;
+    selectLabel.append(selectInput, countyName);
+    countySelectionInputs.add(selectInput);
+
+    const scanBtn = document.createElement("button");
+    scanBtn.className = "btn small";
+    scanBtn.type = "button";
+    scanBtn.title = "Fetch every known landing page for this county";
+    scanBtn.textContent = "Scan all";
     scanBtn.dataset.configOk = String(cfg.ok && !!COUNTY_SCAN[county]);
     scanBtn.disabled = !cfg.ok || !COUNTY_SCAN[county];
     scanBtn.addEventListener("click", () => startBulkScan(county, cfg, null, COUNTY_LABEL[county] || county));
     pageActionButtons.add(scanBtn);
+    head.append(selectLabel, scanBtn);
     block.appendChild(head);
 
     const rows = document.createElement("div");
@@ -403,6 +544,7 @@ function renderCountyPages(cfg) {
     block.appendChild(rows);
     countyBlocks.appendChild(block);
   }
+  syncSelectionControls(cfg);
 }
 
 async function render() {
