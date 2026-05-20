@@ -20,9 +20,16 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from counties.amador import scraper as amador
 from counties.el_dorado import scraper as el_dorado
 from counties.contra_costa import scraper as contra_costa
+from counties.nevada import scraper as nevada
+from counties.orange import scraper as orange
 from counties.placer import scraper as placer
+from counties.san_francisco import scraper as san_francisco
+from counties.santa_clara import scraper as santa_clara
+from counties.shasta import scraper as shasta
+from counties.solano import scraper as solano
 from schema import Ruling
 
 REPO = Path(__file__).parent.parent
@@ -30,9 +37,16 @@ ARCHIVE = REPO / "archive"
 DATA = REPO / "data"
 
 PARSERS = {
+    "amador": amador.parse,
     "el-dorado": el_dorado.parse,
     "contra-costa": contra_costa.parse,
+    "nevada": nevada.parse,
+    "orange": orange.parse,
     "placer": placer.parse,
+    "san-francisco": san_francisco.parse,
+    "santa-clara": santa_clara.parse,
+    "shasta": shasta.parse,
+    "solano": solano.parse,
 }
 
 PAGE_PARSERS = {
@@ -151,6 +165,7 @@ def process_county(
             source_url=source_url,
             source_sha256=actual_sha,
             dept_hint=cap.get("dept_hint"),
+            division_hint=cap.get("division_hint"),
         )
         parsed_sources += 1
         unseen = [r.to_row() for r in rulings if r.ruling_id not in seen_ids]

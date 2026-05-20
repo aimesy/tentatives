@@ -1,2 +1,2 @@
 COUNTY_SLUG = "amador"
-PARSER_VERSION = "amador-discovery-v1"
+PARSER_VERSION = "amador-v1"

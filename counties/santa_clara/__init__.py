@@ -1,2 +1,2 @@
 COUNTY_SLUG = "santa-clara"
-PARSER_VERSION = "santa-clara-discovery-v1"
+PARSER_VERSION = "santa-clara-v1"

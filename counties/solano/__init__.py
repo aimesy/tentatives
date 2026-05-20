@@ -1,2 +1,2 @@
 COUNTY_SLUG = "solano"
-PARSER_VERSION = "solano-discovery-v1"
+PARSER_VERSION = "solano-v1"
