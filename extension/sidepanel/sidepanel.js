@@ -36,6 +36,18 @@ const viewerLink = $("open-viewer");
 const versionEl = $("ext-version");
 
 const pageActionButtons = new Set();
+const CONFIG_KEYS = new Set([
+  "githubToken",
+  "githubOwner",
+  "githubRepo",
+  "githubBranch",
+]);
+
+let busy = false;
+let pendingRefreshAfterBusy = false;
+let renderTimer = null;
+let renderInFlight = false;
+let renderAgain = false;
 
 $("open-options").addEventListener("click", (e) => {
   e.preventDefault();
@@ -57,6 +69,15 @@ function setPageActionsDisabled(disabled) {
   }
 }
 
+function countyForUrl(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/\.$/, "");
+    return HOST_TO_COUNTY[host] || null;
+  } catch {
+    return null;
+  }
+}
+
 async function activeTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab;
@@ -69,6 +90,7 @@ async function navigateActiveTab(url) {
   } else {
     await chrome.tabs.create({ url, active: true });
   }
+  queueRender(500);
 }
 
 async function harvestFromTab(tabId) {
@@ -202,11 +224,18 @@ function setArchiveLink(cfg, county = "") {
   archiveLink.hidden = false;
 }
 
-function setBusy(isBusy, cfg, county) {
-  uploadBtn.disabled = isBusy || !currentState.cfg.ok || currentState.pdfs.length === 0;
-  rescanBtn.disabled = isBusy;
-  setPageActionsDisabled(isBusy);
-  if (!isBusy) setArchiveLink(cfg, county || currentState.county || "");
+function setBusy(isNowBusy, cfg, county) {
+  busy = isNowBusy;
+  uploadBtn.disabled = isNowBusy || !currentState.cfg.ok || currentState.pdfs.length === 0;
+  rescanBtn.disabled = isNowBusy;
+  setPageActionsDisabled(isNowBusy);
+  if (!isNowBusy) {
+    setArchiveLink(cfg, county || currentState.county || "");
+    if (pendingRefreshAfterBusy) {
+      pendingRefreshAfterBusy = false;
+      queueRender();
+    }
+  }
 }
 
 async function startUpload(pdfs, county, cfg) {
@@ -401,7 +430,7 @@ async function render() {
     setConn("err", `Missing: ${cfg.missing.join(", ")} — open Settings`);
   }
 
-  const county = HOST_TO_COUNTY[host];
+  const county = countyForUrl(url);
   if (!county) {
     setPill(countyEl, "not a supported court page", "warn");
     setPill(countEl, "—", "mute");
@@ -409,6 +438,12 @@ async function render() {
     return { county: null, pdfs: [], cfg };
   }
   setPill(countyEl, COUNTY_LABEL[county] || county, "ok");
+
+  if (!tab?.id) {
+    setPill(countEl, "no active tab", "err");
+    statusLineEl.textContent = "Could not read the active tab. Try clicking the court tab, then re-scan.";
+    return { county, pdfs: [], cfg };
+  }
 
   const pdfs = await harvestFromTab(tab.id);
   if (pdfs === null) {
@@ -438,7 +473,7 @@ let currentState = { county: null, pdfs: [], cfg: { ok: false } };
 
 rescanBtn.addEventListener("click", async () => {
   rescanBtn.disabled = true;
-  currentState = await render();
+  await refreshPanel();
 });
 
 uploadBtn.addEventListener("click", async () => {
@@ -457,12 +492,62 @@ function initStaticBits() {
   });
 }
 
-(async () => {
-  console.log("[tentatives sidepanel] opened");
-  initStaticBits();
-  currentState = await render();
-})().catch((e) => {
+function queueRender(delayMs = 100) {
+  if (busy) {
+    pendingRefreshAfterBusy = true;
+    return;
+  }
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(() => {
+    refreshPanel().catch(showSidePanelError);
+  }, delayMs);
+}
+
+async function refreshPanel() {
+  if (renderInFlight) {
+    renderAgain = true;
+    return;
+  }
+  renderInFlight = true;
+  try {
+    currentState = await render();
+  } finally {
+    renderInFlight = false;
+    if (renderAgain) {
+      renderAgain = false;
+      queueRender(0);
+    }
+  }
+}
+
+function showSidePanelError(e) {
   console.error("[tentatives sidepanel] fatal", e);
   statusLineEl.textContent = `Side panel error: ${e.message || e}`;
   setConn("err", "Side panel error");
+}
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+  if (!Object.keys(changes).some((key) => CONFIG_KEYS.has(key))) return;
+  queueRender(0);
 });
+
+chrome.tabs.onActivated.addListener(() => queueRender(0));
+
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  if (!tab?.active) return;
+  if (changeInfo.status === "complete" || changeInfo.url) queueRender(250);
+});
+
+chrome.windows?.onFocusChanged?.addListener(() => queueRender(0));
+
+chrome.runtime.onMessage.addListener((msg, sender) => {
+  if (msg?.type !== "page-loaded") return;
+  if (sender?.tab?.active) queueRender(0);
+});
+
+(async () => {
+  console.log("[tentatives sidepanel] opened");
+  initStaticBits();
+  await refreshPanel();
+})().catch(showSidePanelError);
