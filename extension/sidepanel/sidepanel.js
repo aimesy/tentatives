@@ -23,6 +23,7 @@ const bulkStatusEl = $("bulk-status");
 
 const uploadBtn = $("upload");
 const rescanBtn = $("rescan");
+const activeWaybackBtn = $("active-wayback");
 const bulkStopBtn = $("bulk-stop");
 const scanSelectedBtn = $("scan-selected");
 const selectAllCourtsEl = $("select-all-courts");
@@ -131,6 +132,26 @@ async function navigateActiveTab(url) {
     await chrome.tabs.create({ url, active: true });
   }
   queueRender(500);
+}
+
+function waybackUrl(url) {
+  const target = new URL(url);
+  target.hash = "";
+  return `https://web.archive.org/web/*/${target.href}`;
+}
+
+function canOpenWayback(url) {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+async function navigateActiveTabToWayback(url) {
+  if (!canOpenWayback(url)) return;
+  await navigateActiveTab(waybackUrl(url));
 }
 
 async function harvestFromTab(tabId) {
@@ -296,6 +317,7 @@ function setBusy(isNowBusy, cfg, county) {
   busy = isNowBusy;
   uploadBtn.disabled = isNowBusy || !currentState.cfg.ok || currentState.pdfs.length === 0;
   rescanBtn.disabled = isNowBusy;
+  activeWaybackBtn.disabled = isNowBusy || !canOpenWayback(currentState.url || "");
   setPageActionsDisabled(isNowBusy);
   if (!isNowBusy) {
     setArchiveLink(cfg, county || currentState.county || "");
@@ -526,6 +548,17 @@ function renderCountyPages(cfg) {
         await navigateActiveTab(page.url);
       });
 
+      const waybackBtn = document.createElement("button");
+      waybackBtn.className = "btn small";
+      waybackBtn.type = "button";
+      waybackBtn.title = `Open Wayback snapshots for ${page.label}`;
+      waybackBtn.textContent = "Wayback";
+      waybackBtn.dataset.configOk = "true";
+      waybackBtn.addEventListener("click", async () => {
+        statusLineEl.textContent = `Opening Wayback for ${page.label}...`;
+        await navigateActiveTabToWayback(page.url);
+      });
+
       const fetchBtn = document.createElement("button");
       fetchBtn.className = "btn small";
       fetchBtn.type = "button";
@@ -536,8 +569,9 @@ function renderCountyPages(cfg) {
       fetchBtn.addEventListener("click", () => startBulkScan(county, cfg, [page.url], page.label));
 
       pageActionButtons.add(goBtn);
+      pageActionButtons.add(waybackBtn);
       pageActionButtons.add(fetchBtn);
-      actions.append(goBtn, fetchBtn);
+      actions.append(goBtn, waybackBtn, fetchBtn);
       row.append(label, actions);
       rows.appendChild(row);
     }
@@ -556,9 +590,14 @@ async function render() {
   uploadBtn.textContent = "Upload";
   uploadBtn.disabled = true;
   rescanBtn.disabled = false;
+  activeWaybackBtn.disabled = true;
 
   const tab = await activeTab();
   const url = tab?.url || "";
+  activeWaybackBtn.disabled = !canOpenWayback(url);
+  activeWaybackBtn.title = canOpenWayback(url)
+    ? "Open Wayback snapshots for the active tab"
+    : "Open an http(s) page to use Wayback";
   let host = "";
   try { host = url ? new URL(url).hostname : ""; } catch { /* leave blank */ }
   hostEl.textContent = host || "(no tab)";
@@ -577,21 +616,21 @@ async function render() {
     setPill(countyEl, "not a supported court page", "warn");
     setPill(countEl, "—", "mute");
     statusLineEl.textContent = "Open a supported court page, or use the Pages list below.";
-    return { county: null, pdfs: [], cfg };
+    return { county: null, pdfs: [], cfg, url };
   }
   setPill(countyEl, COUNTY_LABEL[county] || county, "ok");
 
   if (!tab?.id) {
     setPill(countEl, "no active tab", "err");
     statusLineEl.textContent = "Could not read the active tab. Try clicking the court tab, then re-scan.";
-    return { county, pdfs: [], cfg };
+    return { county, pdfs: [], cfg, url };
   }
 
   const pdfs = await harvestFromTab(tab.id);
   if (pdfs === null) {
     setPill(countEl, "harvest failed", "err");
     statusLineEl.textContent = "Content script did not run. Reload the tab, then re-scan.";
-    return { county, pdfs: [], cfg };
+    return { county, pdfs: [], cfg, url };
   }
   pdfs.sort((a, b) => (a.filename || a.url).localeCompare(b.filename || b.url));
 
@@ -599,7 +638,7 @@ async function render() {
     setPill(countEl, "0 PDFs", "warn");
     statusLineEl.textContent = "No PDF links found in the active tab.";
     setArchiveLink(cfg, county);
-    return { county, pdfs: [], cfg };
+    return { county, pdfs: [], cfg, url };
   }
 
   setPill(countEl, `${pdfs.length} PDF${pdfs.length === 1 ? "" : "s"}`, "ok");
@@ -608,14 +647,20 @@ async function render() {
     : "Set GitHub PAT/owner/repo in Settings before uploading.";
   uploadBtn.disabled = !cfg.ok;
   setArchiveLink(cfg, county);
-  return { county, pdfs, cfg };
+  return { county, pdfs, cfg, url };
 }
 
-let currentState = { county: null, pdfs: [], cfg: { ok: false } };
+let currentState = { county: null, pdfs: [], cfg: { ok: false }, url: "" };
 
 rescanBtn.addEventListener("click", async () => {
   rescanBtn.disabled = true;
   await refreshPanel();
+});
+
+activeWaybackBtn.addEventListener("click", async () => {
+  const tab = await activeTab();
+  const url = tab?.url || currentState.url || "";
+  await navigateActiveTabToWayback(url);
 });
 
 uploadBtn.addEventListener("click", async () => {

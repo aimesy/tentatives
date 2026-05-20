@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Tentatives Capture",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Capture California superior court tentative rulings PDFs to a GitHub archive. Sidebar UI with per-county quick-fetch.",
 
   "permissions": ["storage", "activeTab", "scripting", "tabs"],
