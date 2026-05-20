@@ -25,6 +25,7 @@ from counties.el_dorado import scraper as el_dorado
 from counties.contra_costa import scraper as contra_costa
 from counties.nevada import scraper as nevada
 from counties.placer import scraper as placer
+from counties.solano import scraper as solano
 from schema import Ruling
 
 REPO = Path(__file__).parent.parent
@@ -37,6 +38,7 @@ PARSERS = {
     "contra-costa": contra_costa.parse,
     "nevada": nevada.parse,
     "placer": placer.parse,
+    "solano": solano.parse,
 }
 
 PAGE_PARSERS = {
