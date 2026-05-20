@@ -99,7 +99,12 @@ def process_county(county: str, dry_run: bool = False) -> int:
         cap = captures.get(actual_sha, {})
         source_url = cap.get("source_url") or f"archive://{county}/{actual_sha}.pdf"
 
-        rulings = parser(content, source_url=source_url, source_sha256=actual_sha)
+        rulings = parser(
+            content,
+            source_url=source_url,
+            source_sha256=actual_sha,
+            dept_hint=cap.get("dept_hint"),
+        )
         unseen = [r.to_row() for r in rulings if r.ruling_id not in seen_ids]
         new_rulings.extend(unseen)
         if rulings:

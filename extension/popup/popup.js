@@ -49,17 +49,75 @@ const HOST_TO_COUNTY = {
   "cc-courts.org": "contra-costa",
   "www.cc-courts.org": "contra-costa",
   "retired.cc-courts.org": "contra-costa",
+  "amadorcourt.org": "amador",
+  "www.amadorcourt.org": "amador",
+  "webapps.sftc.org": "san-francisco",
+  "nevada.courts.ca.gov": "nevada",
+  "www.nevada.courts.ca.gov": "nevada",
+  "occourts.org": "orange",
+  "www.occourts.org": "orange",
+  "calaveras.courts.ca.gov": "calaveras",
+  "www.calaveras.courts.ca.gov": "calaveras",
+  "fresno.courts.ca.gov": "fresno",
+  "www.fresno.courts.ca.gov": "fresno",
+  "merced.courts.ca.gov": "merced",
+  "www.merced.courts.ca.gov": "merced",
+  "plumas.courts.ca.gov": "plumas",
+  "www.plumas.courts.ca.gov": "plumas",
+  "riverside.courts.ca.gov": "riverside",
+  "www.riverside.courts.ca.gov": "riverside",
+  "old.sb-court.org": "san-bernardino",
+  "santaclara.courts.ca.gov": "santa-clara",
+  "www.santaclara.courts.ca.gov": "santa-clara",
+  "shasta.courts.ca.gov": "shasta",
+  "www.shasta.courts.ca.gov": "shasta",
+  "solano.courts.ca.gov": "solano",
+  "www.solano.courts.ca.gov": "solano",
+  "tuolumne.courts.ca.gov": "tuolumne",
+  "www.tuolumne.courts.ca.gov": "tuolumne",
 };
 
 const COUNTY_LABEL = {
   "el-dorado": "El Dorado",
   "placer": "Placer",
   "contra-costa": "Contra Costa",
+  "amador": "Amador",
+  "san-francisco": "San Francisco",
+  "nevada": "Nevada",
+  "orange": "Orange",
+  "calaveras": "Calaveras",
+  "fresno": "Fresno",
+  "merced": "Merced",
+  "plumas": "Plumas",
+  "riverside": "Riverside",
+  "san-bernardino": "San Bernardino",
+  "santa-clara": "Santa Clara",
+  "shasta": "Shasta",
+  "solano": "Solano",
+  "tuolumne": "Tuolumne",
 };
 
 // Counties whose bulk scan is wired up in the background service worker.
 // Keep in sync with COUNTY_SCAN in background.js.
-const BULK_SUPPORTED = new Set(["el-dorado", "placer", "contra-costa"]);
+const BULK_SUPPORTED = new Set([
+  "el-dorado",
+  "placer",
+  "contra-costa",
+  "amador",
+  "san-francisco",
+  "nevada",
+  "orange",
+  "calaveras",
+  "fresno",
+  "merced",
+  "plumas",
+  "riverside",
+  "san-bernardino",
+  "santa-clara",
+  "shasta",
+  "solano",
+  "tuolumne",
+]);
 
 function setPill(el, text, kind = "mute") {
   el.innerHTML = `<span class="pill ${kind}">${text}</span>`;
@@ -323,7 +381,7 @@ async function render() {
   if (!county) {
     setPill(countyEl, "not a supported court page", "warn");
     setPill(countEl, "—", "mute");
-    statusLineEl.textContent = "Open an EDC, Placer, or Contra Costa tentative-ruling page.";
+    statusLineEl.textContent = "Open a supported tentative-ruling page.";
     if (cfg.ok) {
       archiveLink.href = `https://github.com/${cfg.owner}/${cfg.repo}/tree/master/archive`;
       archiveLink.hidden = false;

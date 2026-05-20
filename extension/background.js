@@ -31,7 +31,8 @@ async function getConfig() {
   return { githubToken, githubOwner, githubRepo, githubBranch, pageLoadDelayMs };
 }
 
-async function uploadOnePdf({ url, filename, county }, config) {
+async function uploadOnePdf(pdf, config) {
+  const { url, filename, county } = pdf;
   const { githubToken, githubOwner, githubRepo, githubBranch } = config;
   if (!githubToken || !githubOwner || !githubRepo) {
     throw new Error(
@@ -40,8 +41,9 @@ async function uploadOnePdf({ url, filename, county }, config) {
   }
 
   // 1. Fetch PDF.
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`fetch ${url}: HTTP ${resp.status}`);
+  const fetchUrl = pdf.fetchUrl || pdf.fetch_url || url;
+  const resp = await fetch(fetchUrl);
+  if (!resp.ok) throw new Error(`fetch ${fetchUrl}: HTTP ${resp.status}`);
   const buffer = await resp.arrayBuffer();
   const sha = await sha256Hex(buffer);
   const archivePath = `archive/${county}/${sha.slice(0, 2)}/${sha}.pdf`;
@@ -76,8 +78,11 @@ async function uploadOnePdf({ url, filename, county }, config) {
     source_url: url,
     discovered_filename: filename,
     fetched_at: new Date().toISOString(),
-    wayback_ts: null,
+    wayback_ts: pdf.waybackTs || pdf.wayback_ts || null,
     content_length: buffer.byteLength,
+    dept_hint: pdf.deptHint || pdf.dept_hint || null,
+    division_hint: pdf.divisionHint || pdf.division_hint || null,
+    source_page_url: pdf.sourcePageUrl || pdf.source_page_url || null,
   };
   await appendNdjsonLine({
     owner: githubOwner,
@@ -115,7 +120,7 @@ async function loadKnownUrls(county, config) {
       if (!trimmed) continue;
       try {
         const row = JSON.parse(trimmed);
-        if (row.source_url) urls.add(row.source_url);
+        if (row.source_url) urls.add(captureKey(row.source_url, row.wayback_ts));
       } catch { /* skip malformed line */ }
     }
     return urls;
@@ -124,6 +129,10 @@ async function loadKnownUrls(county, config) {
     console.warn("[tentatives bg] could not load captures.ndjson:", e.message);
     return new Set();
   }
+}
+
+function captureKey(url, waybackTs = null) {
+  return `${url}::${waybackTs || ""}`;
 }
 
 // Small inter-commit delay smooths over GitHub's eventual consistency on the
@@ -137,13 +146,14 @@ async function uploadBatchStreaming({ pdfs, county, port }) {
 
   for (const pdf of pdfs) {
     let result;
-    if (knownUrls.has(pdf.url)) {
+    const key = captureKey(pdf.url, pdf.waybackTs || pdf.wayback_ts || null);
+    if (knownUrls.has(key)) {
       result = { ...pdf, status: "already-captured" };
     } else {
       try {
         const r = await uploadOnePdf({ ...pdf, county }, config);
         result = { ...pdf, ...r };
-        knownUrls.add(pdf.url);
+        knownUrls.add(key);
         // Throttle between commits to ease the eventual-consistency window.
         if (r.status === "uploaded") {
           await new Promise((res) => setTimeout(res, COMMIT_THROTTLE_MS));
@@ -336,13 +346,14 @@ async function scanAllStreaming({ county, port, explicitUrls = null }) {
         for (const pdf of pdfs) {
           if (bulkScanCancel) break;
           let result;
-          if (knownUrls.has(pdf.url)) {
+          const key = captureKey(pdf.url, pdf.waybackTs || pdf.wayback_ts || null);
+          if (knownUrls.has(key)) {
             result = { ...pdf, status: "already-captured" };
           } else {
             try {
               const r = await uploadOnePdf({ ...pdf, county }, config);
               result = { ...pdf, ...r };
-              knownUrls.add(pdf.url);
+              knownUrls.add(key);
               if (r.status === "uploaded") {
                 await new Promise((res) => setTimeout(res, COMMIT_THROTTLE_MS));
               }

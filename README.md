@@ -1,156 +1,184 @@
 # tentatives
 
-Open-source archive of California superior court **tentative rulings**, expanded across multiple counties. Originals are stored content-addressable in the repo, parsed into per-county parquet, and searchable in the browser.
+California superior court tentative rulings, archived as original court files and parsed into searchable data when a county parser is reliable enough to trust.
 
-This repo is a generalisation of [`aimesy/sfsc-tentatives`](https://github.com/aimesy/sfsc-tentatives) (San Francisco, ~190K rulings) to other counties. First non-SF target: **El Dorado** (Probate, Dept. 9 fixture included).
+This repo is the multi-county generalization of [`aimesy/sfsc-tentatives`](https://github.com/aimesy/sfsc-tentatives). The important split is simple:
 
-## How it works
+- Capture support means the extension or backfill CLI can find and archive the court's ruling files.
+- Parser support means archived PDFs become normalized rows in `data/<county>/rulings.parquet`.
 
+Do not blur those two. A county is not "done" merely because its PDFs can be fetched.
+
+## Current Status
+
+| County | Capture | Parser | Notes |
+|---|---:|---:|---|
+| El Dorado | yes | yes | Four tested PDF styles: probate, civil law and motion, probate calendar, family law. |
+| Contra Costa | yes | yes | Extension handles the iframe and collapsible portal pages. |
+| Placer | yes | yes | Civil law and motion PDFs with tested page and outcome extraction. |
+| Amador | yes | no | Legacy 2020-2022 dropdown PDFs. Current post-02/15/2022 access moved to the Amador portal. |
+| San Francisco | yes | no | Unified Family Court family-law PDFs from `webapps.sftc.org/ufctr/ufctr.dll`. Main SF civil data remains in `aimesy/sfsc-tentatives`. |
+| Nevada | yes | no | Static Drupal page with Nevada City and Truckee ruling files. Current page may include `.docx`; this repo currently archives PDFs. |
+| Orange | yes | no | Civil, family, and probate index pages link stable current PDFs. Use Wayback for prior contents. |
+| Calaveras | yes | no | Long static lists for case-management and civil law-and-motion PDFs, with irregular filenames. |
+| Fresno | yes | no | Static Law and Motion page with department PDF links. |
+| Merced | yes | no | Static weekday PDF links for civil law and motion. |
+| Plumas | yes | no | Static Department 2 PDF links. |
+| Riverside | yes | no | Regional/department PDF links. |
+| San Bernardino | yes | no | Legacy civil table on `old.sb-court.org` with direct PDF links. |
+| Santa Clara | yes | no | Department pages with Tuesday/Thursday and probate/complex PDFs. |
+| Shasta | yes | no | Static department PDF links, including old-to-current department labels. |
+| Solano | yes | no | Static civil/probate department PDFs. |
+| Tuolumne | yes | no | Static tentative-ruling PDF links, with case notes excluded. |
+
+Other counties have been researched and triaged in [docs/county-plans.md](docs/county-plans.md). The short version: many are simple PDF-list pages; Los Angeles and Ventura need form-session handling; Kings and Mendocino are blocked by SharePoint or re:SearchCA style access.
+
+## How It Works
+
+1. The browser extension or `ingest.backfill` discovers court file URLs.
+2. Each file is fetched and hashed.
+3. The original file is stored once at `archive/<county>/<sha[:2]>/<sha>.pdf`.
+4. Every fetch event is logged in `archive/<county>/captures.ndjson`.
+5. `python -m ingest.orchestrate` walks the archive and runs registered parsers.
+6. Parsed rows are written to `data/<county>/rulings.parquet`.
+7. `site/` loads those parquet files in the browser.
+
+The archive is content-addressed. If two URLs point to the same PDF, the repo stores one PDF and multiple capture rows.
+
+## Repo Layout
+
+```text
+schema/                          shared Ruling and Capture dataclasses
+counties/<county>/scraper.py     county discovery and, where implemented, PDF parsing
+counties/<county>/tests/         pytest fixtures and parser/discovery tests
+ingest/orchestrate.py            archive PDFs -> rulings.parquet
+ingest/backfill.py               live and Wayback capture into archive/
+archive/<county>/<sha[:2]>/      content-addressed original PDFs
+archive/<county>/captures.ndjson append-only capture provenance
+data/<county>/rulings.parquet    one row per parsed ruling
+extension/                       Chrome/Firefox capture extension
+site/                            static parquet viewer
 ```
-       ┌──────────────────┐     extension visits a court page,
-       │ browser extension│ ──▶ scrapes PDF links, hashes,
-       └──────────────────┘     PUTs to GitHub Contents API
-                │
-                ▼
-       ┌──────────────────┐     content-addressable:
-       │  archive/<county>│     archive/<county>/<sha[:2]>/<sha>.pdf
-       │   *.pdf + .ndjson│     captures.ndjson logs source URLs
-       └──────────────────┘
-                │
-                ▼  (GitHub Action: .github/workflows/parse.yml)
-       ┌──────────────────┐     ingest/orchestrate.py walks archive,
-       │ data/<county>/   │     parses any new PDFs, appends to
-       │ rulings.parquet  │     rulings.parquet
-       └──────────────────┘
-                │
-                ▼
-       ┌──────────────────┐     static site, DuckDB-WASM,
-       │ site/  (TODO)    │     links every ruling back to its PDF
-       └──────────────────┘
-```
 
-The court's live site purges old URLs (~2 months of retention for EDC), so the same content can have multiple capture sources over time — the same sha256 is one file, many `captures.ndjson` rows.
+## Capture With The Extension
 
-## Repo layout
+Install the extension from the release zip or load `extension/` unpacked.
 
-```
-schema/                          Ruling/Capture dataclasses, cross-county
-counties/<county>/scraper.py     discover_live, fetch, parse
-counties/<county>/fixtures/      sample PDFs + HTML for tests
-counties/<county>/tests/         pytest, runs against fixtures
-ingest/orchestrate.py            CLI: parse archive → rulings.parquet
-archive/<county>/<sha[:2]>/      content-addressable PDF store
-archive/<county>/captures.ndjson append-only log of fetch events
-data/<county>/rulings.parquet    one row per (case × motion)
-extension/                       Chrome MV3 capture extension
-site/                            Static viewer (hyparquet, no backend)
-.github/workflows/parse.yml      auto-runs orchestrator on new PDFs
-.github/workflows/site.yml       deploys site/ + data/*.parquet to Pages
-.github/workflows/test.yml       runs parser tests on PRs
-```
+1. Open Settings and set a GitHub token with Contents read/write access.
+2. Visit a supported court page, or use the Pages list in the side panel.
+3. Click Upload for the active page, Fetch for one configured landing page, or Scan all for a county.
 
-## Adding a new county
+Supported capture pages now include:
 
-1. Create `counties/<slug>/`.
-2. Implement `discover_live(html)` and `parse(pdf_bytes, source_url, source_sha256)` in `scraper.py`. Return `list[Ruling]`. Take metadata from PDF content, not filenames — filenames are often inconsistent.
-3. Drop a sample PDF and HTML index page into `fixtures/`.
-4. Write tests asserting ruling count, case-number formats, outcome classification, page spans.
-5. Add the parser to `PARSERS` in `ingest/orchestrate.py`.
-6. Add a content script to `extension/sites/<slug>.js` and a host pattern to `extension/manifest.json`.
+- El Dorado department pages
+- Placer tentative-ruling pages
+- Contra Costa current and archive portal pages
+- Amador legacy dropdown page
+- San Francisco UFC family-law page
+- Nevada tentative-rulings page
+- Orange civil, family, and probate tentative-ruling pages
+- Calaveras case-management and civil law-and-motion pages
+- Fresno, Merced, Plumas, Riverside, San Bernardino, Santa Clara, Shasta, Solano, and Tuolumne static PDF pages
 
-The El Dorado implementation is the reference. Filename heuristics live entirely inside that scraper — every county will have its own — but the output `Ruling` schema is shared.
+The extension logs `dept_hint`, `division_hint`, and `source_page_url` when a content script can infer them. The parser pipeline now passes `dept_hint` through to registered parsers.
 
-## Running locally
+## Historical Backfill
+
+Use the local backfill command for live pulls and Wayback pulls:
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
+python -m ingest.backfill --county amador --live --dry-run
+python -m ingest.backfill --county amador --wayback --from-year 2020 --to-year 2022
+python -m ingest.backfill --county orange --live --wayback --limit 25
+```
+
+Configured counties:
+
+```text
+amador
+calaveras
+fresno
+merced
+nevada
+orange
+plumas
+riverside
+san-bernardino
+san-francisco
+santa-clara
+shasta
+solano
+tuolumne
+```
+
+Amador has a county-level Wayback prefix for `www.amadorcourt.org/tentativeRulings/*`. Orange uses exact Wayback queries against the stable current PDF URLs discovered from its live index pages. Other counties can use the same pattern once their live discovery modules expose stable PDF refs.
+
+## Parse Locally
+
+```bash
+python -m venv .venv
+. .venv/Scripts/activate  # Windows PowerShell users can run: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt pytest
 
-# Run parser tests
-pytest counties/
-
-# Parse anything new in archive/
-python -m ingest.orchestrate
+pytest counties/ -v
+python -m ingest.orchestrate --dry-run
 python -m ingest.orchestrate --county el-dorado --dry-run
-
-# Query the parquet
-python -c "import duckdb; print(duckdb.sql(\"SELECT outcome, COUNT(*) FROM 'data/el-dorado/rulings.parquet' GROUP BY 1\"))"
 ```
 
-## Loading the extension
+`ingest.orchestrate` only parses counties in its `PARSERS` registry. Capture-only counties are archived but skipped until a parser is added and tested.
 
-**[⬇ Download the latest extension zip](https://github.com/aimesy/tentatives/releases/download/extension-latest/tentatives-extension.zip)** — rebuilt automatically on every push to `master` that touches `extension/`.
+## Site Viewer
 
-1. Download `tentatives-extension.zip`, unzip somewhere stable (the folder must stay where Chrome can read it).
-2. **Chrome**: `chrome://extensions` → **Developer mode** on → **Load unpacked** → pick the unzipped folder.
-   **Firefox**: `about:debugging` → **This Firefox** → **Load Temporary Add-on** → pick the unzipped folder's `manifest.json`.
-3. Click the extension's toolbar icon. **Chrome 116+** opens the side panel on the right; **older Chrome** users open it from the puzzle-icon menu. **Firefox** uses a sidebar — toggle it with `Ctrl/Cmd-Shift-B` or from View → Sidebar.
-4. In the sidebar, click **Settings** to open the options page. Owner/repo/branch are pre-filled with `aimesy / tentatives / master` — all you need to paste is a GitHub PAT (fine-grained with **Contents: Read and write** on this repo, or classic with `repo`). Click **Test connection** to verify.
-5. Visit a supported court page (or use the **Pages** list in the sidebar to jump to one):
-   - El Dorado: `https://www.eldorado.courts.ca.gov/online-services/tentative-rulings/tentative-rulings-dept-<N>`
-   - Placer: any page under `https://www.placer.courts.ca.gov/` that links to PDFs.
-   - Contra Costa: `https://contracosta.courts.ca.gov/online-services/tentative-rulings` (an iframe shell loading `cc-courts.org` with many collapsibles — the extension expands them and harvests PDFs from every dept).
-6. Use the sidebar's **Upload** button to capture the active tab's PDFs, or per-county **Fetch** / **Scan all** to background-fetch landing pages without leaving the current tab. Progress streams live into the Recent-activity log; the toolbar icon shows a per-tab badge with the PDF count.
-
-The extension dedups by source URL — if a PDF was uploaded before, the next visit skips the download entirely. PDFs are stored content-addressable (`archive/<county>/<sha[:2]>/<sha>.pdf`), so re-captures of the same content from different URLs only write one file.
-
-Each upload is one commit via the Contents API. Switching to batched commits (Git Data API) is a planned upgrade for bulk Wayback backfills.
-
-## Site viewer
-
-`site/` is a static, single-page viewer that loads `data/<county>/rulings.parquet` straight from the browser using [hyparquet](https://github.com/hyparam/hyparquet). No backend, no SQL engine bundled — just one fetch per county plus client-side filter/sort/page.
-
-To run locally:
+Serve from the repo root:
 
 ```bash
-# Serve from the repo root so site/index.html and data/<county>/ are siblings.
 python -m http.server 8000
-# → http://localhost:8000/site/
 ```
 
-The page detects whether it's served at the repo root (dev) or alongside `data/` (the Pages build) and adjusts the parquet URL accordingly. Filters round-trip through query parameters, so the **Copy link** button gives you a shareable URL of any view.
+Then open `http://localhost:8000/site/`.
 
-The Pages deploy is wired up in `.github/workflows/site.yml` and ships at `https://<owner>.github.io/<repo>/` on every push to `main`/`master` that touches `site/` or `data/`.
+The deployed Pages site loads `data/<county>/rulings.parquet` directly in the browser through hyparquet. Counties without parquet files are skipped.
+
+## Adding A County
+
+1. Add `counties/<slug>/__init__.py` with `COUNTY_SLUG` and `PARSER_VERSION`.
+2. Add discovery in `counties/<slug>/scraper.py`. For static pages, reuse `counties.common.PdfRef` and `extract_links`.
+3. Add fixture HTML and discovery tests.
+4. Add parser tests only after you have representative PDFs.
+5. Implement `parse(pdf_bytes, source_url, source_sha256=None, dept_hint=None) -> list[Ruling]`.
+6. Register the parser in `ingest/orchestrate.py`.
+7. Add extension support only if the browser path is useful for forward capture.
+
+Filename heuristics are allowed for discovery. Parser metadata should come from PDF content whenever possible.
 
 ## Schema
 
-`data/<county>/rulings.parquet` columns (full definitions in `schema/ruling.py`):
+`data/<county>/rulings.parquet` columns are defined by `schema.Ruling`:
 
-| column | type | notes |
-|---|---|---|
-| `ruling_id` | str | `sha256(source_sha256 + ruling_index)[:32]`. Stable across re-parses. |
-| `county` | str | slug, e.g. `el-dorado` |
-| `division` | str | `Probate`, `Civil`, `Family Law`, … |
-| `dept` | str | court department number |
-| `hearing_date` | date | from PDF page header, **not** filename |
-| `ruling_index` | int | 1-based position in source PDF |
-| `case_number` | str | e.g. `25PR0206`, `PP20200121` |
-| `case_title` | str | e.g. `MATTER OF ANDRESEN TRUST` |
-| `motion_type` | str | as printed |
-| `outcome` | str | `granted` \| `denied` \| `continued` \| `appearance_required` \| `off_calendar` \| `other` |
-| `outcome_text` | str | raw disposition text (remote-appearance boilerplate stripped) |
-| `conditional` | bool | True for "ABSENT OBJECTION … GRANTED" |
-| `continued_to` | date \| null | next hearing date if `outcome == continued` |
-| `body_text` | str | narrative between header and TENTATIVE RULING marker |
-| `full_text` | str | per-ruling slice of the PDF, page headers stripped |
-| `page_start`, `page_end` | int | for `?page=N` deep links |
-| `source_sha256` | str | FK into the archive |
-| `source_url` | str | canonical court URL |
-| `parser_version` | str | e.g. `el-dorado-v1` — bump to force re-parse |
-| `ingest_ts` | str | ISO 8601 |
+| Column | Meaning |
+|---|---|
+| `ruling_id` | Stable parser-owned ID. |
+| `county` | County slug, such as `el-dorado`. |
+| `division` | Probate, Civil, Family Law, Law and Motion, or a county-specific section. |
+| `dept` | Department if known. |
+| `hearing_date` | Hearing date from the PDF, not merely the filename. |
+| `case_number` | Court case number as printed. |
+| `case_title` | Case title as printed. |
+| `motion_type` | Motion or calendar matter. |
+| `outcome` | `granted`, `denied`, `continued`, `appearance_required`, `off_calendar`, or `other`. |
+| `outcome_text` | Disposition text. |
+| `body_text` | Parser-specific pre-disposition body text. |
+| `full_text` | Per-ruling text slice. |
+| `page_start`, `page_end` | Source PDF page span. |
+| `source_sha256` | Hash of the archived original PDF. |
+| `source_url` | Court or Wayback source URL. |
+| `parser_version` | Parser version string. |
 
-## Status
+`schema.Capture` records fetch provenance, including `wayback_ts`, `dept_hint`, `division_hint`, and `source_page_url` when available.
 
-- [x] Schema (`Ruling`, `Capture`)
-- [x] El Dorado parser — 4 styles (probate dept-9, law&motion dept-4, probate dept-4, family-law dept-12); 27 tests
-- [x] Contra Costa parser — 5 depts (09, 10, 14, 16, 18); 8 tests
-- [x] Placer parser — 3 fixtures across depts 3, 33, 42; 7 tests
-- [x] Ingest orchestrator with idempotent append, idempotent re-parse
-- [x] Browser extension (MV3) — Chrome + Firefox compatible; EDC + Placer + Contra Costa site adapters; cross-origin iframe + collapsible expansion; URL-based dedup; streaming progress
-- [x] Auto-zip workflow publishing `tentatives-extension.zip` at stable release URL
-- [x] GitHub Action to auto-parse on push (`.github/workflows/parse.yml`)
-- [x] Static site viewer (`site/`) — hyparquet, filter / sort / paginate, deep-link to PDF page
-- [x] GitHub Pages deploy workflow (`.github/workflows/site.yml`)
-- [ ] Wayback backfill mode (`discover_wayback`, batched Git Data API commits)
-- [ ] More counties (Marin, Sonoma; forward-only OC/SC/San Mateo)
-- [ ] Unified cross-county `data/index.parquet`
+## Known Sharp Edges
+
+- `parser_version` does not force a reparse by itself. Existing rows are skipped by `ruling_id`.
+- `captures.ndjson` can contain multiple rows for one SHA. The parser currently uses one capture row per SHA when choosing `source_url`.
+- Nevada may publish Word documents. The current archive and parser path is PDF-only.
+- Capture support for a county should not be represented as parser support.

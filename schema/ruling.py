@@ -1,12 +1,12 @@
 """Shared schema for cross-county tentative-ruling records.
 
 Two record types:
-  - Capture: one row per (PDF content, fetch event). Lives in archive/<county>/manifest.parquet.
+  - Capture: one row per PDF fetch event. Lives in archive/<county>/captures.ndjson.
   - Ruling:  one row per (case × motion) extracted from a PDF. Lives in data/<county>/rulings.parquet.
 
 A Ruling references its source PDF by sha256, not by URL: the same content captured
 from the live site and from N Wayback timestamps is one PDF in storage, N rows in
-manifest, and the rulings parse once.
+captures.ndjson, and the rulings parse once.
 """
 
 from __future__ import annotations
@@ -36,6 +36,9 @@ class Capture:
     fetched_at: datetime
     wayback_ts: str | None = None
     content_length: int | None = None
+    dept_hint: str | None = None
+    division_hint: str | None = None
+    source_page_url: str | None = None
 
     def to_row(self) -> dict[str, Any]:
         d = asdict(self)
