@@ -16,48 +16,110 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib
 import json
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 import requests
 
 from counties.common import PdfRef, filename_from_url, unique_refs
+from counties.registry import discovery_modules
 from schema import Capture
 
 REPO = Path(__file__).parent.parent
 ARCHIVE = REPO / "archive"
 CDX_ENDPOINT = "https://web.archive.org/cdx"
 AVAILABILITY_ENDPOINT = "https://archive.org/wayback/available"
+MAX_PDF_BYTES = 50 * 1024 * 1024
+PDF_MAGIC = b"%PDF-"
+REDIRECT_LIMIT = 5
 
-COUNTY_MODULES = {
-    "amador": "counties.amador.scraper",
-    "calaveras": "counties.calaveras.scraper",
-    "fresno": "counties.fresno.scraper",
-    "merced": "counties.merced.scraper",
-    "nevada": "counties.nevada.scraper",
-    "orange": "counties.orange.scraper",
-    "plumas": "counties.plumas.scraper",
-    "riverside": "counties.riverside.scraper",
-    "san-bernardino": "counties.san_bernardino.scraper",
-    "san-francisco": "counties.san_francisco.scraper",
-    "santa-clara": "counties.santa_clara.scraper",
-    "shasta": "counties.shasta.scraper",
-    "solano": "counties.solano.scraper",
-    "tuolumne": "counties.tuolumne.scraper",
-}
+COUNTY_MODULES = discovery_modules()
 
 
 def _county_module(county: str):
     try:
-        return importlib.import_module(COUNTY_MODULES[county])
+        return COUNTY_MODULES[county]
     except KeyError:
         supported = ", ".join(sorted(COUNTY_MODULES))
-        raise SystemExit(f"no discovery module for county={county!r}; supported: {supported}")
+        raise ValueError(f"no discovery module for county={county!r}; supported: {supported}")
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _record_failure(errors: list[str] | None, message: str) -> None:
+    print(message, file=sys.stderr)
+    if errors is not None:
+        errors.append(message)
+
+
+def _host_matches(host: str, allowed_host: str) -> bool:
+    host = host.lower().rstrip(".")
+    allowed_host = allowed_host.lower().rstrip(".")
+    return host == allowed_host or host.endswith(f".{allowed_host}")
+
+
+def _allowed_hosts_for_county(county: str) -> set[str]:
+    module = _county_module(county)
+    hosts: set[str] = set()
+    for attr in ("LANDING_PAGES", "WAYBACK_PDF_PATTERNS"):
+        for raw in getattr(module, attr, []):
+            candidate = str(raw).replace("*", "")
+            parsed = urlparse(candidate)
+            if not parsed.hostname and "://" not in candidate:
+                parsed = urlparse(f"https://{candidate.lstrip('/')}")
+            if parsed.hostname:
+                hosts.add(parsed.hostname.lower())
+    return hosts
+
+
+def _validate_source_host(url: str, allowed_hosts: set[str]) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"unsupported source URL: {url}")
+    if parsed.username or parsed.password:
+        raise ValueError(f"credentials are not allowed in source URL: {url}")
+    if allowed_hosts and not any(_host_matches(parsed.hostname, h) for h in allowed_hosts):
+        allowed = ", ".join(sorted(allowed_hosts))
+        raise ValueError(f"source host {parsed.hostname!r} is not in county allowlist ({allowed})")
+
+
+def _validate_fetch_host(
+    fetch_url: str,
+    source_url: str,
+    allowed_hosts: set[str],
+    *,
+    wayback: bool = False,
+) -> None:
+    parsed = urlparse(fetch_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError(f"unsupported fetch URL: {fetch_url}")
+    if parsed.username or parsed.password:
+        raise ValueError(f"credentials are not allowed in fetch URL: {fetch_url}")
+    fetch_host = parsed.hostname.lower().rstrip(".")
+    if wayback:
+        if fetch_host != "web.archive.org":
+            raise ValueError(f"Wayback replay host is not allowlisted: {parsed.hostname}")
+        return
+    _validate_source_host(fetch_url, allowed_hosts)
+    _validate_source_host(source_url, allowed_hosts)
+
+
+def _content_type_is_pdfish(value: str) -> bool:
+    ctype = value.split(";", 1)[0].strip().lower()
+    return ctype in {
+        "",
+        "application/pdf",
+        "application/x-pdf",
+        "application/force-download",
+        "application/octet-stream",
+        "binary/octet-stream",
+    }
 
 
 def _capture_path(county: str) -> Path:
@@ -88,7 +150,7 @@ def _append_capture(county: str, ref: PdfRef, sha: str, content_length: int, dry
         source_sha256=sha,
         source_url=ref.url,
         discovered_filename=ref.filename,
-        fetched_at=datetime.utcnow(),
+        fetched_at=utc_now(),
         wayback_ts=ref.wayback_ts,
         content_length=content_length,
         dept_hint=ref.dept_hint,
@@ -123,22 +185,60 @@ def _ref_from_available(
     *,
     session: requests.Session,
     timestamp: str | None = None,
+    errors: list[str] | None = None,
 ) -> PdfRef | None:
     params = {"url": ref.url}
     if timestamp:
         params["timestamp"] = timestamp
-    r = session.get(AVAILABILITY_ENDPOINT, params=params, timeout=60)
-    if r.status_code == 429:
-        print(f"  Wayback availability rate-limited for {ref.url}", file=sys.stderr)
+    try:
+        r = session.get(AVAILABILITY_ENDPOINT, params=params, timeout=60)
+    except requests.RequestException as e:
+        _record_failure(errors, f"  ERROR Wayback availability fetch for {ref.url}: {e}")
         return None
-    r.raise_for_status()
-    closest = r.json().get("archived_snapshots", {}).get("closest")
-    if not closest or not closest.get("available") or closest.get("status") != "200":
+    if r.status_code == 429:
+        _record_failure(errors, f"  Wayback availability rate-limited for {ref.url}")
+        return None
+    try:
+        r.raise_for_status()
+    except requests.RequestException as e:
+        _record_failure(errors, f"  ERROR Wayback availability status for {ref.url}: {e}")
+        return None
+    try:
+        payload = r.json()
+    except ValueError as e:
+        _record_failure(errors, f"  Wayback availability returned non-JSON for {ref.url}: {e}")
+        return None
+    if not isinstance(payload, dict):
+        _record_failure(errors, f"  Wayback availability returned unexpected JSON for {ref.url}")
+        return None
+    snapshots = payload.get("archived_snapshots")
+    if not isinstance(snapshots, dict):
+        return None
+    closest = snapshots.get("closest")
+    if not isinstance(closest, dict):
+        return None
+    available = closest.get("available")
+    if available is not True and str(available).lower() != "true":
+        return None
+    if str(closest.get("status")) != "200":
+        return None
+    closest_url = closest.get("url")
+    if closest_url:
+        closest_host = urlparse(str(closest_url)).hostname
+        if closest_host and closest_host.lower() != "web.archive.org":
+            _record_failure(
+                errors,
+                f"  Wayback availability returned non-allowlisted host for {ref.url}: {closest_host}",
+            )
+            return None
+    wayback_ts = closest.get("timestamp") or None
+    if wayback_ts and not re.fullmatch(r"\d{14}", str(wayback_ts)):
+        _record_failure(errors, f"  Wayback availability returned invalid timestamp for {ref.url}: {wayback_ts}")
         return None
     return PdfRef(
         url=ref.url,
         filename=ref.filename,
-        wayback_ts=closest.get("timestamp") or None,
+        wayback_ts=str(wayback_ts) if wayback_ts else None,
         dept_hint=ref.dept_hint,
         division_hint=ref.division_hint,
         link_text=ref.link_text,
@@ -146,32 +246,92 @@ def _ref_from_available(
     )
 
 
-def fetch_ref(ref: PdfRef, session: requests.Session) -> tuple[bytes, str]:
-    r = session.get(_replay_url(ref), timeout=90)
-    r.raise_for_status()
-    content = r.content
+def fetch_ref(
+    ref: PdfRef,
+    session: requests.Session,
+    *,
+    allowed_hosts: set[str] | None = None,
+    max_bytes: int = MAX_PDF_BYTES,
+) -> tuple[bytes, str]:
+    allowed = allowed_hosts or set()
+    _validate_source_host(ref.url, allowed)
+    fetch_url = _replay_url(ref)
+    for _ in range(REDIRECT_LIMIT + 1):
+        _validate_fetch_host(fetch_url, ref.url, allowed, wayback=bool(ref.wayback_ts))
+        r = session.get(fetch_url, timeout=90, stream=True, allow_redirects=False)
+        if 300 <= r.status_code < 400 and r.headers.get("Location"):
+            fetch_url = urljoin(fetch_url, r.headers["Location"])
+            continue
+        r.raise_for_status()
+        ctype = r.headers.get("Content-Type", "")
+        if not _content_type_is_pdfish(ctype):
+            raise ValueError(f"unexpected content type for {ref.url}: {ctype}")
+        content = _read_limited_pdf(r, max_bytes=max_bytes, source_url=ref.url)
+        break
+    else:
+        raise ValueError(f"too many redirects for {ref.url}")
     return content, hashlib.sha256(content).hexdigest()
 
 
-def archive_ref(county: str, ref: PdfRef, session: requests.Session, dry_run: bool = False) -> str:
-    content, sha = fetch_ref(ref, session)
-    archive_path = ARCHIVE / county / sha[:2] / f"{sha}.pdf"
-    if dry_run:
-        print(f"  would store {ref.filename} -> {archive_path.relative_to(REPO)}")
-    else:
-        archive_path.parent.mkdir(parents=True, exist_ok=True)
-        if not archive_path.exists():
-            archive_path.write_bytes(content)
-    return sha
+def _read_limited_pdf(
+    response: requests.Response,
+    *,
+    max_bytes: int,
+    source_url: str,
+) -> bytes:
+    content_length = response.headers.get("Content-Length")
+    if content_length:
+        try:
+            if int(content_length) > max_bytes:
+                raise ValueError(f"PDF too large for {source_url}: {content_length} bytes")
+        except ValueError:
+            if content_length.isdigit():
+                raise
+    chunks: list[bytes] = []
+    total = 0
+    first = b""
+    for chunk in response.iter_content(chunk_size=65536):
+        if not chunk:
+            continue
+        if not first:
+            first = chunk[:1024]
+            if len(first) >= len(PDF_MAGIC) and not _looks_like_pdf(first):
+                raise ValueError(f"response is not a PDF for {source_url}")
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValueError(f"PDF too large for {source_url}: >{max_bytes} bytes")
+        chunks.append(chunk)
+    content = b"".join(chunks)
+    if not _looks_like_pdf(content):
+        raise ValueError(f"response is not a PDF for {source_url}")
+    return content
 
 
-def discover_live_refs(county: str, session: requests.Session) -> list[PdfRef]:
+def _looks_like_pdf(content: bytes) -> bool:
+    sample = content[:1024]
+    if sample.startswith(b"\xef\xbb\xbf"):
+        sample = sample[3:]
+    return sample.lstrip().startswith(PDF_MAGIC)
+
+
+def discover_live_refs(
+    county: str,
+    session: requests.Session,
+    *,
+    continue_on_error: bool = False,
+    errors: list[str] | None = None,
+) -> list[PdfRef]:
     module = _county_module(county)
     refs: list[PdfRef] = []
     for url in getattr(module, "LANDING_PAGES", []):
-        r = session.get(url, timeout=60)
-        r.raise_for_status()
-        refs.extend(module.discover_live(r.text, page_url=url))
+        try:
+            r = session.get(url, timeout=60)
+            r.raise_for_status()
+            refs.extend(module.discover_live(r.text, page_url=url))
+        except Exception as e:
+            _record_failure(errors, f"  ERROR discover landing {url}: {e}")
+            if not continue_on_error:
+                raise
     return unique_refs(refs)
 
 
@@ -182,6 +342,7 @@ def _cdx_rows(
     to_year: int | None,
     match_type: str | None,
     session: requests.Session,
+    errors: list[str] | None = None,
 ) -> list[dict[str, str]]:
     params: dict[str, str | list[str]] = {
         "url": url_pattern,
@@ -196,13 +357,41 @@ def _cdx_rows(
         params["to"] = str(to_year)
     if match_type:
         params["matchType"] = match_type
-    r = session.get(CDX_ENDPOINT, params=params, timeout=90)
-    r.raise_for_status()
-    data = r.json()
+    try:
+        r = session.get(CDX_ENDPOINT, params=params, timeout=90)
+    except requests.RequestException as e:
+        _record_failure(errors, f"  ERROR Wayback CDX fetch for {url_pattern}: {e}")
+        return []
+    if r.status_code == 429:
+        _record_failure(errors, f"  Wayback CDX rate-limited for {url_pattern}")
+        return []
+    try:
+        r.raise_for_status()
+    except requests.RequestException as e:
+        _record_failure(errors, f"  ERROR Wayback CDX status for {url_pattern}: {e}")
+        return []
+    try:
+        data = r.json()
+    except ValueError as e:
+        _record_failure(errors, f"  Wayback CDX returned non-JSON for {url_pattern}: {e}")
+        return []
     if not data:
         return []
+    if not isinstance(data, list) or not isinstance(data[0], list):
+        _record_failure(errors, f"  Wayback CDX returned unexpected JSON for {url_pattern}")
+        return []
     header = data[0]
-    return [dict(zip(header, row)) for row in data[1:]]
+    rows: list[dict[str, str]] = []
+    for row in data[1:]:
+        if not isinstance(row, list):
+            continue
+        rows.append(
+            {
+                str(key): "" if value is None else str(value)
+                for key, value in zip(header, row)
+            }
+        )
+    return rows
 
 
 def _source_url_year(ref: PdfRef) -> int | None:
@@ -242,8 +431,10 @@ def discover_wayback_refs(
     from_year: int | None = None,
     to_year: int | None = None,
     live_refs: Iterable[PdfRef] = (),
+    errors: list[str] | None = None,
 ) -> list[PdfRef]:
     module = _county_module(county)
+    allowed_hosts = _allowed_hosts_for_county(county)
     refs: list[PdfRef] = []
 
     for pattern in getattr(module, "WAYBACK_PDF_PATTERNS", []):
@@ -256,8 +447,14 @@ def discover_wayback_refs(
             to_year=to_year,
             match_type=None,
             session=session,
+            errors=errors,
         ):
             original = row.get("original", "")
+            try:
+                _validate_source_host(original, allowed_hosts)
+            except ValueError as e:
+                print(f"  WARN skipping CDX row outside allowlist: {e}", file=sys.stderr)
+                continue
             if not original.lower().split("?", 1)[0].endswith(".pdf"):
                 continue
             ref_from_wayback_url = getattr(module, "ref_from_wayback_url", None)
@@ -286,18 +483,25 @@ def discover_wayback_refs(
             to_year=to_year,
             match_type=None,
             session=session,
+            errors=errors,
         )
         if not rows:
             available = _ref_from_available(
                 live_ref,
                 session=session,
                 timestamp=_wayback_timestamp(from_year, to_year),
+                errors=errors,
             )
             if available:
                 refs.append(available)
             continue
         for row in rows:
             original = row.get("original") or live_ref.url
+            try:
+                _validate_source_host(original, allowed_hosts)
+            except ValueError as e:
+                print(f"  WARN skipping CDX row outside allowlist: {e}", file=sys.stderr)
+                continue
             refs.append(
                 PdfRef(
                     url=original,
@@ -322,11 +526,24 @@ def _wayback_needs_live_refs(county: str) -> bool:
 
 
 def _run_county(args: argparse.Namespace, county: str, session: requests.Session) -> int:
+    failures: list[str] = []
+    allowed_hosts = _allowed_hosts_for_county(county)
     do_live = args.live or not args.wayback
     needs_live_for_wayback = args.wayback and _wayback_needs_live_refs(county)
-    live_refs: list[PdfRef] = (
-        discover_live_refs(county, session) if do_live or needs_live_for_wayback else []
-    )
+    try:
+        live_refs: list[PdfRef] = (
+            discover_live_refs(
+                county,
+                session,
+                continue_on_error=args.continue_on_error,
+                errors=failures,
+            ) if do_live or needs_live_for_wayback else []
+        )
+    except Exception as e:
+        _record_failure(failures, f"  ERROR live discovery for {county}: {e}")
+        if not args.continue_on_error:
+            raise
+        live_refs = []
     refs: list[PdfRef] = []
     if args.live:
         refs.extend(live_refs)
@@ -334,15 +551,21 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
         wayback_live_refs = live_refs
         if needs_live_for_wayback and args.limit is not None:
             wayback_live_refs = _limit(live_refs, args.limit)
-        refs.extend(
-            discover_wayback_refs(
-                county,
-                session,
-                from_year=args.from_year,
-                to_year=args.to_year,
-                live_refs=wayback_live_refs,
+        try:
+            refs.extend(
+                discover_wayback_refs(
+                    county,
+                    session,
+                    from_year=args.from_year,
+                    to_year=args.to_year,
+                    live_refs=wayback_live_refs,
+                    errors=failures,
+                )
             )
-        )
+        except Exception as e:
+            _record_failure(failures, f"  ERROR Wayback discovery for {county}: {e}")
+            if not args.continue_on_error:
+                raise
     if not args.live and not args.wayback:
         refs = live_refs
 
@@ -357,9 +580,12 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
     wrote = 0
     for ref in refs:
         try:
-            content, sha = fetch_ref(ref, session)
+            content, sha = fetch_ref(ref, session, allowed_hosts=allowed_hosts)
         except Exception as e:
-            print(f"  ERROR fetch {ref.url} wayback={ref.wayback_ts or '-'}: {e}", file=sys.stderr)
+            _record_failure(
+                failures,
+                f"  ERROR fetch {ref.url} wayback={ref.wayback_ts or '-'}: {e}",
+            )
             continue
         archive_path = ARCHIVE / county / sha[:2] / f"{sha}.pdf"
         key = (sha, ref.url, ref.wayback_ts)
@@ -374,7 +600,9 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
             existing.add(key)
         wrote += 1
     print(f"{county}: archived/logged {wrote} refs")
-    return 0
+    if failures:
+        print(f"{county}: {len(failures)} failures", file=sys.stderr)
+    return 1 if failures else 0
 
 
 def run(args: argparse.Namespace) -> int:

@@ -35,24 +35,17 @@ import hashlib
 import io
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Iterator
 
 import pypdf
 
+from counties.common import PdfRef
 from schema import Ruling
 from . import COUNTY_SLUG, PARSER_VERSION
 
 
 # ============================================================ DISCOVERY
-
-
-@dataclass(frozen=True)
-class PdfRef:
-    url: str
-    filename: str
-    wayback_ts: str | None = None
-    dept_hint: str | None = None
 
 
 def discover_live(html: str, page_url: str | None = None) -> list[PdfRef]:
@@ -359,7 +352,7 @@ def parse(
                 source_url=source_url,
                 style="placer-civil-law-motion",
                 parser_version=PARSER_VERSION,
-                ingest_ts=datetime.utcnow(),
+                ingest_ts=datetime.now(UTC),
             )
         )
 

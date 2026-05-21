@@ -26,6 +26,7 @@ const rescanBtn = $("rescan");
 const activeWaybackBtn = $("active-wayback");
 const bulkStopBtn = $("bulk-stop");
 const scanSelectedBtn = $("scan-selected");
+const shellSelectedBtn = $("shell-selected");
 const selectAllCourtsEl = $("select-all-courts");
 const bulkPauseBtn = document.createElement("button");
 const bulkControlsEl = document.createElement("span");
@@ -90,6 +91,7 @@ function setPageActionsDisabled(disabled) {
   scanSelectedBtn.disabled = disabled
     || !currentState.cfg.ok
     || selectedScanCounties().length === 0;
+  shellSelectedBtn.disabled = scanSelectedBtn.disabled;
 }
 
 function isCountySelected(county) {
@@ -108,6 +110,7 @@ function syncSelectionControls(cfg = currentState.cfg) {
   selectAllCourtsEl.checked = allCounties.length > 0 && selected.length === allCounties.length;
   selectAllCourtsEl.indeterminate = selected.length > 0 && selected.length < allCounties.length;
   scanSelectedBtn.disabled = busy || !cfg.ok || selected.length === 0;
+  shellSelectedBtn.disabled = scanSelectedBtn.disabled;
 }
 
 function countyForUrl(url) {
@@ -284,6 +287,11 @@ selectAllCourtsEl.addEventListener("change", () => {
 scanSelectedBtn.addEventListener("click", async () => {
   if (busy || !currentState.cfg.ok) return;
   await startSelectedScan(currentState.cfg);
+});
+
+shellSelectedBtn.addEventListener("click", async () => {
+  if (busy || !currentState.cfg.ok) return;
+  await startShellScan(currentState.cfg);
 });
 
 function summaryParts(summary) {
@@ -469,6 +477,156 @@ async function startBulkScan(county, cfg, urls = null, label = "Scan") {
       } else if (msg.type === "error") {
         appendNote("err", `Fatal: ${msg.error}`);
         bulkStatusEl.textContent = `Failed: ${msg.error}`;
+        cleanup("error");
+      }
+    });
+  });
+}
+
+async function startShellScan(cfg) {
+  const counties = selectedScanCounties();
+  if (!cfg.ok || counties.length === 0) return "no-counties";
+  setBusy(true, cfg, "");
+  uploadBtn.disabled = true;
+  bulkControlsEl.hidden = false;
+  bulkPauseBtn.hidden = false;
+  bulkPauseBtn.disabled = false;
+  bulkPauseBtn.textContent = "Pause shell";
+  bulkPauseBtn.title = "Pause the parallel browser scan";
+  bulkStopBtn.hidden = false;
+  bulkStopBtn.disabled = false;
+  bulkStatusEl.textContent = `Starting ${counties.length} selected court${counties.length === 1 ? "" : "s"}...`;
+  statusLineEl.textContent = "";
+  progressBar.classList.add("on");
+  progressFill.style.width = "0%";
+  appendNote("warn", `Shell scan: ${counties.length} selected court${counties.length === 1 ? "" : "s"}.`);
+
+  let totalCounties = counties.length;
+  let doneCounties = 0;
+  let totalPages = 0;
+  let pagesDone = 0;
+  let shellPaused = false;
+  const summary = { uploaded: 0, "already-captured": 0, "skipped-exists": 0, error: 0 };
+
+  const updateProgress = () => {
+    const pct = totalPages > 0
+      ? Math.round((pagesDone / Math.max(1, totalPages)) * 100)
+      : Math.round((doneCounties / Math.max(1, totalCounties)) * 100);
+    progressFill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+    progressTextEl.textContent = totalPages > 0
+      ? `${pagesDone}/${totalPages} pages`
+      : `${doneCounties}/${totalCounties} courts`;
+  };
+
+  const port = chrome.runtime.connect({ name: "shell-scan" });
+  port.postMessage({ type: "start", counties });
+
+  return new Promise((resolve) => {
+    const cleanup = (reason = "completed") => {
+      bulkControlsEl.hidden = true;
+      bulkPauseBtn.disabled = true;
+      bulkStopBtn.hidden = true;
+      bulkPauseBtn.onclick = null;
+      bulkStopBtn.onclick = null;
+      setBusy(false, cfg, "");
+      try { port.disconnect(); } catch { /* already closed */ }
+      resolve(reason);
+    };
+
+    bulkPauseBtn.onclick = () => {
+      const type = shellPaused ? "resume" : "pause";
+      bulkPauseBtn.disabled = true;
+      bulkStatusEl.textContent = shellPaused ? "Resuming shell scan..." : "Pausing shell scan...";
+      try { port.postMessage({ type }); } catch { /* port closed */ }
+    };
+
+    bulkStopBtn.onclick = () => {
+      bulkStopBtn.disabled = true;
+      bulkPauseBtn.disabled = true;
+      try { port.postMessage({ type: "stop" }); } catch { /* port closed */ }
+      bulkStatusEl.textContent = "Stopping shell scan...";
+    };
+
+    port.onMessage.addListener((msg) => {
+      if (msg.type === "queue") {
+        totalCounties = msg.counties.length;
+        bulkStatusEl.textContent =
+          `Shell scan: ${totalCounties} court${totalCounties === 1 ? "" : "s"}, ${msg.concurrency} tab${msg.concurrency === 1 ? "" : "s"}`;
+        updateProgress();
+      } else if (msg.type === "control-state") {
+        shellPaused = !!msg.paused;
+        bulkPauseBtn.disabled = !!msg.stopped;
+        bulkPauseBtn.textContent = shellPaused ? "Resume shell" : "Pause shell";
+        bulkPauseBtn.title = shellPaused ? "Resume the parallel browser scan" : "Pause the parallel browser scan";
+        if (msg.stopped) {
+          bulkStatusEl.textContent = "Stopping shell scan...";
+        } else if (shellPaused && msg.human) {
+          bulkStatusEl.textContent = `Paused for human check: ${msg.reason || "review tab"}`;
+        } else if (shellPaused) {
+          bulkStatusEl.textContent = "Shell paused - resume when ready";
+        }
+      } else if (msg.type === "county-start") {
+        const label = COUNTY_LABEL[msg.county] || msg.county;
+        bulkStatusEl.textContent = `Tab ${msg.workerIndex + 1}: ${label} ${msg.phase || "starting"}`;
+      } else if (msg.type === "county-landings") {
+        const label = COUNTY_LABEL[msg.county] || msg.county;
+        totalPages += msg.urls.length;
+        bulkStatusEl.textContent = `${label}: ${msg.urls.length} page${msg.urls.length === 1 ? "" : "s"}`;
+        updateProgress();
+      } else if (msg.type === "page-start") {
+        const label = COUNTY_LABEL[msg.county] || msg.county;
+        const retryLabel = msg.attempt > 1
+          ? ` retry ${msg.attempt - 1}/${Math.max(1, msg.maxAttempts - 1)}`
+          : "";
+        bulkStatusEl.textContent = `Tab ${msg.workerIndex + 1}: ${label} ${msg.index + 1}/${msg.total}${retryLabel} - ${msg.title}`;
+      } else if (msg.type === "page-harvested") {
+        const label = COUNTY_LABEL[msg.county] || msg.county;
+        pagesDone += 1;
+        const pagePart = msg.pageSnapshotCount
+          ? `, ${msg.pageSnapshotCount} page snapshot${msg.pageSnapshotCount === 1 ? "" : "s"}`
+          : "";
+        const layoutPart = msg.layoutCount
+          ? `, ${msg.layoutCount} layout${msg.layoutCount === 1 ? "" : "s"}`
+          : "";
+        bulkStatusEl.textContent =
+          `${label}: ${msg.title} - ${msg.pdfCount} PDF${msg.pdfCount === 1 ? "" : "s"}${pagePart}${layoutPart}`;
+        updateProgress();
+      } else if (msg.type === "human-pause") {
+        const label = COUNTY_LABEL[msg.county] || msg.county;
+        appendNote("warn", `${label}: human check (${msg.reason || "review tab"})`);
+        bulkStatusEl.textContent = `${label}: resolve the open tab, then resume`;
+      } else if (msg.type === "page-retry") {
+        const label = COUNTY_LABEL[msg.county] || msg.county;
+        const text = `${label}: retry ${msg.retry}/${msg.maxRetries} ${msg.title} (${msg.error})`;
+        bulkStatusEl.textContent = text;
+        appendNote("warn", text);
+      } else if (msg.type === "page-error") {
+        pagesDone += 1;
+        const label = COUNTY_LABEL[msg.county] || msg.county;
+        appendNote("err", `${label} ${msg.title}: ${msg.error}`);
+        updateProgress();
+      } else if (msg.type === "county-error") {
+        doneCounties = Math.max(doneCounties, msg.completedCounties || doneCounties + 1);
+        const label = COUNTY_LABEL[msg.county] || msg.county;
+        appendNote("err", `${label}: ${msg.error}`);
+        updateProgress();
+      } else if (msg.type === "county-done") {
+        doneCounties = Math.max(doneCounties, msg.completedCounties || doneCounties + 1);
+        const label = COUNTY_LABEL[msg.county] || msg.county;
+        bulkStatusEl.textContent = `${label}: done (${doneCounties}/${totalCounties} courts)`;
+        updateProgress();
+      } else if (msg.type === "result") {
+        appendResult(msg.result);
+        summary[msg.result.status] = (summary[msg.result.status] || 0) + 1;
+      } else if (msg.type === "done") {
+        progressFill.style.width = "100%";
+        const tag = msg.reason === "stopped" ? "Stopped" : "Done";
+        bulkStatusEl.textContent =
+          `${tag} shell scan - ${doneCounties}/${totalCounties} courts, ${pagesDone}/${totalPages || pagesDone} pages - ${summaryParts(summary)}`;
+        cleanup(msg.reason || "completed");
+      } else if (msg.type === "error") {
+        appendNote("err", `Fatal: ${msg.error}`);
+        bulkStatusEl.textContent = `Shell failed: ${msg.error}`;
         cleanup("error");
       }
     });

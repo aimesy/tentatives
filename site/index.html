@@ -4,6 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="tentatives-data-deploy" content="2026-05-20" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
+    />
     <title>California Tentative Rulings</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -75,9 +79,9 @@
           <button class="btn" id="prev-page">&lt; Prev</button>
           <span id="page-info" class="muted">page 1</span>
           <button class="btn" id="next-page">Next &gt;</button>
-          <span class="sep" style="height: 16px; background: var(--border);"></span>
+          <span class="sep pager-sep"></span>
           <label class="muted" for="page-size">Page size</label>
-          <select id="page-size" class="btn" style="padding: 3px 6px;">
+          <select id="page-size" class="btn page-size-select">
             <option>50</option>
             <option selected>100</option>
             <option>250</option>

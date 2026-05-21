@@ -5,10 +5,12 @@
 
 import { sha256Hex, bufferToBase64 } from "./lib/hash.js";
 import {
+  base64ToText,
   fileExists,
   getFile,
   putFile,
   appendNdjsonLine,
+  appendNdjsonFileBatch,
 } from "./lib/github.js";
 import {
   COUNTY_SCAN,
@@ -19,6 +21,18 @@ import {
 const DEFAULT_PAGE_LOAD_DELAY_MS = 5000;
 const BULK_SCAN_MAX_PAGE_RETRIES = 3;
 const BULK_SCAN_RETRY_DELAY_MS = 1000;
+const SHELL_SCAN_DEFAULT_MAX_TABS = 4;
+const SHELL_SCAN_MAX_TABS = 8;
+const MAX_PDF_BYTES = 64 * 1024 * 1024;
+const CAPTURE_INDEX_CACHE_TTL_MS = 15000;
+const PDF_CONTENT_TYPES = new Set([
+  "application/pdf",
+  "application/x-pdf",
+  "application/octet-stream",
+  "binary/octet-stream",
+]);
+
+const captureIndexCache = new Map();
 
 async function getConfig() {
   const {
@@ -37,11 +51,127 @@ async function getConfig() {
   return { githubToken, githubOwner, githubRepo, githubBranch, pageLoadDelayMs };
 }
 
+function requireHttpsUrl(rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error(`invalid PDF URL: ${rawUrl || "(blank)"}`);
+  }
+  if (url.protocol !== "https:") {
+    throw new Error(`refusing non-HTTPS PDF URL: ${url.href}`);
+  }
+  if (url.username || url.password) {
+    throw new Error(`refusing PDF URL with credentials: ${url.origin}${url.pathname}`);
+  }
+  return url.href;
+}
+
+function hostMatches(host, expectedHost) {
+  const h = String(host || "").toLowerCase();
+  const expected = String(expectedHost || "").toLowerCase();
+  const expectedNoWww = expected.startsWith("www.") ? expected.slice(4) : expected;
+  const hostNoWww = h.startsWith("www.") ? h.slice(4) : h;
+  return h === expected
+    || h.endsWith(`.${expected}`)
+    || hostNoWww === expectedNoWww;
+}
+
+function validatePdfRedirect(requestedUrl, finalUrl, sourceUrl = null) {
+  const requested = new URL(requestedUrl);
+  const final = new URL(finalUrl);
+  let source = null;
+  try {
+    source = sourceUrl ? new URL(sourceUrl) : null;
+  } catch { /* ignore invalid source URL; fetch URL validation handles requested/final */ }
+  if (
+    !hostMatches(final.hostname, requested.hostname)
+    && (!source || !hostMatches(final.hostname, source.hostname))
+  ) {
+    throw new Error(`fetch ${requestedUrl}: redirected to untrusted host ${final.hostname}`);
+  }
+}
+
+function validatePdfContentType(resp, fetchUrl) {
+  const raw = resp.headers.get("content-type") || "";
+  const type = raw.split(";")[0].trim().toLowerCase();
+  if (type && !PDF_CONTENT_TYPES.has(type)) {
+    throw new Error(`fetch ${fetchUrl}: expected PDF content-type, got ${raw}`);
+  }
+}
+
+function validatePdfContentLength(resp, fetchUrl) {
+  const raw = resp.headers.get("content-length");
+  if (!raw) return;
+  const length = Number(raw);
+  if (Number.isFinite(length) && length > MAX_PDF_BYTES) {
+    throw new Error(`fetch ${fetchUrl}: PDF too large (${length} bytes)`);
+  }
+}
+
+async function readArrayBufferWithLimit(resp, maxBytes, fetchUrl) {
+  if (!resp.body?.getReader) {
+    const buffer = await resp.arrayBuffer();
+    if (buffer.byteLength > maxBytes) {
+      throw new Error(`fetch ${fetchUrl}: PDF too large (${buffer.byteLength} bytes)`);
+    }
+    return buffer;
+  }
+
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      try { await reader.cancel(); } catch { /* ignore */ }
+      throw new Error(`fetch ${fetchUrl}: PDF too large (>${maxBytes} bytes)`);
+    }
+    chunks.push(value);
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes.buffer;
+}
+
+function hasPdfMagic(buffer) {
+  const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 1024));
+  for (let i = 0; i <= bytes.length - 5; i++) {
+    if (
+      bytes[i] === 0x25
+      && bytes[i + 1] === 0x50
+      && bytes[i + 2] === 0x44
+      && bytes[i + 3] === 0x46
+      && bytes[i + 4] === 0x2d
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function fetchAndHashPdf(pdf) {
-  const fetchUrl = pdf.fetchUrl || pdf.fetch_url || pdf.url;
-  const resp = await fetch(fetchUrl);
+  const requestedUrl = requireHttpsUrl(pdf.fetchUrl || pdf.fetch_url || pdf.url);
+  const resp = await fetch(requestedUrl, {
+    credentials: "omit",
+    redirect: "follow",
+  });
+  const fetchUrl = requireHttpsUrl(resp.url || requestedUrl);
+  validatePdfRedirect(requestedUrl, fetchUrl, pdf.url);
   if (!resp.ok) throw new Error(`fetch ${fetchUrl}: HTTP ${resp.status}`);
-  const buffer = await resp.arrayBuffer();
+  validatePdfContentType(resp, fetchUrl);
+  validatePdfContentLength(resp, fetchUrl);
+  const buffer = await readArrayBufferWithLimit(resp, MAX_PDF_BYTES, fetchUrl);
+  if (!hasPdfMagic(buffer)) {
+    throw new Error(`fetch ${fetchUrl}: response did not start with PDF magic`);
+  }
   const sha = await sha256Hex(buffer);
   return {
     fetchUrl,
@@ -51,7 +181,7 @@ async function fetchAndHashPdf(pdf) {
   };
 }
 
-async function uploadOnePdf(pdf, config, fetchedPdf = null) {
+async function uploadOnePdf(pdf, config, fetchedPdf = null, options = {}) {
   const { url, filename, county } = pdf;
   const { githubToken, githubOwner, githubRepo, githubBranch } = config;
   if (!githubToken || !githubOwner || !githubRepo) {
@@ -65,7 +195,7 @@ async function uploadOnePdf(pdf, config, fetchedPdf = null) {
   const archivePath = `archive/${county}/${sha.slice(0, 2)}/${sha}.pdf`;
 
   // 2. Idempotency: only upload the PDF if it isn't already in the archive.
-  // We always log a capture event though — re-visits are meaningful provenance.
+  // We always log a capture event though - re-visits are meaningful provenance.
   const exists = await fileExists({
     owner: githubOwner,
     repo: githubRepo,
@@ -87,7 +217,7 @@ async function uploadOnePdf(pdf, config, fetchedPdf = null) {
     });
   }
 
-  // 3. Append a capture event to captures.ndjson (always — even when PDF was
+  // 3. Append a capture event to captures.ndjson (always - even when PDF was
   // already archived, the new visit is provenance worth keeping).
   const capture = {
     county,
@@ -105,15 +235,25 @@ async function uploadOnePdf(pdf, config, fetchedPdf = null) {
     page_title_hint: pdf.pageTitleHint || pdf.page_title_hint || null,
     source_page_url: pdf.sourcePageUrl || pdf.source_page_url || null,
   };
-  await appendNdjsonLine({
-    owner: githubOwner,
-    repo: githubRepo,
-    branch: githubBranch,
-    path: `archive/${county}/captures.ndjson`,
-    newLine: JSON.stringify(capture),
-    message: `${county}: log capture ${filename}`,
-    token: githubToken,
-  });
+  const capturePath = `archive/${county}/captures.ndjson`;
+  if (options.captureBatch) {
+    options.captureBatch.add(
+      capturePath,
+      JSON.stringify(capture),
+      `${county}: log PDF captures`,
+    );
+  } else {
+    await appendNdjsonLine({
+      owner: githubOwner,
+      repo: githubRepo,
+      branch: githubBranch,
+      path: capturePath,
+      newLine: JSON.stringify(capture),
+      message: `${county}: log capture ${filename}`,
+      token: githubToken,
+    });
+    invalidateIndexCache(config, county, "captures.ndjson");
+  }
 
   return {
     status: exists ? "skipped-exists" : "uploaded",
@@ -128,6 +268,75 @@ function emptyCaptureIndex() {
     urlKeys: new Set(),
     shaByUrlKey: new Map(),
   };
+}
+
+function cloneCaptureIndex(index) {
+  const clone = emptyCaptureIndex();
+  for (const key of index.urlKeys) clone.urlKeys.add(key);
+  for (const [key, shas] of index.shaByUrlKey) {
+    clone.shaByUrlKey.set(key, new Set(shas));
+  }
+  return clone;
+}
+
+function cloneSet(set) {
+  return new Set(set);
+}
+
+function indexCacheKey(config, county, filename) {
+  return [
+    config.githubOwner || "",
+    config.githubRepo || "",
+    config.githubBranch || "",
+    county || "",
+    filename || "",
+  ].join("\n");
+}
+
+function getCachedIndex(key, cloneValue) {
+  const cached = captureIndexCache.get(key);
+  if (!cached || cached.expiresAt <= Date.now()) {
+    captureIndexCache.delete(key);
+    return null;
+  }
+  return cloneValue(cached.value);
+}
+
+function setCachedIndex(key, value) {
+  captureIndexCache.set(key, {
+    value,
+    expiresAt: Date.now() + CAPTURE_INDEX_CACHE_TTL_MS,
+  });
+}
+
+function invalidateIndexCache(config, county, filename) {
+  captureIndexCache.delete(indexCacheKey(config, county, filename));
+}
+
+function parseNdjsonRows(content, label) {
+  const rows = [];
+  let parseErrors = 0;
+  const samples = [];
+  const lines = String(content || "").split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) continue;
+    try {
+      rows.push(JSON.parse(trimmed));
+    } catch (e) {
+      parseErrors += 1;
+      if (samples.length < 3) {
+        samples.push(`line ${i + 1}: ${e.message || e}`);
+      }
+    }
+  }
+  if (parseErrors > 0) {
+    console.warn(
+      `[tentatives bg] ${label}: skipped ${parseErrors} malformed NDJSON line(s)`,
+      samples,
+    );
+  }
+  return rows;
 }
 
 function rememberCapture(index, url, waybackTs = null, sha = null) {
@@ -147,6 +356,9 @@ function rememberCapture(index, url, waybackTs = null, sha = null) {
 async function loadCaptureIndex(county, config) {
   const { githubToken, githubOwner, githubRepo, githubBranch } = config;
   if (!githubToken || !githubOwner || !githubRepo) return emptyCaptureIndex();
+  const cacheKey = indexCacheKey(config, county, "captures.ndjson");
+  const cached = getCachedIndex(cacheKey, cloneCaptureIndex);
+  if (cached) return cached;
   try {
     const f = await getFile({
       owner: githubOwner,
@@ -155,19 +367,15 @@ async function loadCaptureIndex(county, config) {
       path: `archive/${county}/captures.ndjson`,
       token: githubToken,
     });
-    const content = atob(f.content.replace(/\n/g, ""));
+    const content = base64ToText(f.content);
     const index = emptyCaptureIndex();
-    for (const line of content.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const row = JSON.parse(trimmed);
-        if (row.source_url) {
-          rememberCapture(index, row.source_url, row.wayback_ts, row.source_sha256);
-        }
-      } catch { /* skip malformed line */ }
+    for (const row of parseNdjsonRows(content, `archive/${county}/captures.ndjson`)) {
+      if (row.source_url) {
+        rememberCapture(index, row.source_url, row.wayback_ts, row.source_sha256);
+      }
     }
-    return index;
+    setCachedIndex(cacheKey, cloneCaptureIndex(index));
+    return cloneCaptureIndex(index);
   } catch (e) {
     if (e.status === 404) return emptyCaptureIndex();
     console.warn("[tentatives bg] could not load captures.ndjson:", e.message);
@@ -179,7 +387,7 @@ function captureKey(url, waybackTs = null) {
   return `${url}::${waybackTs || ""}`;
 }
 
-async function uploadOrSkipPdf(pdf, county, config, captures) {
+async function uploadOrSkipPdf(pdf, county, config, captures, options = {}) {
   const waybackTs = pdf.waybackTs || pdf.wayback_ts || null;
   const key = captureKey(pdf.url, waybackTs);
 
@@ -187,8 +395,12 @@ async function uploadOrSkipPdf(pdf, county, config, captures) {
     if (captures.urlKeys.has(key)) {
       return { status: "already-captured" };
     }
-    const result = await uploadOnePdf({ ...pdf, county }, config);
-    rememberCapture(captures, pdf.url, waybackTs, result.sha);
+    const result = await uploadOnePdf({ ...pdf, county }, config, null, options);
+    if (options.captureBatch) {
+      options.captureBatch.afterFlush(() => rememberCapture(captures, pdf.url, waybackTs, result.sha));
+    } else {
+      rememberCapture(captures, pdf.url, waybackTs, result.sha);
+    }
     return result;
   }
 
@@ -202,8 +414,12 @@ async function uploadOrSkipPdf(pdf, county, config, captures) {
     };
   }
 
-  const result = await uploadOnePdf({ ...pdf, county }, config, fetched);
-  rememberCapture(captures, pdf.url, waybackTs, result.sha);
+  const result = await uploadOnePdf({ ...pdf, county }, config, fetched, options);
+  if (options.captureBatch) {
+    options.captureBatch.afterFlush(() => rememberCapture(captures, pdf.url, waybackTs, result.sha));
+  } else {
+    rememberCapture(captures, pdf.url, waybackTs, result.sha);
+  }
   return result;
 }
 
@@ -215,6 +431,9 @@ async function loadArtifactCaptureIndex(county, config, filename) {
   const { githubToken, githubOwner, githubRepo, githubBranch } = config;
   const keys = new Set();
   if (!githubToken || !githubOwner || !githubRepo) return keys;
+  const cacheKey = indexCacheKey(config, county, filename);
+  const cached = getCachedIndex(cacheKey, cloneSet);
+  if (cached) return cached;
   try {
     const f = await getFile({
       owner: githubOwner,
@@ -223,18 +442,14 @@ async function loadArtifactCaptureIndex(county, config, filename) {
       path: `archive/${county}/${filename}`,
       token: githubToken,
     });
-    const content = atob(f.content.replace(/\n/g, ""));
-    for (const line of content.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const row = JSON.parse(trimmed);
-        const sha = row.source_sha256 || row.layout_sha256;
-        if (row.source_url && sha) {
-          keys.add(pageCaptureKey(row.source_url, sha));
-        }
-      } catch { /* skip malformed line */ }
+    const content = base64ToText(f.content);
+    for (const row of parseNdjsonRows(content, `archive/${county}/${filename}`)) {
+      const sha = row.source_sha256 || row.layout_sha256;
+      if (row.source_url && sha) {
+        keys.add(pageCaptureKey(row.source_url, sha));
+      }
     }
+    setCachedIndex(cacheKey, cloneSet(keys));
   } catch (e) {
     if (e.status !== 404) {
       console.warn(`[tentatives bg] could not load ${filename}:`, e.message);
@@ -255,7 +470,7 @@ function textToBase64(text) {
   return bufferToBase64(new TextEncoder().encode(text).buffer);
 }
 
-async function uploadOrSkipPageSnapshot(snapshot, county, config, pageCaptures) {
+async function uploadOrSkipPageSnapshot(snapshot, county, config, pageCaptures, options = {}) {
   const { githubToken, githubOwner, githubRepo, githubBranch } = config;
   const sourceUrl = snapshot.url || snapshot.source_url || "";
   const html = String(snapshot.html || "");
@@ -312,16 +527,30 @@ async function uploadOrSkipPageSnapshot(snapshot, county, config, pageCaptures) 
     content_length: bytes.byteLength,
     archive_path: archivePath,
   };
-  await appendNdjsonLine({
-    owner: githubOwner,
-    repo: githubRepo,
-    branch: githubBranch,
-    path: `archive/${county}/page-captures.ndjson`,
-    newLine: JSON.stringify(capture),
-    message: `${county}: log page capture ${sha.slice(0, 8)}`,
-    token: githubToken,
-  });
-  pageCaptures.add(key);
+  const capturePath = `archive/${county}/page-captures.ndjson`;
+  if (options.captureBatch) {
+    options.captureBatch.add(
+      capturePath,
+      JSON.stringify(capture),
+      `${county}: log page captures`,
+    );
+  } else {
+    await appendNdjsonLine({
+      owner: githubOwner,
+      repo: githubRepo,
+      branch: githubBranch,
+      path: capturePath,
+      newLine: JSON.stringify(capture),
+      message: `${county}: log page capture ${sha.slice(0, 8)}`,
+      token: githubToken,
+    });
+    invalidateIndexCache(config, county, "page-captures.ndjson");
+  }
+  if (options.captureBatch) {
+    options.captureBatch.afterFlush(() => pageCaptures.add(key));
+  } else {
+    pageCaptures.add(key);
+  }
   return {
     status: exists ? "page-logged" : "page-captured",
     sha,
@@ -332,7 +561,7 @@ async function uploadOrSkipPageSnapshot(snapshot, county, config, pageCaptures) 
   };
 }
 
-async function uploadOrSkipLayoutDoc(layoutDoc, county, config, layoutCaptures) {
+async function uploadOrSkipLayoutDoc(layoutDoc, county, config, layoutCaptures, options = {}) {
   const { githubToken, githubOwner, githubRepo, githubBranch } = config;
   const sourceUrl = layoutDoc.url || "";
   const json = String(layoutDoc.json || "");
@@ -389,16 +618,30 @@ async function uploadOrSkipLayoutDoc(layoutDoc, county, config, layoutCaptures) 
     archive_path: archivePath,
     layout_version: layoutDoc.layoutVersion || 1,
   };
-  await appendNdjsonLine({
-    owner: githubOwner,
-    repo: githubRepo,
-    branch: githubBranch,
-    path: `archive/${county}/layout-captures.ndjson`,
-    newLine: JSON.stringify(capture),
-    message: `${county}: log layout capture ${sha.slice(0, 8)}`,
-    token: githubToken,
-  });
-  layoutCaptures.add(key);
+  const capturePath = `archive/${county}/layout-captures.ndjson`;
+  if (options.captureBatch) {
+    options.captureBatch.add(
+      capturePath,
+      JSON.stringify(capture),
+      `${county}: log layout captures`,
+    );
+  } else {
+    await appendNdjsonLine({
+      owner: githubOwner,
+      repo: githubRepo,
+      branch: githubBranch,
+      path: capturePath,
+      newLine: JSON.stringify(capture),
+      message: `${county}: log layout capture ${sha.slice(0, 8)}`,
+      token: githubToken,
+    });
+    invalidateIndexCache(config, county, "layout-captures.ndjson");
+  }
+  if (options.captureBatch) {
+    options.captureBatch.afterFlush(() => layoutCaptures.add(key));
+  } else {
+    layoutCaptures.add(key);
+  }
   return {
     status: exists ? "layout-logged" : "layout-captured",
     sha,
@@ -412,6 +655,52 @@ async function uploadOrSkipLayoutDoc(layoutDoc, county, config, layoutCaptures) 
 // Small inter-commit delay smooths over GitHub's eventual consistency on the
 // Contents API; the 409 retry handles the cases where it isn't enough.
 const COMMIT_THROTTLE_MS = 250;
+
+function createCaptureBatch(config, county) {
+  const { githubToken, githubOwner, githubRepo, githubBranch } = config;
+  const entries = new Map();
+  const afterFlushCallbacks = [];
+  return {
+    add(path, line, message) {
+      let entry = entries.get(path);
+      if (!entry) {
+        entry = { lines: [], message };
+        entries.set(path, entry);
+      }
+      entry.lines.push(line);
+    },
+    afterFlush(callback) {
+      afterFlushCallbacks.push(callback);
+    },
+    async flush() {
+      let count = 0;
+      const files = [];
+      for (const [path, entry] of entries) {
+        if (!entry.lines.length) continue;
+        files.push({ path, newLines: entry.lines });
+        count += entry.lines.length;
+      }
+      if (files.length) {
+        await appendNdjsonFileBatch({
+          owner: githubOwner,
+          repo: githubRepo,
+          branch: githubBranch,
+          files,
+          message: `${county}: log scan capture manifests (${count})`,
+          token: githubToken,
+        });
+      }
+      for (const path of entries.keys()) {
+        const filename = path.split("/").pop();
+        if (filename) invalidateIndexCache(config, county, filename);
+      }
+      for (const callback of afterFlushCallbacks) callback();
+      afterFlushCallbacks.length = 0;
+      entries.clear();
+      return count;
+    },
+  };
+}
 
 async function uploadBatchStreaming({ pdfs, county, port }) {
   const config = await getConfig();
@@ -434,7 +723,7 @@ async function uploadBatchStreaming({ pdfs, county, port }) {
     try {
       port.postMessage({ type: "result", result });
     } catch {
-      // Popup closed mid-upload — keep going but stop streaming.
+      // Popup closed mid-upload - keep going but stop streaming.
       console.warn("[tentatives bg] popup disconnected; finishing silently");
       return;
     }
@@ -442,6 +731,92 @@ async function uploadBatchStreaming({ pdfs, county, port }) {
   try {
     port.postMessage({ type: "done" });
   } catch { /* popup closed */ }
+}
+
+async function uploadScanArtifacts({
+  county,
+  config,
+  captures,
+  pageCaptures,
+  layoutCaptures,
+  pdfs,
+  pageSnapshots,
+  layoutDocs,
+  control,
+  postResult,
+}) {
+  const captureBatch = createCaptureBatch(config, county);
+  const results = [];
+  let archiveCommitCount = 0;
+
+  for (const layoutDoc of layoutDocs) {
+    if (!(await bulkScanCheckpoint(control))) break;
+    let result;
+    try {
+      const r = await uploadOrSkipLayoutDoc(layoutDoc, county, config, layoutCaptures, {
+        captureBatch,
+      });
+      result = { ...layoutDoc, ...r };
+      if (r.status === "layout-captured") archiveCommitCount += 1;
+    } catch (e) {
+      console.error("[tentatives bg] layout capture error for", layoutDoc.url, e);
+      result = {
+        ...layoutDoc,
+        status: "error",
+        filename: layoutDoc.title || layoutDoc.url || "layout snapshot",
+        error: String(e.message || e),
+      };
+    }
+    results.push(result);
+  }
+
+  for (const page of pageSnapshots) {
+    if (!(await bulkScanCheckpoint(control))) break;
+    let result;
+    try {
+      const r = await uploadOrSkipPageSnapshot(page, county, config, pageCaptures, {
+        captureBatch,
+      });
+      result = { ...page, ...r };
+      if (r.status === "page-captured") archiveCommitCount += 1;
+    } catch (e) {
+      console.error("[tentatives bg] page snapshot error for", page.url, e);
+      result = {
+        ...page,
+        status: "error",
+        filename: page.title || page.url || "page snapshot",
+        error: String(e.message || e),
+      };
+    }
+    results.push(result);
+  }
+
+  for (const pdf of pdfs) {
+    if (!(await bulkScanCheckpoint(control))) break;
+    let result;
+    try {
+      const r = await uploadOrSkipPdf(pdf, county, config, captures, {
+        captureBatch,
+      });
+      result = { ...pdf, ...r };
+      if (r.status === "uploaded") archiveCommitCount += 1;
+    } catch (e) {
+      console.error("[tentatives bg] scan upload error for", pdf.filename, e);
+      result = { ...pdf, status: "error", error: String(e.message || e) };
+    }
+    results.push(result);
+  }
+
+  const captureCommitCount = await captureBatch.flush();
+  if (archiveCommitCount + captureCommitCount > 0) {
+    await controlledBulkScanDelay(COMMIT_THROTTLE_MS, control);
+  }
+
+  for (const result of results) {
+    postResult(result);
+  }
+
+  return bulkScanCheckpoint(control);
 }
 
 // =========================================================== BULK SCAN
@@ -498,9 +873,37 @@ async function discoverLandingPages(county) {
   return urls;
 }
 
-// Polls chrome.tabs.get for status="complete". Avoids the listener race after
-// chrome.tabs.create (where "complete" can fire before onUpdated is attached)
-// and keeps the MV3 service worker alive via continuous chrome API calls.
+async function waitForMainFrameCommit(tabId, { timeoutMs = 15000 } = {}) {
+  if (!chrome.webNavigation?.onCommitted) return true;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`tab navigation commit timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    const listener = (details) => {
+      if (details.tabId !== tabId || details.frameId !== 0) return;
+      cleanup();
+      resolve(true);
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      try { chrome.webNavigation.onCommitted.removeListener(listener); } catch { /* ignore */ }
+    };
+    chrome.webNavigation.onCommitted.addListener(listener);
+  });
+}
+
+async function navigateScanTab(tabId, url, control) {
+  const committed = waitForMainFrameCommit(tabId);
+  await chrome.tabs.update(tabId, { url });
+  await committed;
+  return bulkScanCheckpoint(control);
+}
+
+// Polls chrome.tabs.get for status="complete". The navigation helpers above
+// wait for a fresh main-frame commit first; this loop then waits for that page
+// to finish loading and keeps the MV3 service worker alive through chrome API
+// calls.
 async function waitForTabComplete(tabId, { timeoutMs = 60000, pollMs = 200, control = null } = {}) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -664,10 +1067,10 @@ async function harvestLayoutDocsFromTab(tabId) {
   return layouts;
 }
 
-// Set by the side panel via pause/resume/stop messages. Checked between pages,
-// during page waits, and between PDFs so control is responsive without aborting
-// an in-flight commit.
-let bulkScanControl = null;
+// Set by the side panel via pause/resume/stop messages. Controls are keyed by
+// port so parallel side-panel sessions cannot overwrite each other.
+const bulkScanControls = new Map();
+const shellScanControls = new Map();
 
 function createBulkScanControl(port) {
   return {
@@ -675,7 +1078,44 @@ function createBulkScanControl(port) {
     paused: false,
     port,
     resumeWaiters: new Set(),
+    disconnectListener: null,
   };
+}
+
+function registerScanControl(controlMap, port, control) {
+  const previous = controlMap.get(port);
+  if (previous && previous !== control) {
+    stopBulkScan(previous);
+    clearScanControl(controlMap, port, previous);
+  }
+  const disconnectListener = () => stopBulkScan(control);
+  control.disconnectListener = disconnectListener;
+  port.onDisconnect.addListener(disconnectListener);
+  controlMap.set(port, control);
+  return control;
+}
+
+function clearScanControl(controlMap, port, control) {
+  if (!control) {
+    controlMap.delete(port);
+    return;
+  }
+  if (controlMap.get(port) === control) controlMap.delete(port);
+  if (control.disconnectListener) {
+    try { port.onDisconnect.removeListener(control.disconnectListener); } catch { /* ignore */ }
+    control.disconnectListener = null;
+  }
+}
+
+function scanControlFor(controlMap, port) {
+  return controlMap.get(port) || null;
+}
+
+function stopAndClearScanControl(controlMap, port) {
+  const control = scanControlFor(controlMap, port);
+  if (!control) return;
+  stopBulkScan(control);
+  clearScanControl(controlMap, port, control);
 }
 
 function postBulkScanMessage(port, msg) {
@@ -732,8 +1172,7 @@ async function controlledBulkScanDelay(ms, control, stepMs = 200) {
 }
 
 async function scanAllStreaming({ county, port, explicitUrls = null }) {
-  const control = createBulkScanControl(port);
-  bulkScanControl = control;
+  const control = registerScanControl(bulkScanControls, port, createBulkScanControl(port));
   const config = await getConfig();
   if (!config.githubToken || !config.githubOwner || !config.githubRepo) {
     throw new Error(
@@ -753,13 +1192,13 @@ async function scanAllStreaming({ county, port, explicitUrls = null }) {
     : await discoverLandingPages(county);
   if (!(await bulkScanCheckpoint(control))) {
     port.postMessage({ type: "done", reason: "stopped" });
-    if (bulkScanControl === control) bulkScanControl = null;
+    clearScanControl(bulkScanControls, port, control);
     return;
   }
   port.postMessage({ type: "landings", urls: landingUrls });
   if (landingUrls.length === 0) {
     port.postMessage({ type: "done", reason: "no-landings" });
-    if (bulkScanControl === control) bulkScanControl = null;
+    clearScanControl(bulkScanControls, port, control);
     return;
   }
 
@@ -797,11 +1236,10 @@ async function scanAllStreaming({ county, port, explicitUrls = null }) {
         // Skip the navigation for the first page since chrome.tabs.create
         // already pointed there; just wait for it to finish loading. For
         // subsequent pages, give Chrome a moment to flip status from
-        // "complete" (previous page) to "loading" — otherwise the poll
+        // "complete" (previous page) to "loading" - otherwise the poll
         // below could see stale "complete" and return prematurely.
         if (i > 0 || retryCount > 0) {
-          await chrome.tabs.update(tabId, { url });
-          if (!(await controlledBulkScanDelay(300, control))) break;
+          if (!(await navigateScanTab(tabId, url, control))) break;
         }
         const loaded = await waitForTabComplete(tabId, { control });
         if (!loaded) break;
@@ -823,77 +1261,24 @@ async function scanAllStreaming({ county, port, explicitUrls = null }) {
           layoutCount: layoutDocs.length,
         });
 
-        for (const layoutDoc of layoutDocs) {
-          if (!(await bulkScanCheckpoint(control))) break;
-          let result;
-          try {
-            const r = await uploadOrSkipLayoutDoc(layoutDoc, county, config, layoutCaptures);
-            result = { ...layoutDoc, ...r };
-            if (r.status === "layout-captured") {
-              await controlledBulkScanDelay(COMMIT_THROTTLE_MS, control);
+            // Keep going even if popup closed - the bulk scan is long-running
+        const ok = await uploadScanArtifacts({
+          county,
+          config,
+          captures,
+          pageCaptures,
+          layoutCaptures,
+          pdfs,
+          pageSnapshots,
+          layoutDocs,
+          control,
+          postResult: (result) => {
+            if (!postBulkScanMessage(port, { type: "result", result, pageIndex: i, pageTitle: title })) {
+              console.warn("[tentatives bg] popup disconnected; finishing silently");
             }
-          } catch (e) {
-            console.error("[tentatives bg] layout capture error for", layoutDoc.url, e);
-            result = {
-              ...layoutDoc,
-              status: "error",
-              filename: layoutDoc.title || layoutDoc.url || "layout snapshot",
-              error: String(e.message || e),
-            };
-          }
-          try {
-            port.postMessage({ type: "result", result, pageIndex: i, pageTitle: title });
-          } catch {
-            console.warn("[tentatives bg] popup disconnected; finishing silently");
-          }
-        }
-
-        for (const page of pageSnapshots) {
-          if (!(await bulkScanCheckpoint(control))) break;
-          let result;
-          try {
-            const r = await uploadOrSkipPageSnapshot(page, county, config, pageCaptures);
-            result = { ...page, ...r };
-            if (r.status === "page-captured") {
-              await controlledBulkScanDelay(COMMIT_THROTTLE_MS, control);
-            }
-          } catch (e) {
-            console.error("[tentatives bg] page snapshot error for", page.url, e);
-            result = {
-              ...page,
-              status: "error",
-              filename: page.title || page.url || "page snapshot",
-              error: String(e.message || e),
-            };
-          }
-          try {
-            port.postMessage({ type: "result", result, pageIndex: i, pageTitle: title });
-          } catch {
-            console.warn("[tentatives bg] popup disconnected; finishing silently");
-          }
-        }
-
-        for (const pdf of pdfs) {
-          if (!(await bulkScanCheckpoint(control))) break;
-          let result;
-          try {
-            const r = await uploadOrSkipPdf(pdf, county, config, captures);
-            result = { ...pdf, ...r };
-            if (r.status === "uploaded") {
-              await controlledBulkScanDelay(COMMIT_THROTTLE_MS, control);
-            }
-          } catch (e) {
-            console.error("[tentatives bg] bulk upload error for", pdf.filename, e);
-            result = { ...pdf, status: "error", error: String(e.message || e) };
-          }
-          try {
-            port.postMessage({ type: "result", result, pageIndex: i, pageTitle: title });
-          } catch {
-            console.warn("[tentatives bg] popup disconnected; finishing silently");
-            // Keep going even if popup closed — the bulk scan is long-running
-            // and the user may have closed the popup intentionally.
-          }
-        }
+          },
+        });
+        if (!ok) break;
       } catch (e) {
         if (control.cancel) break;
         const error = String(e.message || e);
@@ -937,7 +1322,342 @@ async function scanAllStreaming({ county, port, explicitUrls = null }) {
   try {
     port.postMessage({ type: "done", reason: control.cancel ? "stopped" : "completed" });
   } catch { /* port closed */ }
-  if (bulkScanControl === control) bulkScanControl = null;
+  clearScanControl(bulkScanControls, port, control);
+}
+
+// ========================================================= SHELL SCAN
+//
+// A parallel browser pass across selected counties. Each worker owns one tab
+// and walks one county at a time, so GitHub writes stay serialized per county
+// while multiple courts can load and capture at once.
+
+function createShellScanControl(port) {
+  return {
+    ...createBulkScanControl(port),
+    openTabs: new Set(),
+  };
+}
+
+function normalizedShellCounties(counties) {
+  const seen = new Set();
+  const out = [];
+  for (const county of counties || []) {
+    if (!COUNTY_SCAN[county] || seen.has(county)) continue;
+    seen.add(county);
+    out.push(county);
+  }
+  return out;
+}
+
+function normalizeShellMaxTabs(value, countyCount) {
+  const parsed = Number(value);
+  const requested = Number.isFinite(parsed) && parsed > 0
+    ? Math.floor(parsed)
+    : SHELL_SCAN_DEFAULT_MAX_TABS;
+  return Math.max(1, Math.min(SHELL_SCAN_MAX_TABS, countyCount || 1, requested));
+}
+
+async function detectHumanIntervention(tabId) {
+  let results;
+  try {
+    results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: () => {
+        const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+        const href = clean(location.href);
+        const title = clean(document.title);
+        const body = clean(document.body?.innerText || document.documentElement?.innerText || "").slice(0, 12000);
+        const haystack = `${href}\n${title}\n${body}`.toLowerCase();
+        const checks = [
+          [/captcha/, "captcha challenge"],
+          [/verify (that )?you are human/, "human verification"],
+          [/are you (a )?human/, "human verification"],
+          [/checking (your )?browser/, "browser check"],
+          [/security check/, "security check"],
+          [/cloudflare/, "browser security challenge"],
+          [/access denied/, "access denied"],
+          [/too many requests/, "rate limit"],
+          [/temporarily blocked/, "temporary block"],
+          [/unusual traffic/, "unusual traffic check"],
+          [/enable cookies/, "cookie check"],
+          [/(login|required|must) sign in/, "login required"],
+        ];
+        for (const [pattern, reason] of checks) {
+          if (pattern.test(haystack)) {
+            return { reason, url: href, title };
+          }
+        }
+        return null;
+      },
+    });
+  } catch (e) {
+    console.warn("[tentatives bg] human-check detection failed:", e);
+    return null;
+  }
+  for (const res of results || []) {
+    if (res?.result?.reason) return res.result;
+  }
+  return null;
+}
+
+async function activateShellTab(tabId) {
+  try {
+    await chrome.tabs.update(tabId, { active: true });
+  } catch { /* tab may have closed */ }
+}
+
+async function ensureShellPageReady(control, tabId, context, delayMs) {
+  while (!control.cancel) {
+    const signal = await detectHumanIntervention(tabId);
+    if (!signal) return true;
+    control.paused = true;
+    await activateShellTab(tabId);
+    postBulkScanMessage(control.port, {
+      type: "human-pause",
+      county: context.county,
+      url: signal.url || context.url,
+      title: signal.title || context.title,
+      reason: signal.reason,
+    });
+    postBulkScanMessage(control.port, {
+      type: "control-state",
+      paused: true,
+      human: true,
+      reason: signal.reason,
+    });
+    await waitForBulkScanResume(control);
+    if (control.cancel) return false;
+    try {
+      await waitForTabComplete(tabId, { control, timeoutMs: 15000 });
+    } catch { /* the user may still be mid-intervention; recheck below */ }
+    if (delayMs > 0 && !(await controlledBulkScanDelay(Math.min(delayMs, 1500), control))) {
+      return false;
+    }
+  }
+  return false;
+}
+
+async function shellScanCounty({ county, config, delayMs, control, workerIndex }) {
+  postBulkScanMessage(control.port, {
+    type: "county-start",
+    county,
+    workerIndex,
+    phase: "discovering",
+  });
+  const landingUrls = await discoverLandingPages(county);
+  postBulkScanMessage(control.port, {
+    type: "county-landings",
+    county,
+    workerIndex,
+    urls: landingUrls,
+  });
+  if (landingUrls.length === 0 || !(await bulkScanCheckpoint(control))) {
+    return { pages: 0 };
+  }
+
+  const captures = await loadCaptureIndex(county, config);
+  const pageCaptures = await loadPageCaptureIndex(county, config);
+  const layoutCaptures = await loadLayoutCaptureIndex(county, config);
+
+  let scanTab;
+  try {
+    scanTab = await chrome.tabs.create({ url: landingUrls[0], active: false });
+  } catch (e) {
+    throw new Error(`could not open shell tab: ${e.message || e}`);
+  }
+  const tabId = scanTab.id;
+  control.openTabs.add(tabId);
+  const pageRetryCounts = new Map();
+  let pagesCompleted = 0;
+
+  try {
+    for (let i = 0; i < landingUrls.length; i++) {
+      if (!(await bulkScanCheckpoint(control))) break;
+      const url = landingUrls[i];
+      const title = landingTitle(url);
+      const retryCount = pageRetryCounts.get(url) || 0;
+      postBulkScanMessage(control.port, {
+        type: "page-start",
+        county,
+        workerIndex,
+        index: i,
+        total: landingUrls.length,
+        url,
+        title,
+        attempt: retryCount + 1,
+        maxAttempts: BULK_SCAN_MAX_PAGE_RETRIES + 1,
+      });
+
+      try {
+        if (i > 0 || retryCount > 0) {
+          if (!(await navigateScanTab(tabId, url, control))) break;
+        }
+        const loaded = await waitForTabComplete(tabId, { control });
+        if (!loaded) break;
+        if (delayMs > 0 && !(await controlledBulkScanDelay(delayMs, control))) break;
+        if (!(await ensureShellPageReady(control, tabId, { county, url, title }, delayMs))) break;
+        if (!(await bulkScanCheckpoint(control))) break;
+
+        const pdfs = await harvestFromTab(tabId);
+        const pageSnapshots = await harvestPageSnapshotsFromTab(tabId);
+        const layoutDocs = await harvestLayoutDocsFromTab(tabId);
+        pdfs.sort((a, b) => (a.filename || a.url).localeCompare(b.filename || b.url));
+        pageRetryCounts.delete(url);
+        pagesCompleted += 1;
+        postBulkScanMessage(control.port, {
+          type: "page-harvested",
+          county,
+          workerIndex,
+          index: i,
+          url,
+          title,
+          pdfCount: pdfs.length,
+          pageSnapshotCount: pageSnapshots.length,
+          layoutCount: layoutDocs.length,
+        });
+
+        const ok = await uploadScanArtifacts({
+          county,
+          config,
+          captures,
+          pageCaptures,
+          layoutCaptures,
+          pdfs,
+          pageSnapshots,
+          layoutDocs,
+          control,
+          postResult: (result) => postBulkScanMessage(control.port, {
+            type: "result",
+            result: { ...result, county },
+            pageIndex: i,
+            pageTitle: title,
+            county,
+          }),
+        });
+        if (!ok) break;
+      } catch (e) {
+        if (control.cancel) break;
+        const error = String(e.message || e);
+        if (retryCount < BULK_SCAN_MAX_PAGE_RETRIES) {
+          const nextRetryCount = retryCount + 1;
+          pageRetryCounts.set(url, nextRetryCount);
+          console.warn(`[tentatives bg] shell scan page ${url} failed; retrying:`, e);
+          postBulkScanMessage(control.port, {
+            type: "page-retry",
+            county,
+            workerIndex,
+            index: i,
+            total: landingUrls.length,
+            url,
+            title,
+            retry: nextRetryCount,
+            maxRetries: BULK_SCAN_MAX_PAGE_RETRIES,
+            error,
+          });
+          if (!(await controlledBulkScanDelay(BULK_SCAN_RETRY_DELAY_MS, control))) break;
+          i -= 1;
+          continue;
+        }
+        pageRetryCounts.delete(url);
+        pagesCompleted += 1;
+        console.error(`[tentatives bg] shell scan page ${url} failed:`, e);
+        postBulkScanMessage(control.port, {
+          type: "page-error",
+          county,
+          workerIndex,
+          index: i,
+          url,
+          title,
+          error,
+        });
+      }
+    }
+  } finally {
+    control.openTabs.delete(tabId);
+    try { await chrome.tabs.remove(tabId); } catch { /* already gone */ }
+  }
+
+  return { pages: pagesCompleted };
+}
+
+async function shellScanStreaming({ counties, port, maxTabs = SHELL_SCAN_DEFAULT_MAX_TABS }) {
+  const selectedCounties = normalizedShellCounties(counties);
+  const control = registerScanControl(shellScanControls, port, createShellScanControl(port));
+  const config = await getConfig();
+  if (!config.githubToken || !config.githubOwner || !config.githubRepo) {
+    throw new Error(
+      "Extension not configured. Open the options page and set GitHub PAT / owner / repo.",
+    );
+  }
+  if (selectedCounties.length === 0) {
+    port.postMessage({ type: "done", reason: "no-counties" });
+    clearScanControl(shellScanControls, port, control);
+    return;
+  }
+
+  const delayMs = Number.isFinite(+config.pageLoadDelayMs)
+    ? Math.max(0, +config.pageLoadDelayMs)
+    : DEFAULT_PAGE_LOAD_DELAY_MS;
+  const concurrency = normalizeShellMaxTabs(maxTabs, selectedCounties.length);
+  port.postMessage({
+    type: "queue",
+    counties: selectedCounties,
+    concurrency,
+  });
+
+  let nextCountyIndex = 0;
+  let completedCounties = 0;
+
+  const runWorker = async (workerIndex) => {
+    while (!control.cancel) {
+      if (!(await bulkScanCheckpoint(control))) break;
+      const county = selectedCounties[nextCountyIndex++];
+      if (!county) break;
+      try {
+        const result = await shellScanCounty({
+          county,
+          config,
+          delayMs,
+          control,
+          workerIndex,
+        });
+        completedCounties += 1;
+        postBulkScanMessage(port, {
+          type: "county-done",
+          county,
+          workerIndex,
+          pages: result.pages,
+          completedCounties,
+          totalCounties: selectedCounties.length,
+        });
+      } catch (e) {
+        completedCounties += 1;
+        console.error(`[tentatives bg] shell scan county ${county} failed:`, e);
+        postBulkScanMessage(port, {
+          type: "county-error",
+          county,
+          workerIndex,
+          error: String(e.message || e),
+          completedCounties,
+          totalCounties: selectedCounties.length,
+        });
+      }
+    }
+  };
+
+  try {
+    await Promise.all(Array.from({ length: concurrency }, (_unused, i) => runWorker(i)));
+  } finally {
+    for (const tabId of [...control.openTabs]) {
+      try { await chrome.tabs.remove(tabId); } catch { /* already gone */ }
+    }
+    control.openTabs.clear();
+  }
+
+  try {
+    port.postMessage({ type: "done", reason: control.cancel ? "stopped" : "completed" });
+  } catch { /* port closed */ }
+  clearScanControl(shellScanControls, port, control);
 }
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -956,17 +1676,18 @@ chrome.runtime.onConnect.addListener((port) => {
     return;
   }
   if (port.name === "bulk-scan") {
+    port.onDisconnect.addListener(() => stopAndClearScanControl(bulkScanControls, port));
     port.onMessage.addListener(async (msg) => {
       if (msg.type === "stop") {
-        stopBulkScan(bulkScanControl);
+        stopAndClearScanControl(bulkScanControls, port);
         return;
       }
       if (msg.type === "pause") {
-        setBulkScanPaused(bulkScanControl, true);
+        setBulkScanPaused(scanControlFor(bulkScanControls, port), true);
         return;
       }
       if (msg.type === "resume") {
-        setBulkScanPaused(bulkScanControl, false);
+        setBulkScanPaused(scanControlFor(bulkScanControls, port), false);
         return;
       }
       if (msg.type !== "start") return;
@@ -978,7 +1699,39 @@ chrome.runtime.onConnect.addListener((port) => {
         });
       } catch (e) {
         console.error("[tentatives bg] bulk scan fatal", e);
-        if (bulkScanControl?.port === port) bulkScanControl = null;
+        clearScanControl(bulkScanControls, port, scanControlFor(bulkScanControls, port));
+        try {
+          port.postMessage({ type: "error", error: String(e.message || e) });
+        } catch { /* port closed */ }
+      }
+    });
+    return;
+  }
+  if (port.name === "shell-scan") {
+    port.onDisconnect.addListener(() => stopAndClearScanControl(shellScanControls, port));
+    port.onMessage.addListener(async (msg) => {
+      if (msg.type === "stop") {
+        stopAndClearScanControl(shellScanControls, port);
+        return;
+      }
+      if (msg.type === "pause") {
+        setBulkScanPaused(scanControlFor(shellScanControls, port), true);
+        return;
+      }
+      if (msg.type === "resume") {
+        setBulkScanPaused(scanControlFor(shellScanControls, port), false);
+        return;
+      }
+      if (msg.type !== "start") return;
+      try {
+        await shellScanStreaming({
+          counties: Array.isArray(msg.counties) ? msg.counties : [],
+          port,
+          maxTabs: msg.maxTabs,
+        });
+      } catch (e) {
+        console.error("[tentatives bg] shell scan fatal", e);
+        clearScanControl(shellScanControls, port, scanControlFor(shellScanControls, port));
         try {
           port.postMessage({ type: "error", error: String(e.message || e) });
         } catch { /* port closed */ }
@@ -1007,7 +1760,7 @@ chrome.runtime.onMessage.addListener((msg, sender, _sendResponse) => {
 });
 
 // On install / update: pre-seed GitHub config so a fresh install only needs a
-// PAT — the canonical repo is aimesy/tentatives@master and there's no reason
+// PAT - the canonical repo is aimesy/tentatives@master and there's no reason
 // to make every user type that in. Existing values are preserved.
 async function seedDefaults() {
   const stored = await chrome.storage.local.get([
@@ -1025,7 +1778,7 @@ async function seedDefaults() {
 
 // Chrome 116+: clicking the action icon opens the side panel. Older Chrome
 // users get the default behavior (no popup), which on Chromium means the user
-// has to open the side panel from the toolbar menu — fine as a fallback.
+// has to open the side panel from the toolbar menu - fine as a fallback.
 async function setupSidePanel() {
   if (chrome.sidePanel?.setPanelBehavior) {
     try {

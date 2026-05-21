@@ -51,6 +51,22 @@
   // by PDF header content too, but skipping these here saves a fetch + commit.
   const NON_RULING_NAME_RE =
     /\b(judicial[-_ ]directory|department[-_ ]phone|directory[-_ ]of[-_ ]judicial|phone[-_ ]numbers?)\b/i;
+  const RULING_CONTEXT_RE =
+    /\b(tentative|ruling|rulings|motion|hearing|civil|probate|department|dept|calendar|law)\b/i;
+
+  function isRelevantPage() {
+    const host = location.hostname.toLowerCase();
+    const path = location.pathname.toLowerCase().replace(/\/$/, "");
+    if (/(^|\.)cc-courts\.org$/i.test(host)) {
+      return /\/civil\/motions-hearings-tentative(?:-archive)?\.aspx$/i.test(path);
+    }
+    if (/(^|\.)contracosta\.courts\.ca\.gov$/i.test(host)) {
+      return path === "/online-services/tentative-rulings"
+        || path === "/tentative-rulings-archive"
+        || path === "/probate-calendar";
+    }
+    return false;
+  }
 
   function isRulingPdf(url) {
     let u;
@@ -63,6 +79,37 @@
     );
   }
 
+  function classText(el) {
+    if (!el?.className) return "";
+    if (typeof el.className === "string") return el.className;
+    return el.getAttribute?.("class") || "";
+  }
+
+  function elementSignal(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return "";
+    return cleanText([
+      el.id,
+      classText(el),
+      el.getAttribute("aria-controls"),
+      el.getAttribute("aria-label"),
+      el.getAttribute("data-drupal-selector"),
+      el.textContent,
+    ].filter(Boolean).join(" ")).slice(0, 600);
+  }
+
+  function hasRulingContext(el) {
+    let cur = el;
+    let depth = 0;
+    while (cur && cur.nodeType === Node.ELEMENT_NODE && depth < 6) {
+      if (RULING_CONTEXT_RE.test(elementSignal(cur))) return true;
+      const links = cur.querySelectorAll ? [...cur.querySelectorAll("a[href]")].slice(0, 20) : [];
+      if (links.some((a) => isRulingPdf(a.href))) return true;
+      cur = cur.parentElement;
+      depth++;
+    }
+    return false;
+  }
+
   // Expand collapsibles so any lazy-rendered PDF links are added to the DOM.
   // Conservative: only flips elements from collapsed→expanded; never closes.
   // Returns the count we actually opened so we know whether to wait briefly
@@ -72,6 +119,7 @@
 
     // 1. Native <details> elements.
     for (const d of root.querySelectorAll("details:not([open])")) {
+      if (!hasRulingContext(d)) continue;
       d.open = true;
       opened++;
     }
@@ -80,9 +128,10 @@
     //    Drupal collapsibles, etc.). Click rather than poke aria-expanded
     //    directly so the toggling JS still runs.
     const ariaCandidates = root.querySelectorAll(
-      'button[aria-expanded="false"], [role="button"][aria-expanded="false"], a[aria-expanded="false"]'
+      'button[aria-expanded="false"], [role="button"][aria-expanded="false"]'
     );
     for (const el of ariaCandidates) {
+      if (!hasRulingContext(el)) continue;
       try {
         el.click();
         opened++;
@@ -101,6 +150,7 @@
       ".panel-heading:not(.open):not(.expanded)"
     );
     for (const el of classCandidates) {
+      if (!hasRulingContext(el)) continue;
       try {
         el.click();
         opened++;
@@ -207,6 +257,11 @@
         pages,
       });
     } catch { /* extension context invalidated, etc. */ }
+  }
+
+  if (!isRelevantPage()) {
+    report([]);
+    return;
   }
 
   // Initial pass.

@@ -2,9 +2,13 @@ name: Tests
 
 on:
   push:
-    branches-ignore: [main]
+    branches: [main, master]
   pull_request:
-    branches: [main]
+    branches: [main, master]
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -16,8 +20,6 @@ jobs:
           python-version: "3.11"
           cache: "pip"
       - name: Install
-        run: |
-          pip install -r requirements.txt
-          pip install pytest
+        run: pip install -r requirements.txt pytest==9.0.3
       - name: Run tests
         run: pytest counties/ ingest/ -v

@@ -4,15 +4,36 @@
 // merges everything into one in-memory array, and drives a filter/sort/page
 // view. It never downloads the archived PDFs during startup.
 
-// Counties we know about. Any whose parquet 404s is skipped silently - the
-// page works fine with whatever subset is published.
-const KNOWN_COUNTIES = [
+// Parser-backed counties. The published viewer also loads site/counties.json
+// so this fallback only matters for direct file:// or broken-manifest viewing.
+const DEFAULT_COUNTIES = [
   { slug: "el-dorado",    label: "El Dorado" },
   { slug: "contra-costa", label: "Contra Costa" },
   { slug: "placer",       label: "Placer" },
 ];
 
-const COUNTY_LABEL = Object.fromEntries(KNOWN_COUNTIES.map((c) => [c.slug, c.label]));
+let KNOWN_COUNTIES = DEFAULT_COUNTIES;
+let COUNTY_LABEL = Object.fromEntries(KNOWN_COUNTIES.map((c) => [c.slug, c.label]));
+const FILTER_IDS = ["q", "county", "dept", "outcome", "from", "to"];
+const SEARCH_FIELDS = [
+  "case_number",
+  "case_title",
+  "motion_type",
+  "outcome_text",
+  "body_text",
+  "full_text",
+];
+const SORT_COLUMNS = new Set([
+  "county",
+  "dept",
+  "hearing_date",
+  "case_number",
+  "case_title",
+  "motion_type",
+  "outcome",
+]);
+const SORT_DIRECTIONS = new Set(["asc", "desc"]);
+const LINK_PROTOCOLS = new Set(["http:", "https:"]);
 
 const $ = (id) => document.getElementById(id);
 
@@ -41,7 +62,12 @@ function setStage(name, value, kind = "active") {
     row = document.createElement("div");
     row.className = "stage";
     row.id = id;
-    row.innerHTML = `<span class="s-name">${name}</span><span class="s-val"></span>`;
+    const stageName = document.createElement("span");
+    stageName.className = "s-name";
+    stageName.textContent = name;
+    const stageValue = document.createElement("span");
+    stageValue.className = "s-val";
+    row.append(stageName, stageValue);
     $("stages").appendChild(row);
   }
   row.className = `stage ${kind}`;
@@ -59,11 +85,10 @@ let parquetModulePromise = null;
 async function loadParquetModule() {
   if (!parquetModulePromise) {
     setStage("Engine", "loading parquet reader...", "active");
-    // hyparquet ships as a single ES module; load from the official CDN.
-    // Pinned version so a breaking minor doesn't surprise the deployed site.
+    // Vendored browser modules keep the published viewer self-contained.
     parquetModulePromise = Promise.all([
-      import("https://cdn.jsdelivr.net/npm/hyparquet@1.18.0/src/hyparquet.min.js"),
-      import("https://cdn.jsdelivr.net/npm/hyparquet-compressors@1.1.1/+esm"),
+      import("./vendor/hyparquet-1.18.1/src/index.js"),
+      import("./vendor/hyparquet-compressors-1.1.1.esm.js"),
     ]).then(([parquet, compressorMod]) => {
       setStage("Engine", "ready", "done");
       return { ...parquet, compressors: compressorMod.compressors };
@@ -72,21 +97,46 @@ async function loadParquetModule() {
   return parquetModulePromise;
 }
 
+async function loadCountyManifest() {
+  try {
+    const r = await fetch("counties.json", { cache: "no-store" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const counties = await r.json();
+    if (!Array.isArray(counties)) throw new Error("manifest is not an array");
+    const valid = counties
+      .map((county) => ({
+        slug: String(county.slug || "").trim(),
+        label: String(county.label || county.slug || "").trim(),
+      }))
+      .filter((county) => county.slug && county.label);
+    if (valid.length) {
+      KNOWN_COUNTIES = valid;
+      COUNTY_LABEL = Object.fromEntries(valid.map((county) => [county.slug, county.label]));
+    }
+  } catch (e) {
+    console.warn("Using fallback county manifest:", e);
+  }
+}
+
 async function resolveDataRoot() {
   if (resolvedDataRoot) return resolvedDataRoot;
   if (!resolvedDataRootPromise) {
     resolvedDataRootPromise = (async () => {
-      for (const root of DATA_ROOT_CANDIDATES) {
-        for (const county of KNOWN_COUNTIES) {
+      const rootChecks = await Promise.all(DATA_ROOT_CANDIDATES.map(async (root) => {
+        const checks = await Promise.all(KNOWN_COUNTIES.map(async (county) => {
           try {
             const r = await fetch(`${root}/${county.slug}/rulings.parquet`, { method: "HEAD" });
-            if (r.ok) return root;
-          } catch { /* ignore network errors per candidate */ }
-        }
-      }
+            return r.ok;
+          } catch {
+            return false;
+          }
+        }));
+        return { root, ok: checks.some(Boolean) };
+      }));
+      const match = rootChecks.find((candidate) => candidate.ok);
       // No data found at either layout. Default to production so the per-county
       // 404 stages render correctly.
-      return DATA_ROOT_CANDIDATES[0];
+      return match?.root || DATA_ROOT_CANDIDATES[0];
     })();
   }
   resolvedDataRoot = await resolvedDataRootPromise;
@@ -123,7 +173,20 @@ async function fetchAndParse(county) {
   return rows;
 }
 
+function searchTextForRow(row) {
+  return SEARCH_FIELDS
+    .map((field) => row[field])
+    .filter((value) => value !== null && value !== undefined && value !== "")
+    .join(" ")
+    .toLowerCase();
+}
+
+function normalizeRow(row) {
+  return { ...row, _search: searchTextForRow(row) };
+}
+
 async function loadAll() {
+  await loadCountyManifest();
   setStage("Discover", "checking county parquets in parallel", "active");
   const batches = await Promise.all(KNOWN_COUNTIES.map(async (county) => {
     try {
@@ -138,7 +201,7 @@ async function loadAll() {
   let total = 0;
   for (const rows of batches) {
     // Normalize: hearing_date stored as string ISO; keep as-is for sort.
-    state.rows.push(...rows);
+    state.rows.push(...rows.map(normalizeRow));
     total += rows.length;
   }
   setStage("Discover", `${total.toLocaleString()} total rulings`, "done");
@@ -158,14 +221,13 @@ function applyFilters() {
     if (from && (r.hearing_date || "") < from) return false;
     if (to && (r.hearing_date || "") > to) return false;
     if (!needle) return true;
-    const blob = [
-      r.case_number, r.case_title, r.motion_type,
-      r.outcome_text, r.body_text, r.full_text,
-    ].filter(Boolean).join(" ").toLowerCase();
-    return blob.includes(needle);
+    return r._search.includes(needle);
   });
 
   // Sort.
+  if (!SORT_COLUMNS.has(state.sort.col) || !SORT_DIRECTIONS.has(state.sort.dir)) {
+    state.sort = { col: "hearing_date", dir: "desc" };
+  }
   const { col, dir } = state.sort;
   const sign = dir === "asc" ? 1 : -1;
   state.filtered.sort((a, b) => {
@@ -200,11 +262,21 @@ function render() {
   const slice = state.filtered.slice(start, start + state.pageSize);
 
   const body = $("results-body");
+  const fragment = document.createDocumentFragment();
   if (slice.length === 0) {
-    body.innerHTML = `<tr><td colspan="8" class="empty">No rulings match the current filters.</td></tr>`;
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 8;
+    cell.className = "empty";
+    cell.textContent = "No rulings match the current filters.";
+    row.appendChild(cell);
+    fragment.appendChild(row);
   } else {
-    body.innerHTML = slice.map((r, i) => renderRow(r, start + i)).join("");
+    for (const [i, row] of slice.entries()) {
+      fragment.appendChild(renderRow(row, start + i));
+    }
   }
+  body.replaceChildren(fragment);
 
   // Header sort markers.
   for (const th of document.querySelectorAll("thead th[data-col]")) {
@@ -212,7 +284,7 @@ function render() {
     const marker = th.querySelector(".sort-marker");
     if (col === state.sort.col) {
       th.classList.add("sorted");
-      marker.textContent = state.sort.dir === "asc" ? "↑" : "↓";
+      marker.textContent = state.sort.dir === "asc" ? "\u2191" : "\u2193";
     } else {
       th.classList.remove("sorted");
       marker.textContent = "";
@@ -224,17 +296,45 @@ function render() {
     `${new Set(state.rows.map((r) => r.county)).size} counties`;
 }
 
-function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  }[c]));
+function appendCell(row, text, className = "") {
+  const cell = document.createElement("td");
+  if (className) cell.className = className;
+  cell.textContent = text ?? "";
+  row.appendChild(cell);
+  return cell;
+}
+
+function classToken(value, fallback = "other") {
+  const token = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return token || fallback;
+}
+
+function pageNumber(value) {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+function safeHttpUrl(raw) {
+  const value = String(raw || "").trim();
+  if (!/^https?:\/\//i.test(value)) return null;
+  try {
+    const url = new URL(value);
+    return LINK_PROTOCOLS.has(url.protocol) ? url : null;
+  } catch {
+    return null;
+  }
 }
 
 function pdfHref(r) {
-  if (!r.source_url) return null;
-  const base = r.source_url.startsWith("http") ? r.source_url : null;
-  if (!base) return null;
-  return r.page_start ? `${base}#page=${r.page_start}` : base;
+  const url = safeHttpUrl(r.source_url);
+  if (!url) return null;
+  const page = pageNumber(r.page_start);
+  if (page) url.hash = `page=${page}`;
+  return url.href;
 }
 
 function sourceLabel(r) {
@@ -244,24 +344,43 @@ function sourceLabel(r) {
 }
 
 function renderRow(r, idx) {
-  const outcomeClass = r.outcome || "other";
-  const condBadge = r.conditional ? `<span class="cond" title="ABSENT OBJECTION -> granted">cond.</span>` : "";
+  const row = document.createElement("tr");
+  row.dataset.idx = String(idx);
+  appendCell(row, COUNTY_LABEL[r.county] || r.county || "");
+  appendCell(row, r.dept || "");
+  appendCell(row, r.hearing_date || "");
+  appendCell(row, r.case_number || "", "case");
+  const title = appendCell(row, r.case_title || "", "title");
+  title.title = r.case_title || "";
+  appendCell(row, r.motion_type || "");
+
+  const outcomeCell = appendCell(row, "", "outcome");
+  const outcome = document.createElement("span");
+  outcome.classList.add("outcome-pill", classToken(r.outcome));
+  outcome.textContent = r.outcome || "-";
+  outcomeCell.appendChild(outcome);
+  if (r.conditional) {
+    const cond = document.createElement("span");
+    cond.className = "cond";
+    cond.title = "ABSENT OBJECTION -> granted";
+    cond.textContent = "cond.";
+    outcomeCell.appendChild(cond);
+  }
+
+  const sourceCell = appendCell(row, "");
   const pdf = pdfHref(r);
-  const sourceText = sourceLabel(r);
-  const pdfCell = pdf
-    ? `<a href="${escapeHtml(pdf)}" target="_blank" rel="noopener">${sourceText}${r.page_start ? ` p.${r.page_start}` : ""}</a>`
-    : "-";
-  return `
-    <tr data-idx="${idx}">
-      <td>${escapeHtml(COUNTY_LABEL[r.county] || r.county || "")}</td>
-      <td>${escapeHtml(r.dept || "")}</td>
-      <td>${escapeHtml(r.hearing_date || "")}</td>
-      <td class="case">${escapeHtml(r.case_number || "")}</td>
-      <td class="title" title="${escapeHtml(r.case_title || "")}">${escapeHtml(r.case_title || "")}</td>
-      <td>${escapeHtml(r.motion_type || "")}</td>
-      <td class="outcome"><span class="outcome-pill ${outcomeClass}">${escapeHtml(r.outcome || "-")}</span>${condBadge}</td>
-      <td>${pdfCell}</td>
-    </tr>`;
+  if (pdf) {
+    const link = document.createElement("a");
+    link.href = pdf;
+    link.target = "_blank";
+    link.rel = "noopener";
+    const page = pageNumber(r.page_start);
+    link.textContent = `${sourceLabel(r)}${page ? ` p.${page}` : ""}`;
+    sourceCell.appendChild(link);
+  } else {
+    sourceCell.textContent = "-";
+  }
+  return row;
 }
 
 // ============================================================ DRAWER
@@ -272,25 +391,44 @@ function openDrawer(idx) {
   $("d-case").textContent = r.case_number || "(no case #)";
   $("d-title").textContent = r.case_title || "";
   const kv = $("d-kv");
+  kv.replaceChildren();
   const rows = [
     ["County", COUNTY_LABEL[r.county] || r.county],
     ["Dept", r.dept],
     ["Division", r.division],
     ["Date", r.hearing_date],
     ["Motion", r.motion_type],
-    ["Outcome", r.outcome + (r.conditional ? " (conditional)" : "")],
+    ["Outcome", r.outcome ? r.outcome + (r.conditional ? " (conditional)" : "") : ""],
     ["Continued to", r.continued_to],
     ["Pages", r.page_start ? (r.page_start === r.page_end ? r.page_start : `${r.page_start}-${r.page_end}`) : ""],
-    ["Source", r.source_url ? `<a href="${escapeHtml(r.source_url)}" target="_blank" rel="noopener">${escapeHtml(sourceLabel(r))}</a>` : "-"],
     ["Parser", r.parser_version],
   ];
-  kv.innerHTML = rows
-    .filter(([, v]) => v !== null && v !== undefined && v !== "")
-    .map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${k === "Source" ? v : escapeHtml(v)}</dd>`)
-    .join("");
+  for (const [key, value] of rows) {
+    if (value === null || value === undefined || value === "") continue;
+    appendKeyValue(kv, key, value);
+  }
+  const sourceUrl = safeHttpUrl(r.source_url);
+  if (sourceUrl) appendKeyValue(kv, "Source", sourceLabel(r), sourceUrl.href);
   $("d-outcome").textContent = r.outcome_text || "(empty)";
   $("d-full").textContent = r.full_text || r.body_text || "(empty)";
   $("drawer").classList.add("open");
+}
+
+function appendKeyValue(list, key, value, href = null) {
+  const dt = document.createElement("dt");
+  dt.textContent = key;
+  const dd = document.createElement("dd");
+  if (href) {
+    const link = document.createElement("a");
+    link.href = href;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = value;
+    dd.appendChild(link);
+  } else {
+    dd.textContent = value;
+  }
+  list.append(dt, dd);
 }
 
 function closeDrawer() {
@@ -323,6 +461,15 @@ function populateFilters() {
 function fillSelect(id, items) {
   const sel = $(id);
   // Keep the first "All" option.
+  sel.length = 1;
+  const values = new Set(items.map(({ v }) => v));
+  const current = state.filters[id];
+  if (current && !values.has(current)) {
+    const opt = document.createElement("option");
+    opt.value = current;
+    opt.textContent = id === "county" ? (COUNTY_LABEL[current] || current) : current;
+    sel.appendChild(opt);
+  }
   for (const { v, t } of items) {
     const opt = document.createElement("option");
     opt.value = v;
@@ -335,10 +482,15 @@ function fillSelect(id, items) {
 
 function syncUrl() {
   const params = new URLSearchParams();
-  for (const [k, v] of Object.entries(state.filters)) {
+  for (const k of FILTER_IDS) {
+    const v = state.filters[k];
     if (v) params.set(k, v);
   }
-  if (state.sort.col !== "hearing_date" || state.sort.dir !== "desc") {
+  if (
+    SORT_COLUMNS.has(state.sort.col) &&
+    SORT_DIRECTIONS.has(state.sort.dir) &&
+    (state.sort.col !== "hearing_date" || state.sort.dir !== "desc")
+  ) {
     params.set("sort", `${state.sort.col}:${state.sort.dir}`);
   }
   const qs = params.toString();
@@ -348,19 +500,20 @@ function syncUrl() {
 
 function readUrl() {
   const params = new URLSearchParams(window.location.search);
-  for (const k of Object.keys(state.filters)) {
+  for (const k of FILTER_IDS) {
     if (params.has(k)) state.filters[k] = params.get(k);
   }
   const sort = params.get("sort");
   if (sort) {
     const [col, dir] = sort.split(":");
-    if (col) state.sort.col = col;
-    if (dir === "asc" || dir === "desc") state.sort.dir = dir;
+    if (SORT_COLUMNS.has(col) && SORT_DIRECTIONS.has(dir)) {
+      state.sort = { col, dir };
+    }
   }
 }
 
 function pushFiltersToUI() {
-  for (const k of Object.keys(state.filters)) {
+  for (const k of FILTER_IDS) {
     const el = $(k);
     if (el) el.value = state.filters[k];
   }
@@ -368,18 +521,33 @@ function pushFiltersToUI() {
 
 // ============================================================ WIRING
 
+function debounce(fn, wait) {
+  let timer = null;
+  return (...args) => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => fn(...args), wait);
+  };
+}
+
 function wire() {
-  for (const id of ["q", "county", "dept", "outcome", "from", "to"]) {
+  const debouncedApplyFilters = debounce(applyFilters, 150);
+  for (const id of FILTER_IDS) {
     const el = $(id);
-    const evt = id === "q" ? "input" : "change";
-    el.addEventListener(evt, () => {
+    const updateFilter = () => {
       state.filters[id] = el.value;
-      applyFilters();
-    });
+      if (id === "q") debouncedApplyFilters();
+      else applyFilters();
+    };
+    if (id === "q") {
+      el.addEventListener("input", updateFilter);
+      el.addEventListener("keyup", updateFilter);
+    } else {
+      el.addEventListener("change", updateFilter);
+    }
   }
 
   $("reset").addEventListener("click", () => {
-    for (const k of Object.keys(state.filters)) state.filters[k] = "";
+    for (const k of FILTER_IDS) state.filters[k] = "";
     pushFiltersToUI();
     applyFilters();
   });
@@ -398,6 +566,7 @@ function wire() {
   for (const th of document.querySelectorAll("thead th[data-col]")) {
     th.addEventListener("click", () => {
       const col = th.dataset.col;
+      if (!SORT_COLUMNS.has(col)) return;
       if (state.sort.col === col) {
         state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
       } else {

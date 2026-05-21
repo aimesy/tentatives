@@ -36,25 +36,18 @@ import hashlib
 import io
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from html.parser import HTMLParser
 from typing import Iterator
 
 import pypdf
 
+from counties.common import PdfRef
 from schema import Ruling
 from . import COUNTY_SLUG, PARSER_VERSION
 
 
 # ============================================================ DISCOVERY
-
-
-@dataclass(frozen=True)
-class PdfRef:
-    url: str
-    filename: str
-    wayback_ts: str | None = None
-    dept_hint: str | None = None
 
 
 def discover_live(html: str, page_url: str | None = None) -> list[PdfRef]:
@@ -104,7 +97,7 @@ def parse_page_capture(html: str, capture: dict) -> list[Ruling]:
     try:
         captured_at = datetime.fromisoformat(str(captured_at_raw).replace("Z", "+00:00"))
     except Exception:
-        captured_at = datetime.utcnow()
+        raise ValueError(f"malformed captured_at for page capture: {captured_at_raw!r}")
     text = _html_text(html).strip()
     if not text:
         return []
@@ -141,7 +134,7 @@ def parse_page_capture(html: str, capture: dict) -> list[Ruling]:
             source_url=source_url,
             style=f"html-{page_kind}",
             parser_version=PARSER_VERSION,
-            ingest_ts=datetime.utcnow(),
+            ingest_ts=datetime.now(UTC),
         )
     ]
 
@@ -283,8 +276,10 @@ def _strip_page_artifacts(page_texts: list[str]) -> list[str]:
                         in_header = False
                 stripped.append(line)
             lines = stripped
-        # Drop pure-numeric lines (page numbers).
-        lines = [l for l in lines if not re.match(r"^\s*\d{1,4}\s*$", l)]
+        # Drop numeric page-number footers only at the bottom; standalone
+        # numerals inside the body can be statute sections or ruling text.
+        while lines and re.match(r"^\s*\d{1,4}\s*$", lines[-1]):
+            lines.pop()
         out.append("\n".join(lines))
     return out
 
@@ -417,7 +412,7 @@ def parse(
                 source_url=source_url,
                 style=f"cc-{meta.dept}",
                 parser_version=PARSER_VERSION,
-                ingest_ts=datetime.utcnow(),
+                ingest_ts=datetime.now(UTC),
             )
         )
 

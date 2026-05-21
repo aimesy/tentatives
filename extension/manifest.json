@@ -1,10 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Tentatives Capture",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Capture California superior court tentative rulings PDFs to a GitHub archive. Sidebar UI with per-county quick-fetch.",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
 
-  "permissions": ["storage", "activeTab", "scripting", "tabs"],
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "webNavigation"],
   "host_permissions": [
     "https://*.eldorado.courts.ca.gov/*",
     "https://*.placer.courts.ca.gov/*",
@@ -48,7 +51,8 @@
   },
 
   "action": {
-    "default_title": "Tentatives Capture — open sidebar"
+    "default_title": "Tentatives Capture - open sidebar",
+    "default_popup": "sidepanel/sidepanel.html"
   },
 
   "sidebar_action": {
@@ -75,8 +79,10 @@
     },
     {
       "matches": [
-        "https://*.contracosta.courts.ca.gov/*",
-        "https://*.cc-courts.org/*"
+        "https://*.contracosta.courts.ca.gov/online-services/tentative-rulings*",
+        "https://*.contracosta.courts.ca.gov/tentative-rulings-archive*",
+        "https://*.contracosta.courts.ca.gov/probate-calendar*",
+        "https://*.cc-courts.org/civil/motions-hearings-tentative*.aspx*"
       ],
       "js": ["sites/contra-costa.js"],
       "run_at": "document_idle",

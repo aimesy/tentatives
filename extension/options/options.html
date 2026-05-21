@@ -70,9 +70,9 @@
       <section class="card">
         <h2>Bulk scan</h2>
         <p class="muted">
-          When you click <em>Scan all</em> in the side panel, the extension
-          opens each known landing page for that county in a background tab and
-          waits for it to settle before harvesting PDFs. Bump this up if the
+          When you click <em>Scan all</em> or <em>Shell scan</em> in the side
+          panel, the extension opens known landing pages in browser tabs and
+          waits for them to settle before harvesting PDFs. Bump this up if the
           court site is slow or renders PDFs after load.
         </p>
         <div class="field">
@@ -83,7 +83,7 @@
 
       <section class="card">
         <h2>Supported sites</h2>
-        <ul class="muted" style="padding-left: 18px; margin: 0;">
+        <ul class="muted supported-sites">
           <li><code>www.eldorado.courts.ca.gov/online-services/tentative-rulings/*</code> — El Dorado</li>
           <li><code>www.placer.courts.ca.gov/*</code> — Placer</li>
           <li><code>contracosta.courts.ca.gov/*</code>, <code>cc-courts.org/*</code> — Contra Costa (iframe + collapsibles)</li>

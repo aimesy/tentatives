@@ -63,6 +63,7 @@ The side panel can:
 - fetch one listed court page;
 - scan every page for one county;
 - scan selected counties, with all configured counties selected by default;
+- shell-scan selected counties in parallel browser tabs, pausing if a page needs manual attention;
 - pause, resume, or stop a long scan;
 - retry a failed landing page three times before moving on.
 - document page layout fingerprints the first time a page is scanned, then again only when the structure changes.

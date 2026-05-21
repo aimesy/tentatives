@@ -2,24 +2,39 @@
 
 This file separates source structure from implementation status. It is not a parser promise.
 
+## Parser Registry Status
+
+Only these counties currently have parsers registered by `ingest.orchestrate`
+and therefore feed `data/<county>/rulings.parquet` for the static viewer:
+
+| County | Parser coverage |
+|---|---|
+| Contra Costa | PDF parser plus HTML page-capture parser. |
+| El Dorado | PDF parser. |
+| Placer | PDF parser. |
+
+All other counties in the implemented-source table below are capture-only for
+now. Their PDFs are archived with provenance, but they do not produce viewer
+rows until representative fixtures and parser tests are added.
+
 ## Implemented Capture Sources
 
-| County | Source | Structure | Current plan |
-|---|---|---|---|
-| Amador | `https://www.amadorcourt.org/os-tentativerulings.aspx` | Four legacy dropdowns with direct PDF option values. | Capture live dropdown PDFs and Wayback prefix captures for `www.amadorcourt.org/tentativeRulings/*`, especially 2020-2022. Current post-02/15/2022 portal appears account-based. |
-| San Francisco | `https://webapps.sftc.org/ufctr/ufctr.dll` | Static UFC family-law page with current and previous PDF links. | Capture PDFs for depts 403, 404, and 414. Parser is separate work. |
-| Nevada | `https://www.nevada.courts.ca.gov/online-services/tentative-rulings` | Static Drupal page with Nevada City and Truckee sections. | Capture court-hosted PDFs under `/system/files/tentative-rulings/`. Current `.docx` links are noted but not archived by the PDF parser path. |
-| Orange | `https://www.occourts.org/online-services/tentative-rulings` | Router to civil, family, and probate index pages, each linking stable current PDFs. | Capture current PDFs from the three index pages. Use exact Wayback CDX queries against those stable PDF URLs for history. |
-| Calaveras | `https://www.calaveras.courts.ca.gov/online-services/tentative-rulings` | Static case-management and civil law-and-motion lists with many historical PDFs. | Capture both list pages. Do not assume filename regularity; use link text and URL. |
-| Fresno | `https://www.fresno.courts.ca.gov/online-services/tentative-rulings` | Static Law and Motion page with department PDF links. | Capture direct PDFs and infer department from filenames such as `dept-503`. |
-| Merced | `https://www.merced.courts.ca.gov/online-services/tentative-rulings` | Static weekday PDF links, `tr-monday.pdf` through `tr-friday.pdf`. | Capture the weekday PDFs; use hashes and Wayback for overwritten-file history. |
-| Plumas | `https://plumas.courts.ca.gov/online-services/tentative-rulings` | Static Department 2 list with direct PDF links. | Capture direct PDFs with Department 2 hint. |
-| Riverside | `https://www.riverside.courts.ca.gov/online-services/tentative-rulings` | Regional/department page linking department ruling PDFs. | Capture direct PDFs and infer department from URL/text where possible. |
-| San Bernardino | `https://old.sb-court.org/GeneralInfo/TentativeRulings.aspx` | Legacy table with date, civil division, and direct PDF filename. | Capture the legacy table; infer civil department from filenames such as `CVS36052026.pdf`. |
-| Santa Clara | `https://santaclara.courts.ca.gov/online-services/tentative-rulings` | Index links department pages; department pages link stable PDF files. | Capture department pages for civil, probate, and complex departments. |
-| Shasta | `https://shasta.courts.ca.gov/online-services/tentative-rulings` | Static department list with direct PDFs under `/system/files/tentative/`. | Capture direct PDFs and map old department labels when filenames expose them. |
-| Solano | `https://solano.courts.ca.gov/divisions/civil-court/tentative-rulings` | Static civil/probate page with direct department PDFs. | Capture the five ruling PDFs and skip request-for-argument forms. |
-| Tuolumne | `https://www.tuolumne.courts.ca.gov/online-services/tentative-rulings-and-case-notes` | Static tentative-ruling and case-note links. | Capture tentative-ruling PDFs and Case Notes, tagged by division hint. |
+| County | Source | Structure | Current plan | Parser status |
+|---|---|---|---|---|
+| Amador | `https://www.amadorcourt.org/os-tentativerulings.aspx` | Four legacy dropdowns with direct PDF option values. | Capture live dropdown PDFs and Wayback prefix captures for `www.amadorcourt.org/tentativeRulings/*`, especially 2020-2022. Current post-02/15/2022 portal appears account-based. | Capture-only. |
+| San Francisco | `https://webapps.sftc.org/ufctr/ufctr.dll` | Static UFC family-law page with current and previous PDF links. | Capture PDFs for depts 403, 404, and 414. | Capture-only. |
+| Nevada | `https://www.nevada.courts.ca.gov/online-services/tentative-rulings` | Static Drupal page with Nevada City and Truckee sections. | Capture court-hosted PDFs under `/system/files/tentative-rulings/`. Current `.docx` links are noted but not archived by the PDF parser path. | Capture-only. |
+| Orange | `https://www.occourts.org/online-services/tentative-rulings` | Router to civil, family, and probate index pages, each linking stable current PDFs. | Capture current PDFs from the three index pages. Use exact Wayback CDX queries against those stable PDF URLs for history. | Capture-only. |
+| Calaveras | `https://www.calaveras.courts.ca.gov/online-services/tentative-rulings` | Static case-management and civil law-and-motion lists with many historical PDFs. | Capture both list pages. Do not assume filename regularity; use link text and URL. | Capture-only. |
+| Fresno | `https://www.fresno.courts.ca.gov/online-services/tentative-rulings` | Static Law and Motion page with department PDF links. | Capture direct PDFs and infer department from filenames such as `dept-503`. | Capture-only. |
+| Merced | `https://www.merced.courts.ca.gov/online-services/tentative-rulings` | Static weekday PDF links, `tr-monday.pdf` through `tr-friday.pdf`. | Capture the weekday PDFs; use hashes and Wayback for overwritten-file history. | Capture-only. |
+| Plumas | `https://plumas.courts.ca.gov/online-services/tentative-rulings` | Static Department 2 list with direct PDF links. | Capture direct PDFs with Department 2 hint. | Capture-only. |
+| Riverside | `https://www.riverside.courts.ca.gov/online-services/tentative-rulings` | Regional/department page linking department ruling PDFs. | Capture direct PDFs and infer department from URL/text where possible. | Capture-only. |
+| San Bernardino | `https://old.sb-court.org/GeneralInfo/TentativeRulings.aspx` | Legacy table with date, civil division, and direct PDF filename. | Capture the legacy table; infer civil department from filenames such as `CVS36052026.pdf`. | Capture-only. |
+| Santa Clara | `https://santaclara.courts.ca.gov/online-services/tentative-rulings` | Index links department pages; department pages link stable PDF files. | Capture department pages for civil, probate, and complex departments. | Capture-only. |
+| Shasta | `https://shasta.courts.ca.gov/online-services/tentative-rulings` | Static department list with direct PDFs under `/system/files/tentative/`. | Capture direct PDFs and map old department labels when filenames expose them. | Capture-only. |
+| Solano | `https://solano.courts.ca.gov/divisions/civil-court/tentative-rulings` | Static civil/probate page with direct department PDFs. | Capture the five ruling PDFs and skip request-for-argument forms. | Capture-only. |
+| Tuolumne | `https://www.tuolumne.courts.ca.gov/online-services/tentative-rulings-and-case-notes` | Static tentative-ruling and case-note links. | Capture tentative-ruling PDFs and Case Notes, tagged by division hint. | Capture-only. |
 
 ## Researched Backlog
 

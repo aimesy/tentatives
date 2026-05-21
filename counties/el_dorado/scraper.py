@@ -36,12 +36,13 @@ import hashlib
 import io
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Iterator
 from urllib.parse import urljoin
 
 import pypdf
 
+from counties.common import PdfRef
 from schema import Ruling
 from . import COUNTY_SLUG, PARSER_VERSION
 
@@ -62,16 +63,6 @@ TENTATIVE_PDF_RE = re.compile(
     re.IGNORECASE,
 )
 BASE = "https://www.eldorado.courts.ca.gov"
-
-
-@dataclass(frozen=True)
-class PdfRef:
-    """A PDF we know exists. Not yet fetched."""
-
-    url: str
-    filename: str
-    wayback_ts: str | None = None
-    dept_hint: str | None = None  # from the discovery URL (e.g. "9" from /tentative-rulings-dept-9)
 
 
 def _dept_from_landing_url(url: str) -> str | None:
@@ -121,24 +112,6 @@ def discover_dept_pages(html: str, base_url: str = BASE) -> list[str]:
     return sorted(urls)
 
 
-# ============================================================ FETCH
-
-
-def fetch(ref: PdfRef, session=None) -> tuple[bytes, str]:
-    """Download the PDF. Returns (content, sha256). Uses Wayback `id_` form when applicable."""
-    import requests  # local import; not needed for parser tests
-
-    sess = session or requests.Session()
-    if ref.wayback_ts:
-        url = f"https://web.archive.org/web/{ref.wayback_ts}id_/{ref.url}"
-    else:
-        url = ref.url
-    r = sess.get(url, timeout=60)
-    r.raise_for_status()
-    content = r.content
-    return content, hashlib.sha256(content).hexdigest()
-
-
 # ============================================================ PARSE
 
 
@@ -148,7 +121,9 @@ def fetch(ref: PdfRef, session=None) -> tuple[bytes, str]:
 #   PP20200121, SP20140014            (legacy: <LL><YYYY><####>)
 #   SC20210148, SFL20210053           (legacy with 2-3 letter prefix)
 #   24FL0473, 23FL0933                (modern Family Law)
-CASE_NUMBER_RE = re.compile(r"\b(\d*[A-Z]{2,4}\d{3,8})\b")
+CASE_NUMBER_RE = re.compile(
+    r"\b((?:\d{2}[A-Z]{2,4}\d{3,8}|[A-Z]{2,4}(?:19|20)\d{6}|[A-Z]{2,4}\d{6,8}))\b"
+)
 
 # Disposition anchor — universal across styles. "TENTATIVE RULING" optionally
 # followed by space or #, then index, then colon. e.g.:
@@ -163,7 +138,9 @@ TENTATIVE_RULING_ANCHOR_RE = re.compile(
 # Ruling header line: "N. ... <CASE_NUMBER> ..." — must contain a case number on
 # the same line to distinguish from numbered sub-sections inside a ruling body.
 RULING_HEADER_LINE_RE = re.compile(
-    r"^(?P<idx>\d{1,3})\.\s+(?P<rest>.*?\b\d*[A-Z]{2,4}\d{3,8}\b.*?)\s*$",
+    r"^(?P<idx>\d{1,3})\.\s+(?P<rest>.*?"
+    r"\b(?:\d{2}[A-Z]{2,4}\d{3,8}|[A-Z]{2,4}(?:19|20)\d{6}|[A-Z]{2,4}\d{6,8})\b"
+    r".*?)\s*$",
     re.MULTILINE,
 )
 
@@ -603,7 +580,7 @@ def parse(
                 source_url=source_url,
                 style=meta.style,
                 parser_version=PARSER_VERSION,
-                ingest_ts=datetime.utcnow(),
+                ingest_ts=datetime.now(UTC),
             )
         )
 

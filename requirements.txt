@@ -1,4 +1,4 @@
-pypdf>=5.0
-duckdb>=1.0
-pyarrow>=15.0
-requests>=2.31
+pypdf==6.11.0
+duckdb==1.5.2
+pyarrow==24.0.0
+requests==2.32.5

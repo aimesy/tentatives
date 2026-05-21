@@ -21,7 +21,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: parse-new-captures-${{ github.ref }}
+  group: archive-data-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -29,6 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -39,7 +41,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Parse new captures
-        run: python -m ingest.orchestrate --max-sources-per-county 50
+        run: python -m ingest.orchestrate
 
       - name: Commit updated parquet
         run: |
@@ -51,5 +53,11 @@ jobs:
           git config user.email "tentatives-bot@users.noreply.github.com"
           git add data/
           git commit -m "ingest: update rulings.parquet"
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push
+          for attempt in 1 2 3; do
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            if git push; then
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          exit 1

@@ -1,2 +1,2 @@
 COUNTY_SLUG = "nevada"
-PARSER_VERSION = "nevada-discovery-v1"
+PARSER_VERSION = "nevada-v1"

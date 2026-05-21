@@ -1,0 +1,12 @@
+[
+  { "slug": "amador", "label": "Amador" },
+  { "slug": "contra-costa", "label": "Contra Costa" },
+  { "slug": "el-dorado", "label": "El Dorado" },
+  { "slug": "nevada", "label": "Nevada" },
+  { "slug": "orange", "label": "Orange" },
+  { "slug": "placer", "label": "Placer" },
+  { "slug": "san-francisco", "label": "San Francisco" },
+  { "slug": "santa-clara", "label": "Santa Clara" },
+  { "slug": "shasta", "label": "Shasta" },
+  { "slug": "solano", "label": "Solano" }
+]

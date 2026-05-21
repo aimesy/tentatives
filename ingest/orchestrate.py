@@ -12,54 +12,71 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
+import os
 import sys
-from datetime import datetime
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from counties.el_dorado import scraper as el_dorado
-from counties.contra_costa import scraper as contra_costa
-from counties.placer import scraper as placer
+from counties.registry import page_parser_functions, parser_functions
 from schema import Ruling
 
 REPO = Path(__file__).parent.parent
 ARCHIVE = REPO / "archive"
 DATA = REPO / "data"
 
-PARSERS = {
-    "el-dorado": el_dorado.parse,
-    "contra-costa": contra_costa.parse,
-    "placer": placer.parse,
-}
+PARSERS = parser_functions()
+PAGE_PARSERS = page_parser_functions()
 
-PAGE_PARSERS = {
-    "contra-costa": contra_costa.parse_page_capture,
-}
+
+class UnsafeArchivePath(ValueError):
+    pass
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _read_existing_column(parquet_path: Path, column: str) -> set[str]:
+    if not parquet_path.exists():
+        return set()
+    try:
+        table = pq.read_table(parquet_path, columns=[column])
+        return {value for value in table.column(column).to_pylist() if value}
+    except Exception as e:
+        raise RuntimeError(
+            f"refusing to append to unreadable parquet {parquet_path}: {e}"
+        ) from e
 
 
 def existing_ruling_ids(parquet_path: Path) -> set[str]:
-    if not parquet_path.exists():
-        return set()
-    try:
-        table = pq.read_table(parquet_path, columns=["ruling_id"])
-        return set(table.column("ruling_id").to_pylist())
-    except Exception as e:
-        print(f"warning: could not read {parquet_path}: {e}", file=sys.stderr)
-        return set()
+    return _read_existing_column(parquet_path, "ruling_id")
 
 
 def existing_source_shas(parquet_path: Path) -> set[str]:
-    if not parquet_path.exists():
-        return set()
+    return _read_existing_column(parquet_path, "source_sha256")
+
+
+def parser_kwargs(parser, *, source_url: str, source_sha256: str, capture: dict) -> dict:
+    kwargs = {
+        "source_url": source_url,
+        "source_sha256": source_sha256,
+        "dept_hint": capture.get("dept_hint"),
+    }
     try:
-        table = pq.read_table(parquet_path, columns=["source_sha256"])
-        return {sha for sha in table.column("source_sha256").to_pylist() if sha}
-    except Exception as e:
-        print(f"warning: could not read source shas from {parquet_path}: {e}", file=sys.stderr)
-        return set()
+        params = inspect.signature(parser).parameters
+    except (TypeError, ValueError):
+        return kwargs
+    if "division_hint" in params:
+        kwargs["division_hint"] = capture.get("division_hint")
+    if "capture" in params:
+        kwargs["capture"] = capture
+    return kwargs
 
 
 def captures_index(county_dir: Path) -> dict[str, dict]:
@@ -96,6 +113,104 @@ def page_captures(county_dir: Path) -> list[dict]:
     return rows
 
 
+def iter_content_addressed_pdfs(county_archive: Path) -> list[Path]:
+    """Only PDFs under archive/<county>/<two-hex>/<sha>.pdf are parse inputs."""
+    paths: list[Path] = []
+    for prefix_dir in county_archive.iterdir() if county_archive.exists() else []:
+        if not prefix_dir.is_dir() or not re_fullmatch_hex2(prefix_dir.name):
+            continue
+        paths.extend(sorted(prefix_dir.glob("*.pdf")))
+    return sorted(paths)
+
+
+def re_fullmatch_hex2(value: str) -> bool:
+    return len(value) == 2 and all(c in "0123456789abcdef" for c in value.lower())
+
+
+def _unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    for i in range(1, 1000):
+        candidate = path.with_name(f"{path.stem}-{i}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"could not find unique quarantine path for {path}")
+
+
+def quarantine_hash_mismatch(
+    county: str,
+    pdf_path: Path,
+    declared_sha: str,
+    actual_sha: str,
+    dry_run: bool,
+) -> None:
+    print(
+        f"ERROR: hash mismatch at {pdf_path.relative_to(REPO)} "
+        f"(declared {declared_sha}, actual {actual_sha}); skipping",
+        file=sys.stderr,
+    )
+    if dry_run:
+        return
+    quarantine_dir = ARCHIVE / county / "quarantine" / "hash-mismatch"
+    quarantine_dir.mkdir(parents=True, exist_ok=True)
+    quarantine_pdf = _unique_path(quarantine_dir / pdf_path.name)
+    pdf_path.replace(quarantine_pdf)
+    marker = quarantine_pdf.with_suffix(".badsha.json")
+    marker.write_text(
+        json.dumps(
+            {
+                "archive_path": pdf_path.relative_to(REPO).as_posix(),
+                "quarantine_path": quarantine_pdf.relative_to(REPO).as_posix(),
+                "declared_sha256": declared_sha,
+                "actual_sha256": actual_sha,
+                "quarantined_at": utc_now().isoformat(),
+            },
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def resolve_archive_capture_path(county: str, archive_rel: str) -> Path:
+    raw = Path(str(archive_rel))
+    if raw.is_absolute() or raw.anchor:
+        raise UnsafeArchivePath(f"absolute archive_path is not allowed: {archive_rel}")
+    resolved = (REPO / raw).resolve()
+    county_root = (ARCHIVE / county).resolve()
+    pages_root = (ARCHIVE / county / "pages").resolve()
+    try:
+        resolved.relative_to(county_root)
+    except ValueError as e:
+        raise UnsafeArchivePath(f"archive_path escapes county archive: {archive_rel}") from e
+    try:
+        resolved.relative_to(pages_root)
+    except ValueError as e:
+        raise UnsafeArchivePath(f"page capture must live under archive/{county}/pages: {archive_rel}") from e
+    return resolved
+
+
+def write_parquet_atomic(table: pa.Table, parquet_path: Path) -> None:
+    tmp_file = tempfile.NamedTemporaryFile(
+        prefix=f".{parquet_path.name}.",
+        suffix=".tmp",
+        dir=parquet_path.parent,
+        delete=False,
+    )
+    tmp = Path(tmp_file.name)
+    tmp_file.close()
+    try:
+        pq.write_table(table, tmp, compression="zstd")
+        os.replace(tmp, parquet_path)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
 def process_county(
     county: str,
     dry_run: bool = False,
@@ -121,7 +236,7 @@ def process_county(
     captures = captures_index(county_archive)
 
     new_rulings: list[dict] = []
-    pdf_paths = sorted(county_archive.glob("*/*.pdf"))
+    pdf_paths = iter_content_addressed_pdfs(county_archive)
     skipped_existing = 0
     parsed_sources = 0
     for pdf_path in pdf_paths:
@@ -135,11 +250,8 @@ def process_county(
         content = pdf_path.read_bytes()
         actual_sha = hashlib.sha256(content).hexdigest()
         if declared_sha != actual_sha:
-            print(
-                f"WARN: hash mismatch at {pdf_path.relative_to(REPO)} "
-                f"(declared {declared_sha}, actual {actual_sha})",
-                file=sys.stderr,
-            )
+            quarantine_hash_mismatch(county, pdf_path, declared_sha, actual_sha, dry_run)
+            continue
         if actual_sha in seen_source_shas:
             skipped_existing += 1
             continue
@@ -148,9 +260,12 @@ def process_county(
 
         rulings = parser(
             content,
-            source_url=source_url,
-            source_sha256=actual_sha,
-            dept_hint=cap.get("dept_hint"),
+            **parser_kwargs(
+                parser,
+                source_url=source_url,
+                source_sha256=actual_sha,
+                capture=cap,
+            ),
         )
         parsed_sources += 1
         unseen = [r.to_row() for r in rulings if r.ruling_id not in seen_ids]
@@ -174,7 +289,11 @@ def process_county(
             continue
         if not archive_rel:
             continue
-        page_path = REPO / archive_rel
+        try:
+            page_path = resolve_archive_capture_path(county, archive_rel)
+        except UnsafeArchivePath as e:
+            print(f"WARN: skipping unsafe page capture {archive_rel}: {e}", file=sys.stderr)
+            continue
         if not page_path.exists():
             print(f"WARN: missing page capture {archive_rel}", file=sys.stderr)
             continue
@@ -214,7 +333,7 @@ def process_county(
         )
     else:
         combined = new_table
-    pq.write_table(combined, parquet_path, compression="zstd")
+    write_parquet_atomic(combined, parquet_path)
     print(f"  wrote {parquet_path.relative_to(REPO)}")
     return len(new_rulings)
 
@@ -242,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    started = datetime.utcnow()
+    started = utc_now()
     counties = [args.county] if args.county else list(PARSERS)
     total = 0
     for c in counties:
@@ -252,7 +371,7 @@ def main(argv: list[str] | None = None) -> int:
             reparse_existing=args.reparse_existing,
             max_sources=args.max_sources_per_county,
         )
-    elapsed = (datetime.utcnow() - started).total_seconds()
+    elapsed = (utc_now() - started).total_seconds()
     print(f"\ntotal: {total} new rulings in {elapsed:.1f}s")
     return 0
 

@@ -42,7 +42,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: backfill-captures
+  group: archive-data-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -71,6 +71,7 @@ jobs:
           URL_TO_YEAR: ${{ github.event.inputs.url_to_year }}
           LIMIT: ${{ github.event.inputs.limit || (github.event.schedule == '17 11 * * 0' && '50' || '') }}
         run: |
+          set -o pipefail
           args=(--county "$COUNTY" --continue-on-error)
           case "$MODE" in
             live) args+=(--live) ;;
@@ -83,7 +84,11 @@ jobs:
           [ -n "$URL_FROM_YEAR" ] && args+=(--url-from-year "$URL_FROM_YEAR")
           [ -n "$URL_TO_YEAR" ] && args+=(--url-to-year "$URL_TO_YEAR")
           [ -n "$LIMIT" ] && args+=(--limit "$LIMIT")
-          python -m ingest.backfill "${args[@]}"
+          python -m ingest.backfill "${args[@]}" | tee backfill.log
+          if [ "${{ github.event_name }}" = "schedule" ] && ! grep -Eq '^[-[:alnum:]]+: [1-9][0-9]* refs$' backfill.log; then
+            echo "scheduled backfill discovered zero capture refs" >&2
+            exit 1
+          fi
 
       - name: Commit archive updates
         run: |
@@ -95,5 +100,11 @@ jobs:
           git config user.email "tentatives-bot@users.noreply.github.com"
           git add archive/
           git commit -m "archive: backfill captures"
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push
+          for attempt in 1 2 3; do
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            if git push; then
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          exit 1

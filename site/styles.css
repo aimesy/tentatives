@@ -270,6 +270,12 @@ tbody td a:hover { text-decoration: underline; }
   color: var(--fg-2);
 }
 .ftr .pager { display: flex; gap: 6px; align-items: center; }
+.ftr .pager-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+}
+.page-size-select { padding: 3px 6px; }
 
 /* ── Detail drawer ── */
 .drawer {

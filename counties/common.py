@@ -121,10 +121,10 @@ def absolute_url(raw_url: str, page_url: str) -> str:
 
 
 def unique_refs(refs: list[PdfRef]) -> list[PdfRef]:
-    seen: set[tuple[str, str | None]] = set()
+    seen: set[tuple[str, str | None, str | None, str | None]] = set()
     out: list[PdfRef] = []
     for ref in refs:
-        key = (ref.url, ref.wayback_ts)
+        key = (ref.url, ref.wayback_ts, ref.dept_hint, ref.division_hint)
         if key in seen:
             continue
         seen.add(key)

@@ -81,6 +81,10 @@ h2 {
   font-size: 13px;
   margin: 4px 0 12px;
 }
+.supported-sites {
+  padding-left: 18px;
+  margin: 0;
+}
 
 .warn {
   background: rgba(178, 106, 0, 0.08);

@@ -12,7 +12,7 @@ captures.ndjson, and the rulings parse once.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 
@@ -24,6 +24,10 @@ OUTCOME_CHOICES = (
     "off_calendar",
     "other",
 )
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -73,9 +77,9 @@ class Ruling:
     page_end: int
     source_sha256: str      # FK → Capture.source_sha256
     source_url: str         # canonical court URL of the source PDF
+    parser_version: str
     style: str = ""         # e.g. "probate-dept-header", "lawandmotion-calendar"
-    parser_version: str = "el-dorado-v2"
-    ingest_ts: datetime = field(default_factory=datetime.utcnow)
+    ingest_ts: datetime = field(default_factory=utc_now)
 
     def to_row(self) -> dict[str, Any]:
         d = asdict(self)
