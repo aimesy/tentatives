@@ -144,26 +144,31 @@ async function fetchAndParse(county) {
   const root = await resolveDataRoot();
   const url = `${root}/${county.slug}/rulings.parquet`;
   setStage(county.label, "downloading...", "active");
-  let head;
+  let res;
   try {
-    head = await fetch(url, { method: "HEAD" });
+    res = await fetch(url);
   } catch (e) {
     setStage(county.label, `network error: ${e.message || e}`, "err");
     return [];
   }
-  if (head.status === 404) {
+  if (res.status === 404) {
     setStage(county.label, "no data yet", "done");
     return [];
   }
-  if (!head.ok) {
-    setStage(county.label, `HTTP ${head.status}`, "err");
+  if (!res.ok) {
+    setStage(county.label, `HTTP ${res.status}`, "err");
     return [];
   }
-  const { asyncBufferFromUrl, parquetReadObjects } = await loadParquetModule();
-  // asyncBufferFromUrl lets hyparquet do range requests; for these county
-  // parquets this is mostly equivalent to slurping the whole thing, but is
-  // future-proof if a county's file grows.
-  const file = await asyncBufferFromUrl({ url });
+  // Fetch the full file rather than relying on HEAD + Range. GitHub Pages
+  // applies transport encoding to .parquet, so a HEAD Content-Length can
+  // disagree with the decoded body length, which makes hyparquet slice
+  // the wrong bytes and fail with "footer != PAR1".
+  const buffer = await res.arrayBuffer();
+  const { parquetReadObjects } = await loadParquetModule();
+  const file = {
+    byteLength: buffer.byteLength,
+    async slice(start, end) { return buffer.slice(start, end); },
+  };
   setStage(county.label, "parsing...", "active");
   const rows = await parquetReadObjects({ file });
   setStage(county.label, `${rows.length.toLocaleString()} rulings`, "done");
