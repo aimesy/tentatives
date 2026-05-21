@@ -20,22 +20,152 @@ Parser support means archived material is converted into normalized rows in `dat
 | Contra Costa | yes | yes | PDFs, archive pages, and changed HTML page captures for ruling pages and probate calendar notes. |
 | El Dorado | yes | yes | Probate, civil law and motion, probate calendar, and family law PDF styles. |
 | Placer | yes | yes | Civil law and motion PDFs. |
-| Amador | yes | no | Legacy dropdown PDFs. Current post-02/15/2022 access appears portal-based. |
+| Amador | yes | yes | Legacy dropdown PDFs from public archive/Wayback sources. Current post-02/15/2022 access appears portal-based. |
 | Calaveras | yes | no | Case-management and civil law-and-motion PDFs. |
 | Fresno | yes | no | Law and Motion department PDFs. |
 | Merced | yes | no | Weekday civil law-and-motion PDFs. |
-| Nevada | yes | no | Static ruling page. Word documents are not yet archived. |
-| Orange | yes | no | Stable current PDF URLs; changed hashes matter. |
+| Nevada | yes | yes | Static ruling page. Word documents are not yet archived. |
+| Orange | yes | yes | Stable current PDF URLs; changed hashes matter. |
 | Plumas | yes | no | Department 2 PDFs. |
 | Riverside | yes | no | Regional and department PDF links. |
 | San Bernardino | yes | no | Legacy civil table. |
-| San Francisco | yes | no | UFC family-law PDFs. Main SF civil work remains in `aimesy/sfsc-tentatives`. |
-| Santa Clara | yes | no | Department PDF pages; changed hashes matter. |
-| Shasta | yes | no | Department PDFs; changed hashes matter. |
-| Solano | yes | no | Civil and probate department PDFs. |
+| San Francisco | yes | yes | UFC family-law PDFs. Main SF civil work remains in `aimesy/sfsc-tentatives`. |
+| Santa Clara | yes | yes | Department PDF pages; changed hashes matter. |
+| Shasta | yes | yes | Department PDFs; changed hashes matter. |
+| Solano | yes | yes | Civil and probate department PDFs. |
 | Tuolumne | yes | no | Tentative rulings and Case Notes. |
 
 See [docs/county-plans.md](docs/county-plans.md) for the broader county triage.
+
+## Parsed Date Coverage
+
+This section reflects normalized rows in `data/<county>/rulings.parquet`.
+Capture-only counties can have archived PDFs without appearing here.
+
+<details>
+<summary>Amador - 11 rulings across 2 PDFs</summary>
+
+| Division | Department | First hearing date | Last hearing date | Rows |
+|---|---:|---:|---:|---:|
+| Civil Case Management Conference | 3 | 2015-09-21 | 2015-09-21 | 8 |
+| Civil Law and Motion | 1 | 2022-04-11 | 2022-04-11 | 3 |
+
+</details>
+
+<details>
+<summary>Nevada - 589 rulings across 60 PDFs</summary>
+
+| Division | Department | First hearing date | Last hearing date | Rows |
+|---|---:|---:|---:|---:|
+| Case Management | 6 | 2026-03-02 | 2026-05-18 | 165 |
+| Case Management | A | 2026-02-20 | 2026-04-17 | 32 |
+| Case Management | Unspecified | 2026-03-09 | 2026-05-18 | 59 |
+| Guardianship | 3 | 2026-05-07 | 2026-05-07 | 15 |
+| Guardianship | A | 2026-01-26 | 2026-01-26 | 3 |
+| Law and Motion | 4 | 2026-03-13 | 2026-03-13 | 1 |
+| Law and Motion | 5 | 2026-04-03 | 2026-04-03 | 1 |
+| Law and Motion | 6 | 2026-04-24 | 2026-05-22 | 7 |
+| Law and Motion | A | 2026-01-12 | 2026-05-11 | 3 |
+| Law and Motion | Unspecified | 2026-01-12 | 2026-05-22 | 154 |
+| Probate | 6 | 2026-03-06 | 2026-05-22 | 107 |
+| Probate | A | 2026-05-11 | 2026-05-11 | 1 |
+| Probate | Unspecified | 2026-01-12 | 2026-05-15 | 41 |
+
+</details>
+
+<details>
+<summary>Orange - 296 rulings across 36 PDFs</summary>
+
+| Division | Department | First hearing date | Last hearing date | Rows |
+|---|---:|---:|---:|---:|
+| Civil | C11 | 2026-05-18 | 2026-05-18 | 11 |
+| Civil | C12 | 2026-05-15 | 2026-05-15 | 12 |
+| Civil | C13 | 2026-05-15 | 2026-05-15 | 8 |
+| Civil | C15 | 2026-05-18 | 2026-05-18 | 15 |
+| Civil | C23 | 2026-05-14 | 2026-05-21 | 29 |
+| Civil | C25 | 2026-05-19 | 2026-05-19 | 11 |
+| Civil | C26 | 2026-01-30 | 2026-01-30 | 1 |
+| Civil | C27 | 2026-05-18 | 2026-05-18 | 2 |
+| Civil | C28 | 2026-05-18 | 2026-05-18 | 11 |
+| Civil | C32 | 2026-05-19 | 2026-05-19 | 13 |
+| Civil | C33 | 2026-05-14 | 2026-05-21 | 22 |
+| Civil | C34 | 2026-05-21 | 2026-05-21 | 9 |
+| Civil | C44 | 2026-05-07 | 2026-05-07 | 8 |
+| Civil | CM2 | 2026-05-21 | 2026-05-21 | 14 |
+| Civil | CX101 | 2026-05-22 | 2026-05-22 | 8 |
+| Civil | CX103 | 2026-05-18 | 2026-05-18 | 17 |
+| Civil | CX105 | 2026-05-14 | 2026-05-21 | 26 |
+| Civil | N14 | 2026-05-18 | 2026-05-18 | 9 |
+| Civil | N15 | 2026-05-18 | 2026-05-18 | 18 |
+| Civil | N17 | 2026-05-18 | 2026-05-18 | 2 |
+| Civil | Unspecified | 2025-10-24 | 2026-05-20 | 9 |
+| Civil | W15 | 2026-05-21 | 2026-05-21 | 11 |
+| Family Law | C22 | 2025-12-05 | 2025-12-05 | 3 |
+| Probate | C10 | 2026-05-21 | 2026-05-21 | 1 |
+| Probate | C21 | 2026-05-15 | 2026-05-15 | 9 |
+| Probate | CM04 | 2026-01-16 | 2026-01-16 | 1 |
+| Probate | CM05 | 2026-05-20 | 2026-05-20 | 2 |
+| Probate | CM06 | 2026-05-14 | 2026-05-14 | 2 |
+| Probate | CM08 | 2026-05-20 | 2026-05-20 | 8 |
+| Probate | CM3 | 2026-05-06 | 2026-05-06 | 1 |
+| Probate | Unspecified | 2026-05-20 | 2026-05-20 | 3 |
+
+</details>
+
+<details>
+<summary>San Francisco - 175 rulings across 23 PDFs</summary>
+
+| Division | Department | First hearing date | Last hearing date | Rows |
+|---|---:|---:|---:|---:|
+| Family Law | 403 | 2026-04-21 | 2026-05-21 | 90 |
+| Family Law | 404 | 2026-04-21 | 2026-05-21 | 82 |
+| Family Law | 414 | 2026-03-26 | 2026-05-07 | 3 |
+
+</details>
+
+<details>
+<summary>Santa Clara - 73 rulings across 12 PDFs</summary>
+
+| Division | Department | First hearing date | Last hearing date | Rows |
+|---|---:|---:|---:|---:|
+| Civil Law and Motion | 10 | 2026-05-19 | 2026-05-21 | 11 |
+| Civil Law and Motion | 12 | 2026-05-15 | 2026-05-20 | 11 |
+| Civil Law and Motion | 13 | 2026-05-08 | 2026-05-20 | 17 |
+| Civil Law and Motion | 6 | 2026-05-19 | 2026-05-21 | 13 |
+| Law and Motion | 1 | 2026-05-19 | 2026-05-21 | 17 |
+| Probate Law and Motion | 2 | 2026-05-07 | 2026-05-18 | 4 |
+
+</details>
+
+<details>
+<summary>Shasta - 133 rulings across 9 PDFs</summary>
+
+| Division | Department | First hearing date | Last hearing date | Rows |
+|---|---:|---:|---:|---:|
+| Civil / Probate / Family Law | 24 | 2024-06-10 | 2024-06-10 | 1 |
+| Civil / Probate / Family Law | 42 | 2026-05-04 | 2026-05-18 | 19 |
+| Civil / Probate / Family Law | 6 | 2023-05-22 | 2023-05-22 | 1 |
+| Conservatorships | 44 | 2026-05-18 | 2026-05-18 | 46 |
+| Law and Motion | 53 | 2022-06-06 | 2022-06-06 | 9 |
+| Law and Motion | 63 | 2026-05-18 | 2026-05-18 | 26 |
+| Law and Motion | 64 | 2026-05-18 | 2026-05-18 | 22 |
+| Law and Motion | Unspecified | 2026-05-01 | 2026-05-01 | 3 |
+| Trusts | 44 | 2026-05-18 | 2026-05-18 | 6 |
+
+</details>
+
+<details>
+<summary>Solano - 37 rulings across 7 PDFs</summary>
+
+| Division | Department | First hearing date | Last hearing date | Rows |
+|---|---:|---:|---:|---:|
+| Civil | 3 | 2026-05-19 | 2026-05-22 | 5 |
+| Civil | 7 | 2026-05-19 | 2026-05-22 | 12 |
+| Civil | 8 | 2026-05-21 | 2026-05-21 | 5 |
+| Probate / Civil | 22 | 2026-05-21 | 2026-05-21 | 14 |
+| Probate / Civil | 5 | 2025-12-23 | 2025-12-23 | 1 |
+
+</details>
 
 ## How It Works
 
