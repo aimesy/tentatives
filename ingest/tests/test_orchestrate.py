@@ -47,7 +47,7 @@ def _patch_roots(monkeypatch, tmp_path):
 def test_write_parquet_atomic_preserves_existing_on_failure(tmp_path, monkeypatch):
     parquet_path = tmp_path / "rulings.parquet"
     original = pa.table({"ruling_id": ["old"], "source_sha256": ["a" * 64]})
-    pq.write_table(original, parquet_path, compression="zstd")
+    pq.write_table(original, parquet_path, compression="NONE")
     original_bytes = parquet_path.read_bytes()
 
     def fail_write(table, path, compression):

@@ -85,13 +85,10 @@ let parquetModulePromise = null;
 async function loadParquetModule() {
   if (!parquetModulePromise) {
     setStage("Engine", "loading parquet reader...", "active");
-    // Vendored browser modules keep the published viewer self-contained.
-    parquetModulePromise = Promise.all([
-      import("./vendor/hyparquet-1.18.1/src/index.js"),
-      import("./vendor/hyparquet-compressors-1.1.1.esm.js"),
-    ]).then(([parquet, compressorMod]) => {
+    // Published Parquet files are uncompressed so CSP can stay free of WASM/eval.
+    parquetModulePromise = import("./vendor/hyparquet-1.18.1/src/index.js").then((parquet) => {
       setStage("Engine", "ready", "done");
-      return { ...parquet, compressors: compressorMod.compressors };
+      return parquet;
     });
   }
   return parquetModulePromise;
@@ -162,13 +159,13 @@ async function fetchAndParse(county) {
     setStage(county.label, `HTTP ${head.status}`, "err");
     return [];
   }
-  const { asyncBufferFromUrl, parquetReadObjects, compressors } = await loadParquetModule();
-  // asyncBufferFromUrl lets hyparquet do range requests; for our small (<1MB)
+  const { asyncBufferFromUrl, parquetReadObjects } = await loadParquetModule();
+  // asyncBufferFromUrl lets hyparquet do range requests; for these county
   // parquets this is mostly equivalent to slurping the whole thing, but is
   // future-proof if a county's file grows.
   const file = await asyncBufferFromUrl({ url });
   setStage(county.label, "parsing...", "active");
-  const rows = await parquetReadObjects({ file, compressors });
+  const rows = await parquetReadObjects({ file });
   setStage(county.label, `${rows.length.toLocaleString()} rulings`, "done");
   return rows;
 }
