@@ -232,7 +232,11 @@ def process_county(
         print(f"no archive at {county_archive}")
         return 0
 
-    seen_ids = existing_ruling_ids(parquet_path)
+    # When the caller asks for a full reparse we want the new parser output to
+    # *replace* what's on disk, not append on top. Reset both gates so every
+    # PDF gets parsed and every ruling row gets emitted; we also skip the
+    # existing-table merge below.
+    seen_ids = set() if reparse_existing else existing_ruling_ids(parquet_path)
     seen_source_shas = set() if reparse_existing else existing_source_shas(parquet_path)
     captures = captures_index(county_archive)
 
@@ -323,10 +327,11 @@ def process_county(
         print("  (dry-run; not writing)")
         return len(new_rulings)
 
-    # Append to (or create) the parquet file.
+    # Append to (or create) the parquet file. With reparse_existing we want a
+    # full replacement, so skip the merge and write `new_rulings` straight out.
     county_data.mkdir(parents=True, exist_ok=True)
     new_table = pa.Table.from_pylist(new_rulings)
-    if parquet_path.exists():
+    if parquet_path.exists() and not reparse_existing:
         existing_table = pq.read_table(parquet_path)
         # Align schemas - new_table may have null cols where existing has typed
         combined = pa.concat_tables(

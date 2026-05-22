@@ -70,6 +70,17 @@ def _dept_from_landing_url(url: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _dept_from_pdf_filename(url: str) -> str | None:
+    """Pull dept from EDC PDF filenames like '.../tr-d-09-2026-05-18.pdf'.
+
+    Captures with no landing page (Wayback, direct PDF) lose the
+    `_dept_from_landing_url` hint, but the dept is often baked into the
+    filename itself for the published civil tentative rulings.
+    """
+    m = re.search(r"/tr-d-0?(\d{1,3})-", url)
+    return m.group(1) if m else None
+
+
 def discover_live(html: str, page_url: str | None = None, base_url: str = BASE) -> list[PdfRef]:
     """Extract PDF links from a dept landing page's HTML.
 
@@ -242,11 +253,18 @@ class _DocMeta:
 def _extract_doc_meta(page1_text: str, dept_hint: str | None) -> _DocMeta:
     """Pull hearing date, division, dept from the first ~6 lines of page 1."""
     head = "\n".join(page1_text.splitlines()[:8])
+    style = _detect_style(head)
+    # Style B (LAW AND MOTION CALENDAR) and Style C (PROBATE CALENDAR) never
+    # print the dept in the header — by court convention they're Dept 4.
+    style_default_dept = {
+        "lawandmotion-calendar": "4",
+        "probate-calendar": "4",
+    }.get(style)
     return _DocMeta(
         hearing_date=_parse_long_date(head),
         division=_detect_division(head),
-        dept=_detect_dept_in_header(head) or dept_hint,
-        style=_detect_style(head),
+        dept=_detect_dept_in_header(head) or dept_hint or style_default_dept,
+        style=style,
     )
 
 
@@ -460,6 +478,7 @@ def parse(
     if not raw_pages:
         return []
 
+    dept_hint = dept_hint or _dept_from_pdf_filename(source_url or "")
     meta = _extract_doc_meta(raw_pages[0], dept_hint)
     if meta.hearing_date is None:
         return []  # if we can't find a date, this isn't a tentatives PDF we recognise

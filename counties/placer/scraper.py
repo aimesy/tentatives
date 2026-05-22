@@ -243,23 +243,69 @@ def _classify(text: str) -> tuple[str, bool, date | None]:
     return outcome, conditional, continued_to
 
 
+_PROCEDURAL_PREFIX_RE = re.compile(
+    r"""^(?:
+        (?:Plaintiffs?|Defendants?|Petitioners?|Respondents?|Cross[- ]?(?:plaintiff|defendant|complainant)s?
+           |Movants?|Counsel|The\s+parties|All\s+parties)
+        \s+(?:is|are)\s+advised\b
+      | This\s+tentative\s+ruling\s+is\s+issued\s+by\b
+      | If\s+oral\s+argument\s+is\s+timely\s+requested\b
+      | The\s+Court\s+(?:has|hereby)?\s*issues?\s+the\s+following\s+tentative\b
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _is_procedural(paragraph: str) -> bool:
+    """True if `paragraph` is boilerplate that precedes the actual motion type.
+
+    The Placer L&M PDFs sometimes lead with a notice like
+    "Defendants are advised the notice of motion must include notice of the
+    court's tentative ruling procedures." or
+    "This tentative ruling is issued by the Honorable ...".
+    These belong in the body, not the motion-type slot.
+    """
+    return bool(_PROCEDURAL_PREFIX_RE.match(paragraph.lstrip()))
+
+
+def _paragraphs(text: str) -> list[tuple[str, int, int]]:
+    """Split text into (paragraph, start_line, end_line) tuples by blank lines."""
+    lines = text.splitlines()
+    paragraphs: list[tuple[str, int, int]] = []
+    i = 0
+    while i < len(lines):
+        while i < len(lines) and not lines[i].strip():
+            i += 1
+        start = i
+        chunk: list[str] = []
+        while i < len(lines) and lines[i].strip():
+            chunk.append(lines[i].strip())
+            i += 1
+        if chunk:
+            paragraphs.append((" ".join(chunk).strip(), start, i))
+    return paragraphs
+
+
 def _split_motion_and_body(text: str) -> tuple[str, str]:
     """Given text after the ruling-header line, identify the motion-type line(s)
-    (everything up to the first blank-line gap) and the body (the rest)."""
+    (the first non-procedural paragraph) and the body (everything after it)."""
+    paragraphs = _paragraphs(text)
+    if not paragraphs:
+        return "", ""
     lines = text.splitlines()
-    # Skip leading blanks.
-    i = 0
-    while i < len(lines) and not lines[i].strip():
-        i += 1
-    motion_lines: list[str] = []
-    while i < len(lines) and lines[i].strip():
-        motion_lines.append(lines[i].strip())
-        i += 1
-    # Skip blanks before body.
-    while i < len(lines) and not lines[i].strip():
-        i += 1
-    body = "\n".join(lines[i:]).strip()
-    return " ".join(motion_lines).strip(), body
+    # Find the first paragraph that isn't procedural boilerplate. Fall back to
+    # the first one if every leading paragraph is boilerplate (so we still emit
+    # *something* in motion_type rather than blanking the field).
+    chosen_idx = 0
+    for idx, (para, _, _) in enumerate(paragraphs):
+        if not _is_procedural(para):
+            chosen_idx = idx
+            break
+    motion = paragraphs[chosen_idx][0]
+    body_start = paragraphs[chosen_idx][2]
+    body = "\n".join(lines[body_start:]).strip()
+    return motion, body
 
 
 def parse(

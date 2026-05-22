@@ -164,11 +164,52 @@ CASE_NUMBER_LINE_RE = re.compile(
 
 # Other ruling-header attribute lines (in any order, all optional).
 CASE_NAME_RE = re.compile(r"^\s*CASE\s+NAME:\s*(?P<title>.+?)\s*$", re.MULTILINE | re.IGNORECASE)
+
+# Hearing description. Patterns observed in CCC PDFs:
+#   "HEARING ON DEMURRER TO: <X>"
+#   "HEARING ON MOTION IN RE: <X>"
+#   "HEARING ON MOTION FOR ... RE: <X>"
+#   "HEARING ON MINOR'S COMPROMISE RE: <X>"
+#   "HEARING ON SUMMARY MOTION" (no colon — the FILED BY line follows)
+# We capture <action> (before the colon, with the optional "IN RE"/"RE"
+# separator stripped) and <target> (after the colon). The two are joined
+# downstream into the motion_type — "MOTION + TO STRIKE ..." → "MOTION TO
+# STRIKE ...". `[^:\n]+?` (rather than the old `[^:]*`) keeps the match
+# bounded to a single line so "HEARING ON SUMMARY MOTION\nFILED BY: <PARTY>"
+# stops capturing before the FILED BY line — previously the party name leaked
+# into motion_type.
 HEARING_DESCRIPTION_RE = re.compile(
-    r"^\s*\*?\s*HEARING\s+(?:ON|IN\s+RE)[^:]*:\s*(?P<desc>.+?)\s*$",
+    r"^\s*\*?\s*HEARING\s+ON\s+(?P<action>[^:\n]+?)"
+    r"(?:\s+IN\s+RE|\s+RE)?"
+    r"(?:\s*:\s*(?P<target>[^\n]+?))?\s*$",
     re.MULTILINE | re.IGNORECASE,
 )
 FILED_BY_RE = re.compile(r"^\s*FILED\s+BY:\s*(?P<party>.*)$", re.MULTILINE | re.IGNORECASE)
+
+
+def _motion_from_hearing(hearing_m: "re.Match[str] | None") -> str:
+    """Combine the action and target groups into a single motion_type string.
+
+    Handles two stitching artifacts:
+      - "DEMURRER TO" + "TO 2ND AMENDED CROSS-COMPLAINT" → drop the duplicate
+        "TO" so the result reads "DEMURRER TO 2ND AMENDED CROSS-COMPLAINT".
+      - Trailing dangling prepositions ("TO", "FOR", "IN") on the target are
+        artifacts of mid-phrase line wraps and add no information; strip them.
+    """
+    if not hearing_m:
+        return ""
+    action = (hearing_m.group("action") or "").strip()
+    target = (hearing_m.group("target") or "").strip()
+    if action and target:
+        action_words = action.split()
+        target_words = target.split()
+        if action_words and target_words and action_words[-1].upper() == target_words[0].upper():
+            target_words = target_words[1:]
+        while target_words and target_words[-1].upper() in {"TO", "FOR", "IN", "OF", "RE"}:
+            target_words.pop()
+        target = " ".join(target_words)
+        return f"{action} {target}".strip()
+    return action or target
 
 # Section markers - "Law & Motion", "Law & Motion Add On", "Probate", etc.
 SECTION_HEADER_RE = re.compile(
@@ -357,7 +398,7 @@ def parse(
         filed_m = FILED_BY_RE.search(post_case)
 
         case_title = title_m.group("title").strip() if title_m else ""
-        motion_type = hearing_m.group("desc").strip() if hearing_m else ""
+        motion_type = _motion_from_hearing(hearing_m)
         filed_by = filed_m.group("party").strip() if filed_m else ""
 
         # Disposition runs from after this anchor's line-end to the next anchor's CASE NUMBER line.

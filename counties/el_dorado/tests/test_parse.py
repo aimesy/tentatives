@@ -183,6 +183,46 @@ def test_ruling_ids_stable_and_unique(fixture):
     assert [r.ruling_id for r in a] == [r.ruling_id for r in b], "ruling_ids must be stable across parses"
 
 
+# ---------------------------------------------------------------- dept fallbacks
+# Style B/C PDFs from the wild rarely carry a dept_hint (no landing page), so
+# the parser has to recover the dept from the source_url filename or fall back
+# to the court convention (dept 4 for both Law and Motion / Probate Calendar).
+
+
+def test_dept_falls_back_to_source_url_filename():
+    """For tr-d-NN-... PDFs we lift the dept from the filename."""
+    rulings = parse_file(
+        str(FIXTURE_DIR / "tr-d-09-2026-05-18.pdf"),
+        source_url="https://www.eldorado.courts.ca.gov/system/files/tentative-rulings/tr-d-09-2026-05-18.pdf",
+        # no dept_hint
+    )
+    assert rulings
+    assert all(r.dept == "9" for r in rulings)
+
+
+def test_dept_falls_back_to_style_for_law_and_motion_calendar():
+    """No filename hint and no header dept -> default to dept 4 by convention."""
+    rulings = parse_file(
+        str(FIXTURE_DIR / "lawandmotionmay152026.pdf"),
+        source_url="https://example.com/some-other-filename.pdf",
+        # no dept_hint
+    )
+    assert rulings
+    assert all(r.dept == "4" for r in rulings)
+    assert all(r.style == "lawandmotion-calendar" for r in rulings)
+
+
+def test_dept_falls_back_to_style_for_probate_calendar():
+    rulings = parse_file(
+        str(FIXTURE_DIR / "probatemay152026.pdf"),
+        source_url="https://example.com/some-other-filename.pdf",
+        # no dept_hint
+    )
+    assert rulings
+    assert all(r.dept == "4" for r in rulings)
+    assert all(r.style == "probate-calendar" for r in rulings)
+
+
 @pytest.mark.parametrize("fixture", [
     "tr-d-09-2026-05-18.pdf",
     "lawandmotionmay152026.pdf",
