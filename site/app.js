@@ -14,7 +14,7 @@ const DEFAULT_COUNTIES = [
 
 let KNOWN_COUNTIES = DEFAULT_COUNTIES;
 let COUNTY_LABEL = Object.fromEntries(KNOWN_COUNTIES.map((c) => [c.slug, c.label]));
-const FILTER_IDS = ["q", "county", "dept", "outcome", "from", "to"];
+const FILTER_IDS = ["q", "dept", "outcome", "from", "to"];
 const SEARCH_FIELDS = [
   "case_number",
   "case_title",
@@ -42,12 +42,16 @@ const state = {
   filtered: [],
   filters: {
     q: "",
-    county: "",
     dept: "",
     outcome: "",
     from: "",
     to: "",
   },
+  // Counties currently loaded into state.rows (slug -> rows[]). Used so we can
+  // remove a county's rows when the user unticks it without re-fetching the
+  // others. Default: empty - users opt in per county.
+  loadedCounties: new Map(),
+  selectedCounties: new Set(),
   sort: { col: "hearing_date", dir: "desc" },
   page: 1,
   pageSize: 100,
@@ -187,37 +191,42 @@ function normalizeRow(row) {
   return { ...row, _search: searchTextForRow(row) };
 }
 
-async function loadAll() {
-  await loadCountyManifest();
-  setStage("Discover", "checking county parquets in parallel", "active");
-  const batches = await Promise.all(KNOWN_COUNTIES.map(async (county) => {
+async function ensureCountiesLoaded() {
+  const wanted = new Set(state.selectedCounties);
+  const toAdd = [...wanted].filter((slug) => !state.loadedCounties.has(slug));
+  const toRemove = [...state.loadedCounties.keys()].filter((slug) => !wanted.has(slug));
+
+  for (const slug of toRemove) {
+    state.loadedCounties.delete(slug);
+    const stage = $(`stage-${COUNTY_LABEL[slug] || slug}`);
+    if (stage) stage.remove();
+  }
+
+  const batches = await Promise.all(toAdd.map(async (slug) => {
+    const county = KNOWN_COUNTIES.find((c) => c.slug === slug);
+    if (!county) return [slug, []];
     try {
       const rows = await fetchAndParse(county);
-      return rows;
+      return [slug, rows.map(normalizeRow)];
     } catch (e) {
-      console.error(`Failed to load ${county.slug}:`, e);
+      console.error(`Failed to load ${slug}:`, e);
       setStage(county.label, `error: ${e.message || e}`, "err");
-      return [];
+      return [slug, []];
     }
   }));
-  let total = 0;
-  for (const rows of batches) {
-    // Normalize: hearing_date stored as string ISO; keep as-is for sort.
-    state.rows.push(...rows.map(normalizeRow));
-    total += rows.length;
-  }
-  setStage("Discover", `${total.toLocaleString()} total rulings`, "done");
-  return total;
+  for (const [slug, rows] of batches) state.loadedCounties.set(slug, rows);
+
+  state.rows = [];
+  for (const rows of state.loadedCounties.values()) state.rows.push(...rows);
 }
 
 // ============================================================ FILTER & SORT
 
 function applyFilters() {
-  const { q, county, dept, outcome, from, to } = state.filters;
+  const { q, dept, outcome, from, to } = state.filters;
   const needle = q.trim().toLowerCase();
 
   state.filtered = state.rows.filter((r) => {
-    if (county && r.county !== county) return false;
     if (dept && String(r.dept ?? "") !== dept) return false;
     if (outcome && r.outcome !== outcome) return false;
     if (from && (r.hearing_date || "") < from) return false;
@@ -268,9 +277,11 @@ function render() {
   if (slice.length === 0) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 8;
+    cell.colSpan = 9;
     cell.className = "empty";
-    cell.textContent = "No rulings match the current filters.";
+    cell.textContent = state.selectedCounties.size === 0
+      ? "Pick one or more counties above to load rulings."
+      : "No rulings match the current filters.";
     row.appendChild(cell);
     fragment.appendChild(row);
   } else {
@@ -293,9 +304,15 @@ function render() {
     }
   }
 
-  $("stats").textContent =
-    `${state.rows.length.toLocaleString()} rulings | ` +
-    `${new Set(state.rows.map((r) => r.county)).size} counties`;
+  if (state.rows.length === 0) {
+    $("stats").textContent = state.selectedCounties.size === 0
+      ? "no counties selected"
+      : "loading...";
+  } else {
+    $("stats").textContent =
+      `${state.rows.length.toLocaleString()} rulings | ` +
+      `${new Set(state.rows.map((r) => r.county)).size} counties`;
+  }
 }
 
 function appendCell(row, text, className = "") {
@@ -348,8 +365,9 @@ function sourceLabel(r) {
 function renderRow(r, idx) {
   const row = document.createElement("tr");
   row.dataset.idx = String(idx);
-  appendCell(row, COUNTY_LABEL[r.county] || r.county || "");
-  appendCell(row, r.dept || "");
+  const countyCell = appendCell(row, COUNTY_LABEL[r.county] || r.county || "", "col-county");
+  countyCell.title = COUNTY_LABEL[r.county] || r.county || "";
+  appendCell(row, r.dept || "", "col-dept");
   appendCell(row, r.hearing_date || "");
   appendCell(row, r.case_number || "", "case");
   const title = appendCell(row, r.case_title || "", "title");
@@ -368,6 +386,10 @@ function renderRow(r, idx) {
     cond.textContent = "cond.";
     outcomeCell.appendChild(cond);
   }
+
+  const previewText = (r.outcome_text || r.body_text || r.full_text || "").trim();
+  const textCell = appendCell(row, previewText, "text-preview");
+  if (previewText) textCell.title = previewText.slice(0, 600);
 
   const sourceCell = appendCell(row, "");
   const pdf = pdfHref(r);
@@ -440,16 +462,12 @@ function closeDrawer() {
 // ============================================================ POPULATE FILTERS
 
 function populateFilters() {
-  const counties = new Set();
   const depts = new Set();
   const outcomes = new Set();
   for (const r of state.rows) {
-    if (r.county)  counties.add(r.county);
     if (r.dept)    depts.add(String(r.dept));
     if (r.outcome) outcomes.add(r.outcome);
   }
-  fillSelect("county",
-    [...counties].sort().map((c) => ({ v: c, t: COUNTY_LABEL[c] || c })));
   fillSelect("dept",
     [...depts].sort((a, b) => {
       const an = Number(a), bn = Number(b);
@@ -469,7 +487,7 @@ function fillSelect(id, items) {
   if (current && !values.has(current)) {
     const opt = document.createElement("option");
     opt.value = current;
-    opt.textContent = id === "county" ? (COUNTY_LABEL[current] || current) : current;
+    opt.textContent = current;
     sel.appendChild(opt);
   }
   for (const { v, t } of items) {
@@ -480,10 +498,62 @@ function fillSelect(id, items) {
   }
 }
 
+// ============================================================ COUNTIES PICKER
+
+function buildCountiesPicker() {
+  const list = $("counties-list");
+  list.replaceChildren();
+  for (const county of KNOWN_COUNTIES) {
+    const li = document.createElement("li");
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = county.slug;
+    cb.checked = state.selectedCounties.has(county.slug);
+    cb.addEventListener("change", () => {
+      if (cb.checked) state.selectedCounties.add(county.slug);
+      else state.selectedCounties.delete(county.slug);
+      refreshFromSelection();
+    });
+    const text = document.createElement("span");
+    text.textContent = county.label;
+    label.append(cb, text);
+    li.appendChild(label);
+    list.appendChild(li);
+  }
+  updateCountiesSummary();
+}
+
+function updateCountiesSummary() {
+  const n = state.selectedCounties.size;
+  const total = KNOWN_COUNTIES.length;
+  const summary = $("counties-summary");
+  if (n === 0) summary.textContent = "none";
+  else if (n === total) summary.textContent = "all";
+  else if (n <= 2) {
+    summary.textContent = [...state.selectedCounties]
+      .map((s) => COUNTY_LABEL[s] || s).join(", ");
+  } else {
+    summary.textContent = `${n} selected`;
+  }
+}
+
+async function refreshFromSelection() {
+  updateCountiesSummary();
+  await ensureCountiesLoaded();
+  populateFilters();
+  applyFilters();
+}
+
 // ============================================================ URL SYNC
 
 function syncUrl() {
   const params = new URLSearchParams();
+  if (state.selectedCounties.size > 0) {
+    const all = KNOWN_COUNTIES.length;
+    if (state.selectedCounties.size === all) params.set("counties", "all");
+    else params.set("counties", [...state.selectedCounties].sort().join(","));
+  }
   for (const k of FILTER_IDS) {
     const v = state.filters[k];
     if (v) params.set(k, v);
@@ -510,6 +580,17 @@ function readUrl() {
     const [col, dir] = sort.split(":");
     if (SORT_COLUMNS.has(col) && SORT_DIRECTIONS.has(dir)) {
       state.sort = { col, dir };
+    }
+  }
+  const counties = params.get("counties");
+  if (counties) {
+    const known = new Set(KNOWN_COUNTIES.map((c) => c.slug));
+    if (counties === "all") {
+      for (const c of known) state.selectedCounties.add(c);
+    } else {
+      for (const slug of counties.split(",")) {
+        if (known.has(slug)) state.selectedCounties.add(slug);
+      }
     }
   }
 }
@@ -552,6 +633,17 @@ function wire() {
     for (const k of FILTER_IDS) state.filters[k] = "";
     pushFiltersToUI();
     applyFilters();
+  });
+
+  $("counties-all").addEventListener("click", () => {
+    for (const c of KNOWN_COUNTIES) state.selectedCounties.add(c.slug);
+    for (const cb of $("counties-list").querySelectorAll("input[type=checkbox]")) cb.checked = true;
+    refreshFromSelection();
+  });
+  $("counties-none").addEventListener("click", () => {
+    state.selectedCounties.clear();
+    for (const cb of $("counties-list").querySelectorAll("input[type=checkbox]")) cb.checked = false;
+    refreshFromSelection();
   });
 
   $("permalink").addEventListener("click", async () => {
@@ -606,18 +698,17 @@ function wire() {
 // ============================================================ BOOT
 
 (async () => {
-  readUrl();
-  pushFiltersToUI();
   try {
-    const total = await loadAll();
-    if (total === 0) {
-      $("loading-msg").textContent = "No rulings published yet.";
-      $("loading-banner").classList.add("err");
-      return;
-    }
-    populateFilters();
+    await loadCountyManifest();
+    readUrl();
     pushFiltersToUI();
+    buildCountiesPicker();
     wire();
+    if (state.selectedCounties.size > 0) {
+      await ensureCountiesLoaded();
+      populateFilters();
+      pushFiltersToUI();
+    }
     applyFilters();
     $("loading-banner").hidden = true;
     $("toolbar").hidden = false;

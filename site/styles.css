@@ -127,6 +127,76 @@ body {
   margin: 0 2px;
 }
 
+/* ── Counties picker ── */
+.chip-counties { position: relative; padding: 2px 7px; }
+.chip-counties > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.chip-counties > summary::-webkit-details-marker { display: none; }
+.chip-counties > summary::after {
+  content: "▾";
+  color: var(--fg-3);
+  font-size: 10px;
+  margin-left: 2px;
+}
+.chip-counties .counties-label {
+  color: var(--fg-2);
+  font-size: 11px;
+}
+.chip-counties .counties-summary {
+  color: var(--fg);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.counties-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  z-index: 30;
+  min-width: 200px;
+}
+.counties-actions {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.counties-actions .btn { padding: 2px 8px; font-size: 11px; }
+.counties-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.counties-list li {
+  padding: 2px 0;
+}
+.counties-list label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.counties-list input[type=checkbox] {
+  margin: 0;
+}
+
 .btn {
   font: inherit;
   font-size: 12px;
@@ -226,12 +296,33 @@ tbody td.case {
   white-space: nowrap;
 }
 tbody td.title {
-  max-width: 380px;
+  max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 tbody td.outcome { white-space: nowrap; }
+thead th.col-county, tbody td.col-county {
+  max-width: 90px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+thead th.col-dept, tbody td.col-dept {
+  width: 56px;
+  white-space: nowrap;
+}
+tbody td.text-preview {
+  max-width: 360px;
+  color: var(--fg-2);
+  font-size: 11.5px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 tbody td a {
   color: var(--accent-2);
   text-decoration: none;

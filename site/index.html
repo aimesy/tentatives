@@ -21,13 +21,19 @@
     </header>
 
     <section class="toolbar" id="toolbar" hidden>
+      <details class="chip chip-counties" id="counties-picker">
+        <summary><span class="counties-label">Counties</span><span class="counties-summary" id="counties-summary">none</span></summary>
+        <div class="counties-menu">
+          <div class="counties-actions">
+            <button type="button" class="btn" id="counties-all">All</button>
+            <button type="button" class="btn" id="counties-none">Clear</button>
+          </div>
+          <ul class="counties-list" id="counties-list"></ul>
+        </div>
+      </details>
       <span class="chip">
         <label for="q">Search</label>
         <input id="q" type="search" placeholder="case #, title, motion, body..." />
-      </span>
-      <span class="chip">
-        <label for="county">County</label>
-        <select id="county"><option value="">All</option></select>
       </span>
       <span class="chip">
         <label for="dept">Dept</label>
@@ -60,13 +66,14 @@
         <table id="results-table">
           <thead>
             <tr>
-              <th data-col="county">County <span class="sort-marker"></span></th>
-              <th data-col="dept">Dept <span class="sort-marker"></span></th>
+              <th data-col="county" class="col-county">County <span class="sort-marker"></span></th>
+              <th data-col="dept" class="col-dept">Dept <span class="sort-marker"></span></th>
               <th data-col="hearing_date">Date <span class="sort-marker">↓</span></th>
               <th data-col="case_number">Case # <span class="sort-marker"></span></th>
               <th data-col="case_title">Title <span class="sort-marker"></span></th>
               <th data-col="motion_type">Motion <span class="sort-marker"></span></th>
               <th data-col="outcome">Outcome <span class="sort-marker"></span></th>
+              <th>Text</th>
               <th>PDF</th>
             </tr>
           </thead>
