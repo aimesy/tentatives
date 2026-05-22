@@ -4,6 +4,8 @@ California superior court tentative rulings, court calendar notes, and other per
 
 The point is preservation first, parsing second. The archive keeps the court source material. The data pipeline normalizes counties only after the parser has fixtures and tests.
 
+> San Francisco Superior Court's general civil, housing, probate, and asbestos litigation departments live in a sibling repo: **[aimesy/sfsc-tentatives](https://github.com/aimesy/sfsc-tentatives)** ([searchable viewer](https://aimesy.github.io/sfsc-tentatives/)). The San Francisco rows in this repo are the **Unified Family Court** (UFC) calendars only. Everything else SF posts — Departments 204 (Probate), 301 (Discovery), 302 (Civil Law and Motion), 304 (Asbestos Law and Motion), and 501 (Real Property) — is over there.
+
 - Viewer: [aimesy.github.io/tentatives](https://aimesy.github.io/tentatives/)
 - Chrome extension: [tentatives-extension.zip](https://github.com/aimesy/tentatives/releases/download/extension-latest/tentatives-extension.zip)
 - Firefox extension: [tentatives-extension-firefox.zip](https://github.com/aimesy/tentatives/releases/download/extension-latest/tentatives-extension-firefox.zip)
@@ -29,7 +31,7 @@ Parser support means archived material is converted into normalized rows in `dat
 | Plumas | yes | no | Department 2 PDFs. |
 | Riverside | yes | no | Regional and department PDF links. |
 | San Bernardino | yes | no | Legacy civil table. |
-| San Francisco | yes | yes | UFC family-law PDFs. Main SF civil work remains in `aimesy/sfsc-tentatives`. |
+| San Francisco | yes | yes | Unified Family Court (UFC) family-law PDFs only. Departments 204 / 301 / 302 / 304 / 501 (civil, probate, discovery, asbestos, real property) live in [`aimesy/sfsc-tentatives`](https://github.com/aimesy/sfsc-tentatives). |
 | Santa Clara | yes | yes | Department PDF pages; changed hashes matter. |
 | Shasta | yes | yes | Department PDFs; changed hashes matter. |
 | Solano | yes | yes | Civil and probate department PDFs. |

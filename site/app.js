@@ -2,19 +2,28 @@
 //
 // Reads data/<county>/rulings.parquet from the same origin via hyparquet,
 // merges everything into one in-memory array, and drives a filter/sort/page
-// view. It never downloads the archived PDFs during startup.
+// view. PDFs aren't downloaded during startup; per-ruling sliced PDFs are
+// linked into archive/<county>/rulings/<two-hex>/<ruling_id>.pdf on the
+// github.com blob view (which renders inline).
+//
+// The interface is patterned on aimesy/sfsc-tentatives — chip toolbar +
+// Excel-style per-column filter popups + a modal overlay for the detail
+// view + URL-driven state so a permalink reproduces the view.
 
-// Parser-backed counties. The published viewer also loads site/counties.json
-// so this fallback only matters for direct file:// or broken-manifest viewing.
+// ============================================================ CONSTANTS
+
 const DEFAULT_COUNTIES = [
-  { slug: "el-dorado",    label: "El Dorado" },
-  { slug: "contra-costa", label: "Contra Costa" },
-  { slug: "placer",       label: "Placer" },
+  { slug: "el-dorado",    label: "El Dorado",    code: "ELD" },
+  { slug: "contra-costa", label: "Contra Costa", code: "CC"  },
+  { slug: "placer",       label: "Placer",       code: "PLA" },
 ];
 
 let KNOWN_COUNTIES = DEFAULT_COUNTIES;
-let COUNTY_LABEL = Object.fromEntries(KNOWN_COUNTIES.map((c) => [c.slug, c.label]));
-const FILTER_IDS = ["q", "dept", "outcome", "from", "to"];
+let COUNTY_LABEL = Object.fromEntries(DEFAULT_COUNTIES.map((c) => [c.slug, c.label]));
+let COUNTY_CODE  = Object.fromEntries(DEFAULT_COUNTIES.map((c) => [c.slug, c.code]));
+let COUNTY_BY_CODE = Object.fromEntries(DEFAULT_COUNTIES.map((c) => [c.code, c.slug]));
+
+const FILTER_IDS = ["q", "from", "to"];
 const SEARCH_FIELDS = [
   "case_number",
   "case_title",
@@ -35,29 +44,54 @@ const SORT_COLUMNS = new Set([
 const SORT_DIRECTIONS = new Set(["asc", "desc"]);
 const LINK_PROTOCOLS = new Set(["http:", "https:"]);
 
+// Columns where the unique-value list is too long to render all at once or
+// to default-check. The popup uses search-first UX: nothing is selected
+// initially, the list is capped, and Apply with empty selection means
+// "no filter" rather than "filter to empty set".
+const HIGH_CARDINALITY_FILTER_COLS = new Set(["case_title"]);
+const HIGH_CARD_RENDER_CAP = 200;
+const COL_FILTER_LABELS = {
+  county:      "County",
+  dept:        "Dept",
+  motion_type: "Motion",
+  outcome:     "Outcome",
+  case_title:  "Title",
+};
+// Columns that are user-toggleable in the Columns dropdown. Some columns
+// stay always-on (case #, date).
+const TOGGLEABLE_COLS = [
+  { key: "county",  label: "County",  default: true  },
+  { key: "dept",    label: "Dept",    default: true  },
+  { key: "title",   label: "Title",   default: true  },
+  { key: "mtype",   label: "Motion",  default: true  },
+  { key: "outcome", label: "Outcome", default: true  },
+  { key: "text",    label: "Excerpt", default: true  },
+  { key: "pdf",     label: "PDF",     default: true  },
+  { key: "id",      label: "ID",      default: true  },
+  { key: "share",   label: "Link",    default: true  },
+];
+const COLS_STORAGE_KEY = "tentatives.colVisibility";
+
 const $ = (id) => document.getElementById(id);
 
 const state = {
   rows: [],
   filtered: [],
-  filters: {
-    q: "",
-    dept: "",
-    outcome: "",
-    from: "",
-    to: "",
-  },
-  // Counties currently loaded into state.rows (slug -> rows[]). Used so we can
-  // remove a county's rows when the user unticks it without re-fetching the
-  // others. Default: empty - users opt in per county.
+  filters: { q: "", from: "", to: "" },
+  // Excel-style per-column filters. Map<col, Set<value>>. Absence means
+  // "no filter". An empty Set means "user explicitly unticked everything"
+  // → matches nothing.
+  columnFilters: new Map(),
   loadedCounties: new Map(),
   selectedCounties: new Set(),
   sort: { col: "hearing_date", dir: "desc" },
   page: 1,
   pageSize: 100,
+  colVisibility: {},
+  pendingFocusId: null, // ?r=<id> to auto-open after load
 };
 
-// ============================================================ LOAD
+// ============================================================ STAGES
 
 function setStage(name, value, kind = "active") {
   const id = `stage-${name}`;
@@ -66,21 +100,18 @@ function setStage(name, value, kind = "active") {
     row = document.createElement("div");
     row.className = "stage";
     row.id = id;
-    const stageName = document.createElement("span");
-    stageName.className = "s-name";
-    stageName.textContent = name;
-    const stageValue = document.createElement("span");
-    stageValue.className = "s-val";
-    row.append(stageName, stageValue);
+    const icon = document.createElement("span"); icon.className = "s-icon";
+    const stageName = document.createElement("span"); stageName.className = "s-name"; stageName.textContent = name;
+    const stageValue = document.createElement("span"); stageValue.className = "s-val";
+    row.append(icon, stageName, stageValue);
     $("stages").appendChild(row);
   }
   row.className = `stage ${kind}`;
   row.querySelector(".s-val").textContent = value;
 }
 
-// Production layout (Pages payload): data/ sits next to index.html.
-// Dev layout (serve repo root): index.html is at site/, data/ is at repo root.
-// First successful HEAD wins; resolved once and reused for every county.
+// ============================================================ LOAD
+
 const DATA_ROOT_CANDIDATES = ["data", "../data"];
 let resolvedDataRoot = null;
 let resolvedDataRootPromise = null;
@@ -89,7 +120,6 @@ let parquetModulePromise = null;
 async function loadParquetModule() {
   if (!parquetModulePromise) {
     setStage("Engine", "loading parquet reader...", "active");
-    // Published Parquet files are uncompressed so CSP can stay free of WASM/eval.
     parquetModulePromise = import("./vendor/hyparquet-1.18.1/src/index.js").then((parquet) => {
       setStage("Engine", "ready", "done");
       return parquet;
@@ -105,14 +135,17 @@ async function loadCountyManifest() {
     const counties = await r.json();
     if (!Array.isArray(counties)) throw new Error("manifest is not an array");
     const valid = counties
-      .map((county) => ({
-        slug: String(county.slug || "").trim(),
-        label: String(county.label || county.slug || "").trim(),
+      .map((c) => ({
+        slug:  String(c.slug || "").trim(),
+        label: String(c.label || c.slug || "").trim(),
+        code:  String(c.code || c.slug || "").trim().toUpperCase(),
       }))
-      .filter((county) => county.slug && county.label);
+      .filter((c) => c.slug && c.label);
     if (valid.length) {
       KNOWN_COUNTIES = valid;
-      COUNTY_LABEL = Object.fromEntries(valid.map((county) => [county.slug, county.label]));
+      COUNTY_LABEL = Object.fromEntries(valid.map((c) => [c.slug, c.label]));
+      COUNTY_CODE  = Object.fromEntries(valid.map((c) => [c.slug, c.code]));
+      COUNTY_BY_CODE = Object.fromEntries(valid.map((c) => [c.code, c.slug]));
     }
   } catch (e) {
     console.warn("Using fallback county manifest:", e);
@@ -135,8 +168,6 @@ async function resolveDataRoot() {
         return { root, ok: checks.some(Boolean) };
       }));
       const match = rootChecks.find((candidate) => candidate.ok);
-      // No data found at either layout. Default to production so the per-county
-      // 404 stages render correctly.
       return match?.root || DATA_ROOT_CANDIDATES[0];
     })();
   }
@@ -163,10 +194,6 @@ async function fetchAndParse(county) {
     setStage(county.label, `HTTP ${res.status}`, "err");
     return [];
   }
-  // Fetch the full file rather than relying on HEAD + Range. GitHub Pages
-  // applies transport encoding to .parquet, so a HEAD Content-Length can
-  // disagree with the decoded body length, which makes hyparquet slice
-  // the wrong bytes and fail with "footer != PAR1".
   const buffer = await res.arrayBuffer();
   const { parquetReadObjects } = await loadParquetModule();
   const file = {
@@ -179,16 +206,35 @@ async function fetchAndParse(county) {
   return rows;
 }
 
+// ============================================================ ROW NORMALIZATION
+
 function searchTextForRow(row) {
   return SEARCH_FIELDS
     .map((field) => row[field])
-    .filter((value) => value !== null && value !== undefined && value !== "")
+    .filter((v) => v !== null && v !== undefined && v !== "")
     .join(" ")
     .toLowerCase();
 }
 
+// Build the short, share-friendly ruling ID: <CODE>-<YYMMDD>-D<dept>-<seq>.
+// Example: ELD-251201-D9-3.
+function buildShortId(row) {
+  const code = COUNTY_CODE[row.county] || String(row.county || "?").toUpperCase();
+  const d = row.hearing_date || "";
+  // hearing_date arrives as "YYYY-MM-DD" from the parser. Compact to YYMMDD.
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
+  const ymd = m ? `${m[1].slice(2)}${m[2]}${m[3]}` : "000000";
+  const dept = row.dept != null && row.dept !== "" ? String(row.dept) : "?";
+  const seq = row.ruling_index != null ? String(row.ruling_index) : "?";
+  return `${code}-${ymd}-D${dept}-${seq}`;
+}
+
 function normalizeRow(row) {
-  return { ...row, _search: searchTextForRow(row) };
+  return {
+    ...row,
+    _search: searchTextForRow(row),
+    _shortId: buildShortId(row),
+  };
 }
 
 async function ensureCountiesLoaded() {
@@ -220,108 +266,87 @@ async function ensureCountiesLoaded() {
   for (const rows of state.loadedCounties.values()) state.rows.push(...rows);
 }
 
+// ============================================================ SEARCH (with wildcards)
+
+// Translate user input to a RegExp. Supports * (any sequence) and ? (single char).
+// Without wildcards: case-insensitive substring match (delegated to includes()).
+function compileSearch(raw) {
+  if (!raw) return null;
+  const hasWildcard = /[*?]/.test(raw);
+  if (!hasWildcard) return { kind: "substr", needle: raw.toLowerCase() };
+  // Escape regex metacharacters, then re-introduce * and ?.
+  const re = raw
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".");
+  return { kind: "regex", re: new RegExp(re, "i") };
+}
+
+function matchesSearch(row, compiled) {
+  if (!compiled) return true;
+  if (compiled.kind === "substr") return row._search.includes(compiled.needle);
+  return compiled.re.test(row._search);
+}
+
 // ============================================================ FILTER & SORT
 
+function rowColumnValue(row, col) {
+  if (col === "county") return row.county || "";
+  if (col === "dept") return row.dept == null ? "" : String(row.dept);
+  if (col === "case_title") return row.case_title || "";
+  if (col === "motion_type") return row.motion_type || "";
+  if (col === "outcome") return row.outcome || "";
+  return row[col] ?? "";
+}
+
+function passesColumnFilters(row) {
+  for (const [col, set] of state.columnFilters) {
+    if (!(set instanceof Set)) continue;
+    if (set.size === 0) return false; // user-emptied → matches nothing
+    const v = rowColumnValue(row, col);
+    if (!set.has(v)) return false;
+  }
+  return true;
+}
+
 function applyFilters() {
-  const { q, dept, outcome, from, to } = state.filters;
-  const needle = q.trim().toLowerCase();
+  const { q, from, to } = state.filters;
+  const compiled = compileSearch(q.trim());
 
   state.filtered = state.rows.filter((r) => {
-    if (dept && String(r.dept ?? "") !== dept) return false;
-    if (outcome && r.outcome !== outcome) return false;
     if (from && (r.hearing_date || "") < from) return false;
     if (to && (r.hearing_date || "") > to) return false;
-    if (!needle) return true;
-    return r._search.includes(needle);
+    if (!passesColumnFilters(r)) return false;
+    return matchesSearch(r, compiled);
   });
 
-  // Sort.
   if (!SORT_COLUMNS.has(state.sort.col) || !SORT_DIRECTIONS.has(state.sort.dir)) {
     state.sort = { col: "hearing_date", dir: "desc" };
   }
   const { col, dir } = state.sort;
   const sign = dir === "asc" ? 1 : -1;
   state.filtered.sort((a, b) => {
-    const av = a[col] ?? "";
-    const bv = b[col] ?? "";
+    const av = rowColumnValue(a, col);
+    const bv = rowColumnValue(b, col);
+    // Dept sorts numerically when both sides parse as numbers.
+    if (col === "dept") {
+      const an = Number(av), bn = Number(bv);
+      if (Number.isFinite(an) && Number.isFinite(bn)) {
+        return (an - bn) * sign;
+      }
+    }
     if (av < bv) return -1 * sign;
-    if (av > bv) return  1 * sign;
+    if (av > bv) return 1 * sign;
     return 0;
   });
 
   state.page = 1;
   render();
+  renderActiveFilters();
   syncUrl();
 }
 
 // ============================================================ RENDER
-
-function render() {
-  const total = state.filtered.length;
-  $("result-count").textContent =
-    total === state.rows.length
-      ? `${total.toLocaleString()} rulings`
-      : `${total.toLocaleString()} of ${state.rows.length.toLocaleString()}`;
-
-  const pageCount = Math.max(1, Math.ceil(total / state.pageSize));
-  if (state.page > pageCount) state.page = pageCount;
-  $("page-info").textContent = `page ${state.page} / ${pageCount}`;
-  $("prev-page").disabled = state.page <= 1;
-  $("next-page").disabled = state.page >= pageCount;
-
-  const start = (state.page - 1) * state.pageSize;
-  const slice = state.filtered.slice(start, start + state.pageSize);
-
-  const body = $("results-body");
-  const fragment = document.createDocumentFragment();
-  if (slice.length === 0) {
-    const row = document.createElement("tr");
-    const cell = document.createElement("td");
-    cell.colSpan = 9;
-    cell.className = "empty";
-    cell.textContent = state.selectedCounties.size === 0
-      ? "Pick one or more counties above to load rulings."
-      : "No rulings match the current filters.";
-    row.appendChild(cell);
-    fragment.appendChild(row);
-  } else {
-    for (const [i, row] of slice.entries()) {
-      fragment.appendChild(renderRow(row, start + i));
-    }
-  }
-  body.replaceChildren(fragment);
-
-  // Header sort markers.
-  for (const th of document.querySelectorAll("thead th[data-col]")) {
-    const col = th.dataset.col;
-    const marker = th.querySelector(".sort-marker");
-    if (col === state.sort.col) {
-      th.classList.add("sorted");
-      marker.textContent = state.sort.dir === "asc" ? "\u2191" : "\u2193";
-    } else {
-      th.classList.remove("sorted");
-      marker.textContent = "";
-    }
-  }
-
-  if (state.rows.length === 0) {
-    $("stats").textContent = state.selectedCounties.size === 0
-      ? "no counties selected"
-      : "loading...";
-  } else {
-    $("stats").textContent =
-      `${state.rows.length.toLocaleString()} rulings | ` +
-      `${new Set(state.rows.map((r) => r.county)).size} counties`;
-  }
-}
-
-function appendCell(row, text, className = "") {
-  const cell = document.createElement("td");
-  if (className) cell.className = className;
-  cell.textContent = text ?? "";
-  row.appendChild(cell);
-  return cell;
-}
 
 function classToken(value, fallback = "other") {
   const token = String(value || "")
@@ -348,13 +373,7 @@ function safeHttpUrl(raw) {
   }
 }
 
-// Per-ruling sliced PDFs are generated by .github/workflows/parse.yml and
-// committed under archive/<county>/rulings/<two-hex>/<ruling_id>.pdf. They
-// aren't included in the Pages payload (too big), so the viewer links to
-// the github.com blob view, which renders PDFs inline. We keep a separate
-// "Source" link to the original court URL in the drawer.
 const ARCHIVE_BLOB_BASE = "https://github.com/aimesy/tentatives/blob/master/archive";
-
 function rulingPdfHref(r) {
   if (!r.county || !r.ruling_id) return null;
   const id = String(r.ruling_id);
@@ -362,148 +381,491 @@ function rulingPdfHref(r) {
   return `${ARCHIVE_BLOB_BASE}/${r.county}/rulings/${prefix}/${id}.pdf`;
 }
 
-function sourceLabel(r) {
-  if (String(r.style || "").startsWith("html-")) return "Page";
-  return "PDF";
+function render() {
+  const total = state.filtered.length;
+  $("result-count").textContent =
+    total === state.rows.length
+      ? `${total.toLocaleString()} rulings`
+      : `${total.toLocaleString()} of ${state.rows.length.toLocaleString()}`;
+
+  const pageCount = Math.max(1, Math.ceil(total / state.pageSize));
+  if (state.page > pageCount) state.page = pageCount;
+  $("page-info").textContent = `page ${state.page} / ${pageCount}`;
+  $("prev-page").disabled = state.page <= 1;
+  $("next-page").disabled = state.page >= pageCount;
+
+  const start = (state.page - 1) * state.pageSize;
+  const slice = state.filtered.slice(start, start + state.pageSize);
+
+  const body = $("results-body");
+  const fragment = document.createDocumentFragment();
+  if (slice.length === 0) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 11;
+    td.className = "no-data";
+    td.textContent = state.selectedCounties.size === 0
+      ? "Pick one or more counties above to load rulings."
+      : "No rulings match the current filters.";
+    tr.appendChild(td);
+    fragment.appendChild(tr);
+  } else {
+    for (const [i, row] of slice.entries()) {
+      fragment.appendChild(renderRow(row, start + i));
+    }
+  }
+  body.replaceChildren(fragment);
+
+  // Sort markers on the headers.
+  for (const th of document.querySelectorAll("thead th.sortable")) {
+    th.classList.remove("sort-asc", "sort-desc");
+    if (th.dataset.col === state.sort.col) {
+      th.classList.add(state.sort.dir === "asc" ? "sort-asc" : "sort-desc");
+    }
+  }
+
+  if (state.rows.length === 0) {
+    $("stats").textContent = state.selectedCounties.size === 0
+      ? "no counties selected"
+      : "loading...";
+  } else {
+    const counties = new Set(state.rows.map((r) => r.county)).size;
+    $("stats").textContent =
+      `${state.rows.length.toLocaleString()} rulings | ${counties} counties`;
+  }
+
+  refreshColFilterButtons();
+  applyColVisibility();
+}
+
+function appendCell(tr, text, className = "") {
+  const td = document.createElement("td");
+  if (className) td.className = className;
+  td.textContent = text ?? "";
+  tr.appendChild(td);
+  return td;
 }
 
 function renderRow(r, idx) {
-  const row = document.createElement("tr");
-  row.dataset.idx = String(idx);
-  const countyCell = appendCell(row, COUNTY_LABEL[r.county] || r.county || "", "col-county");
-  countyCell.title = COUNTY_LABEL[r.county] || r.county || "";
-  appendCell(row, r.dept || "", "col-dept");
-  appendCell(row, r.hearing_date || "");
-  appendCell(row, r.case_number || "", "case");
-  const title = appendCell(row, r.case_title || "", "title");
-  title.title = r.case_title || "";
-  appendCell(row, r.motion_type || "");
+  const tr = document.createElement("tr");
+  tr.dataset.idx = String(idx);
+  tr.dataset.id  = r._shortId;
 
-  const outcomeCell = appendCell(row, "", "outcome");
-  const outcome = document.createElement("span");
-  outcome.classList.add("outcome-pill", classToken(r.outcome));
-  outcome.textContent = r.outcome || "-";
-  outcomeCell.appendChild(outcome);
+  const countyCell = appendCell(tr, COUNTY_LABEL[r.county] || r.county || "", "col-county");
+  countyCell.title = COUNTY_LABEL[r.county] || r.county || "";
+
+  appendCell(tr, r.dept || "", "col-dept");
+  appendCell(tr, r.hearing_date || "", "col-date");
+  appendCell(tr, r.case_number || "", "col-case");
+
+  const title = appendCell(tr, r.case_title || "", "col-title");
+  title.title = r.case_title || "";
+
+  const mtypeCell = document.createElement("td");
+  mtypeCell.className = "col-mtype";
+  if (r.motion_type) {
+    const pill = document.createElement("span");
+    pill.className = "mtype-pill";
+    pill.textContent = r.motion_type;
+    pill.title = r.motion_type;
+    mtypeCell.appendChild(pill);
+  }
+  tr.appendChild(mtypeCell);
+
+  const outcomeCell = document.createElement("td");
+  outcomeCell.className = "col-outcome";
+  const outPill = document.createElement("span");
+  outPill.className = `outcome-pill outcome-${classToken(r.outcome)}`;
+  outPill.textContent = r.outcome || "-";
+  outcomeCell.appendChild(outPill);
   if (r.conditional) {
     const cond = document.createElement("span");
     cond.className = "cond";
-    cond.title = "ABSENT OBJECTION -> granted";
+    cond.title = "ABSENT OBJECTION → granted";
     cond.textContent = "cond.";
     outcomeCell.appendChild(cond);
   }
+  tr.appendChild(outcomeCell);
 
   const previewText = (r.outcome_text || r.body_text || r.full_text || "").trim();
-  const textCell = appendCell(row, previewText, "text-preview");
-  if (previewText) textCell.title = previewText.slice(0, 600);
+  const excerpt = appendCell(tr, previewText, "col-text");
+  if (previewText) excerpt.title = previewText.slice(0, 600);
 
-  const sourceCell = appendCell(row, "");
-  const pdf = rulingPdfHref(r);
-  if (pdf) {
-    const link = document.createElement("a");
-    link.href = pdf;
-    link.target = "_blank";
-    link.rel = "noopener";
+  // PDF cell.
+  const pdfCell = document.createElement("td");
+  pdfCell.className = "col-pdf";
+  const pdfHref = rulingPdfHref(r);
+  if (pdfHref) {
+    const a = document.createElement("a");
+    a.href = pdfHref;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.className = "pdf-btn";
+    a.title = "Open archived PDF on github.com (inline viewer)";
     const page = pageNumber(r.page_start);
     const pageEnd = pageNumber(r.page_end);
-    const range = page && pageEnd && pageEnd !== page ? `pp.${page}-${pageEnd}` : (page ? `p.${page}` : "");
-    link.textContent = range ? `PDF ${range}` : "PDF";
-    sourceCell.appendChild(link);
+    const range = page && pageEnd && pageEnd !== page ? `p.${page}-${pageEnd}` : (page ? `p.${page}` : "");
+    a.textContent = range ? `📄 ${range}` : "📄";
+    pdfCell.appendChild(a);
   } else {
-    sourceCell.textContent = "-";
+    pdfCell.textContent = "—";
   }
-  return row;
+  tr.appendChild(pdfCell);
+
+  appendCell(tr, r._shortId, "col-id");
+
+  // Share/chain button.
+  const shareCell = document.createElement("td");
+  shareCell.className = "col-share";
+  const shareBtn = document.createElement("button");
+  shareBtn.className = "share-btn";
+  shareBtn.title = "Copy a permalink to this ruling";
+  shareBtn.dataset.share = "1";
+  shareBtn.textContent = "🔗";
+  shareCell.appendChild(shareBtn);
+  tr.appendChild(shareCell);
+
+  return tr;
 }
 
-// ============================================================ DRAWER
+// ============================================================ MODAL
 
-function openDrawer(idx) {
-  const r = state.filtered[idx];
+function modalUrlFor(idOrRow) {
+  const id = typeof idOrRow === "string" ? idOrRow : idOrRow._shortId;
+  const u = new URL(window.location.href);
+  u.searchParams.set("r", id);
+  return u.toString();
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function flashCopied(el, original) {
+  el.classList.add("copied");
+  const before = original ?? el.textContent;
+  el.textContent = "Copied!";
+  setTimeout(() => {
+    el.classList.remove("copied");
+    el.textContent = before;
+  }, 1200);
+}
+
+function openModal(rowOrIdx) {
+  const r = typeof rowOrIdx === "number" ? state.filtered[rowOrIdx] : rowOrIdx;
   if (!r) return;
-  $("d-case").textContent = r.case_number || "(no case #)";
-  $("d-title").textContent = r.case_title || "";
-  const kv = $("d-kv");
-  kv.replaceChildren();
-  const rows = [
-    ["County", COUNTY_LABEL[r.county] || r.county],
-    ["Dept", r.dept],
-    ["Division", r.division],
-    ["Date", r.hearing_date],
-    ["Motion", r.motion_type],
-    ["Outcome", r.outcome ? r.outcome + (r.conditional ? " (conditional)" : "") : ""],
-    ["Continued to", r.continued_to],
-    ["Pages", r.page_start ? (r.page_start === r.page_end ? r.page_start : `${r.page_start}-${r.page_end}`) : ""],
-    ["Parser", r.parser_version],
-  ];
-  for (const [key, value] of rows) {
-    if (value === null || value === undefined || value === "") continue;
-    appendKeyValue(kv, key, value);
+  $("modal-title").textContent = r.case_title || "(no case title)";
+  const meta = $("modal-meta");
+  meta.replaceChildren();
+  const pills = [
+    { label: r.case_number || "(no case #)" },
+    { label: COUNTY_LABEL[r.county] || r.county },
+    r.dept ? { label: `Dept ${r.dept}` } : null,
+    r.division ? { label: r.division } : null,
+    r.hearing_date ? { label: r.hearing_date } : null,
+    r.outcome ? { label: r.outcome + (r.conditional ? " (conditional)" : "") } : null,
+    r.continued_to ? { label: `continued → ${r.continued_to}` } : null,
+  ].filter(Boolean);
+  for (const p of pills) {
+    const span = document.createElement("span");
+    span.className = "pill";
+    span.textContent = p.label;
+    meta.appendChild(span);
   }
-  const slicedPdf = rulingPdfHref(r);
-  if (slicedPdf) appendKeyValue(kv, "Ruling PDF", "github archive", slicedPdf);
-  const sourceUrl = safeHttpUrl(r.source_url);
-  if (sourceUrl) appendKeyValue(kv, "Source", "original court PDF", sourceUrl.href);
-  $("d-outcome").textContent = r.outcome_text || "(empty)";
-  $("d-full").textContent = r.full_text || r.body_text || "(empty)";
-  $("drawer").classList.add("open");
-}
+  $("modal-motion").textContent = r.motion_type || "";
+  $("modal-outcome").textContent = r.outcome_text || "(empty)";
+  $("modal-full").textContent = r.full_text || r.body_text || "(empty)";
+  $("modal-id").textContent = r._shortId;
 
-function appendKeyValue(list, key, value, href = null) {
-  const dt = document.createElement("dt");
-  dt.textContent = key;
-  const dd = document.createElement("dd");
-  if (href) {
-    const link = document.createElement("a");
-    link.href = href;
-    link.target = "_blank";
-    link.rel = "noopener";
-    link.textContent = value;
-    dd.appendChild(link);
+  const pdfHref = rulingPdfHref(r);
+  const pdfBtn = $("modal-pdf");
+  if (pdfHref) {
+    pdfBtn.href = pdfHref;
+    pdfBtn.hidden = false;
   } else {
-    dd.textContent = value;
+    pdfBtn.hidden = true;
   }
-  list.append(dt, dd);
+  const sourceUrl = safeHttpUrl(r.source_url);
+  const sourceBtn = $("modal-source");
+  if (sourceUrl) {
+    sourceBtn.href = sourceUrl.href;
+    sourceBtn.hidden = false;
+  } else {
+    sourceBtn.hidden = true;
+  }
+
+  $("modal-share").dataset.id = r._shortId;
+  $("overlay").classList.add("open");
+  // Reflect open state in the URL so a refresh keeps the modal open.
+  const u = new URL(window.location.href);
+  u.searchParams.set("r", r._shortId);
+  window.history.replaceState(null, "", u.pathname + (u.search || "") + u.hash);
 }
 
-function closeDrawer() {
-  $("drawer").classList.remove("open");
+function closeModal() {
+  $("overlay").classList.remove("open");
+  const u = new URL(window.location.href);
+  if (u.searchParams.has("r")) {
+    u.searchParams.delete("r");
+    window.history.replaceState(null, "", u.pathname + (u.search ? `?${u.searchParams.toString()}` : "") + u.hash);
+  }
 }
 
-// ============================================================ POPULATE FILTERS
+function findRowById(id) {
+  if (!id) return null;
+  for (const r of state.rows) if (r._shortId === id) return r;
+  return null;
+}
 
-function populateFilters() {
-  const depts = new Set();
-  const outcomes = new Set();
+// ============================================================ COLUMN FILTERS
+
+let _openColFilter = null;
+
+// Compute unique-value buckets for a column from the currently loaded rows.
+// Returns [{value, count}, ...] sorted by count desc.
+function uniqueValuesFor(col) {
+  const counts = new Map();
   for (const r of state.rows) {
-    if (r.dept)    depts.add(String(r.dept));
-    if (r.outcome) outcomes.add(r.outcome);
+    const v = rowColumnValue(r, col);
+    counts.set(v, (counts.get(v) || 0) + 1);
   }
-  fillSelect("dept",
-    [...depts].sort((a, b) => {
-      const an = Number(a), bn = Number(b);
-      if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
-      return a.localeCompare(b);
-    }).map((d) => ({ v: d, t: d })));
-  fillSelect("outcome",
-    [...outcomes].sort().map((o) => ({ v: o, t: o })));
+  return [...counts.entries()]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => b.count - a.count || String(a.value).localeCompare(String(b.value)));
 }
 
-function fillSelect(id, items) {
-  const sel = $(id);
-  // Keep the first "All" option.
-  sel.length = 1;
-  const values = new Set(items.map(({ v }) => v));
-  const current = state.filters[id];
-  if (current && !values.has(current)) {
-    const opt = document.createElement("option");
-    opt.value = current;
-    opt.textContent = current;
-    sel.appendChild(opt);
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
+  }[c]));
+}
+
+function openColFilter(col, btn) {
+  const pop = $("col-filter-pop");
+  _openColFilter = col;
+  const rect = btn.getBoundingClientRect();
+  pop.style.left = `${Math.min(window.innerWidth - 290, Math.max(8, rect.left + window.scrollX - 8))}px`;
+  pop.style.top  = `${rect.bottom + window.scrollY + 4}px`;
+
+  const label = COL_FILTER_LABELS[col] || col;
+  pop.innerHTML =
+    `<div class="cf-title">Filter — ${esc(label)}</div>` +
+    `<div class="cf-sort">` +
+      `<button class="cf-az">A → Z</button>` +
+      `<button class="cf-za">Z → A</button>` +
+      `<button class="cf-byn active">By count</button>` +
+    `</div>` +
+    `<input class="cf-search" type="search" placeholder="Search values...">` +
+    `<div class="cf-list"><div class="cf-empty">Loading...</div></div>` +
+    `<div class="cf-actions">` +
+      `<button class="cf-apply">Apply</button>` +
+      `<button class="cf-clear">Clear</button>` +
+      `<button class="cf-cancel">Cancel</button>` +
+    `</div>`;
+  pop.classList.add("open");
+
+  const pairs = uniqueValuesFor(col);
+  const isHighCard = HIGH_CARDINALITY_FILTER_COLS.has(col);
+  const existing = state.columnFilters.get(col);
+  const selected = existing instanceof Set
+    ? new Set(existing)
+    : (isHighCard ? new Set() : new Set(pairs.map((p) => p.value)));
+  let sortMode = isHighCard ? "az" : "count";
+  let search = "";
+
+  if (isHighCard) {
+    setTimeout(() => pop.querySelector(".cf-search")?.focus(), 0);
+    pop.querySelector(".cf-search").placeholder = "Type to search titles...";
   }
-  for (const { v, t } of items) {
-    const opt = document.createElement("option");
-    opt.value = v;
-    opt.textContent = t;
-    sel.appendChild(opt);
+
+  function setSortBtn() {
+    for (const b of pop.querySelectorAll(".cf-sort button")) b.classList.remove("active");
+    if (sortMode === "az")   pop.querySelector(".cf-az").classList.add("active");
+    if (sortMode === "za")   pop.querySelector(".cf-za").classList.add("active");
+    if (sortMode === "count") pop.querySelector(".cf-byn").classList.add("active");
+  }
+
+  function renderList() {
+    setSortBtn();
+    const listEl = pop.querySelector(".cf-list");
+    let view = pairs.slice();
+    if (sortMode === "az") view.sort((a, b) => String(a.value).localeCompare(String(b.value)));
+    else if (sortMode === "za") view.sort((a, b) => String(b.value).localeCompare(String(a.value)));
+    else view.sort((a, b) => b.count - a.count);
+    if (search) {
+      const q = search.toLowerCase();
+      view = view.filter((p) => String(p.value).toLowerCase().includes(q));
+    }
+    if (!view.length) {
+      if (isHighCard && !search && selected.size > 0) {
+        view = pairs.filter((p) => selected.has(p.value));
+      }
+      if (!view.length) {
+        listEl.innerHTML = isHighCard && !search
+          ? '<div class="cf-empty">Type to search titles, then tick.</div>'
+          : '<div class="cf-empty">No matching values.</div>';
+        return;
+      }
+    }
+    let truncatedNote = "";
+    if (isHighCard && view.length > HIGH_CARD_RENDER_CAP) {
+      truncatedNote = `<div class="cf-empty" style="text-align:left;padding:0.3rem 0.5rem;color:#888">` +
+        `Showing ${HIGH_CARD_RENDER_CAP} of ${view.length.toLocaleString()} matches — refine your search.</div>`;
+      view = view.slice(0, HIGH_CARD_RENDER_CAP);
+    }
+    const allChecked = view.every((p) => selected.has(p.value));
+    let html = truncatedNote +
+      `<label class="cf-row cf-all">` +
+        `<input type="checkbox" class="cf-all-cb"${allChecked ? " checked" : ""}>` +
+        `<span class="cf-label">(Select all${search || isHighCard ? " visible" : ""})</span>` +
+      `</label>`;
+    for (const p of view) {
+      const display = p.value === "" ? "(blank)" : p.value;
+      html +=
+        `<label class="cf-row" data-value="${esc(p.value)}">` +
+          `<input type="checkbox"${selected.has(p.value) ? " checked" : ""}>` +
+          `<span class="cf-label" title="${esc(p.value)}">${esc(display)}</span>` +
+          `<span class="cf-count">${p.count.toLocaleString()}</span>` +
+        `</label>`;
+    }
+    listEl.innerHTML = html;
+
+    listEl.querySelector(".cf-all-cb").addEventListener("change", (e) => {
+      const on = e.target.checked;
+      for (const p of view) {
+        if (on) selected.add(p.value); else selected.delete(p.value);
+      }
+      renderList();
+    });
+    for (const row of listEl.querySelectorAll(".cf-row[data-value]")) {
+      const cb = row.querySelector("input");
+      cb.addEventListener("change", () => {
+        const v = row.dataset.value;
+        if (cb.checked) selected.add(v); else selected.delete(v);
+      });
+    }
+  }
+  renderList();
+
+  pop.querySelector(".cf-search").addEventListener("input", (e) => {
+    search = e.target.value;
+    renderList();
+  });
+  pop.querySelector(".cf-az").addEventListener("click", () => { sortMode = "az"; renderList(); });
+  pop.querySelector(".cf-za").addEventListener("click", () => { sortMode = "za"; renderList(); });
+  pop.querySelector(".cf-byn").addEventListener("click", () => { sortMode = "count"; renderList(); });
+
+  pop.querySelector(".cf-apply").addEventListener("click", () => {
+    if (selected.size === pairs.length) {
+      state.columnFilters.delete(col);
+    } else if (selected.size === 0) {
+      if (isHighCard) state.columnFilters.delete(col);
+      else state.columnFilters.set(col, new Set());
+    } else {
+      state.columnFilters.set(col, new Set(selected));
+    }
+    closeColFilter();
+    applyFilters();
+  });
+  pop.querySelector(".cf-clear").addEventListener("click", () => {
+    state.columnFilters.delete(col);
+    closeColFilter();
+    applyFilters();
+  });
+  pop.querySelector(".cf-cancel").addEventListener("click", closeColFilter);
+}
+
+function closeColFilter() {
+  $("col-filter-pop").classList.remove("open");
+  _openColFilter = null;
+}
+
+function refreshColFilterButtons() {
+  for (const btn of document.querySelectorAll(".col-filter-btn")) {
+    const col = btn.dataset.filterCol;
+    btn.classList.toggle("active", state.columnFilters.has(col));
+  }
+}
+
+// ============================================================ ACTIVE FILTERS BAR
+
+function renderActiveFilters() {
+  const bar = $("active-filters");
+  bar.replaceChildren();
+  for (const [col, set] of state.columnFilters) {
+    if (!(set instanceof Set)) continue;
+    const label = COL_FILTER_LABELS[col] || col;
+    const text = set.size === 0
+      ? `${label}: (none)`
+      : set.size <= 2
+        ? `${label}: ${[...set].map((v) => v === "" ? "(blank)" : v).join(", ")}`
+        : `${label}: ${set.size} values`;
+    const tag = document.createElement("span");
+    tag.className = "filter-tag";
+    tag.textContent = text + " ";
+    const x = document.createElement("button");
+    x.type = "button";
+    x.textContent = "×";
+    x.title = `Clear ${label} filter`;
+    x.addEventListener("click", () => {
+      state.columnFilters.delete(col);
+      applyFilters();
+    });
+    tag.appendChild(x);
+    bar.appendChild(tag);
+  }
+}
+
+// ============================================================ COLUMNS DROPDOWN
+
+function loadColVisibility() {
+  let saved = {};
+  try {
+    const raw = localStorage.getItem(COLS_STORAGE_KEY);
+    if (raw) saved = JSON.parse(raw) || {};
+  } catch { /* localStorage may be unavailable */ }
+  for (const c of TOGGLEABLE_COLS) {
+    state.colVisibility[c.key] = (c.key in saved) ? !!saved[c.key] : c.default;
+  }
+}
+
+function saveColVisibility() {
+  try {
+    localStorage.setItem(COLS_STORAGE_KEY, JSON.stringify(state.colVisibility));
+  } catch { /* ignore quota */ }
+}
+
+function applyColVisibility() {
+  for (const c of TOGGLEABLE_COLS) {
+    const on = state.colVisibility[c.key];
+    for (const el of document.querySelectorAll(`th.col-${c.key}, td.col-${c.key}`)) {
+      el.style.display = on ? "" : "none";
+    }
+  }
+}
+
+function buildColsMenu() {
+  const menu = $("cols-menu");
+  menu.replaceChildren();
+  for (const c of TOGGLEABLE_COLS) {
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = state.colVisibility[c.key];
+    cb.addEventListener("change", () => {
+      state.colVisibility[c.key] = cb.checked;
+      saveColVisibility();
+      applyColVisibility();
+    });
+    const span = document.createElement("span");
+    span.textContent = c.label;
+    label.append(cb, span);
+    menu.appendChild(label);
   }
 }
 
@@ -550,8 +912,61 @@ function updateCountiesSummary() {
 async function refreshFromSelection() {
   updateCountiesSummary();
   await ensureCountiesLoaded();
-  populateFilters();
   applyFilters();
+}
+
+// ============================================================ CSV EXPORT
+
+function exportCsv() {
+  const rows = state.filtered;
+  if (!rows.length) {
+    window.alert("No rulings to export.");
+    return;
+  }
+  const cols = [
+    "id", "county", "dept", "hearing_date", "case_number", "case_title",
+    "motion_type", "outcome", "conditional", "continued_to", "outcome_text",
+    "page_start", "page_end", "source_url",
+  ];
+  const header = cols.map(csvCell).join(",");
+  const lines = [header];
+  for (const r of rows) {
+    const out = {
+      id: r._shortId,
+      county: COUNTY_LABEL[r.county] || r.county,
+      dept: r.dept,
+      hearing_date: r.hearing_date,
+      case_number: r.case_number,
+      case_title: r.case_title,
+      motion_type: r.motion_type,
+      outcome: r.outcome,
+      conditional: r.conditional ? "true" : "false",
+      continued_to: r.continued_to || "",
+      outcome_text: r.outcome_text,
+      page_start: r.page_start,
+      page_end: r.page_end,
+      source_url: r.source_url,
+    };
+    lines.push(cols.map((c) => csvCell(out[c])).join(","));
+  }
+  const csv = lines.join("\r\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const stamp = new Date().toISOString().slice(0, 10);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `tentatives-${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function csvCell(v) {
+  if (v === null || v === undefined) return "";
+  const s = String(v);
+  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
 }
 
 // ============================================================ URL SYNC
@@ -567,6 +982,11 @@ function syncUrl() {
     const v = state.filters[k];
     if (v) params.set(k, v);
   }
+  for (const [col, set] of state.columnFilters) {
+    if (set instanceof Set && set.size > 0) {
+      params.set(`cf_${col}`, [...set].join("|"));
+    }
+  }
   if (
     SORT_COLUMNS.has(state.sort.col) &&
     SORT_DIRECTIONS.has(state.sort.dir) &&
@@ -574,6 +994,9 @@ function syncUrl() {
   ) {
     params.set("sort", `${state.sort.col}:${state.sort.dir}`);
   }
+  // Preserve ?r=<id> if a modal is open.
+  const current = new URLSearchParams(window.location.search);
+  if (current.get("r")) params.set("r", current.get("r"));
   const qs = params.toString();
   const newUrl = qs ? `?${qs}` : window.location.pathname;
   window.history.replaceState(null, "", newUrl);
@@ -583,6 +1006,12 @@ function readUrl() {
   const params = new URLSearchParams(window.location.search);
   for (const k of FILTER_IDS) {
     if (params.has(k)) state.filters[k] = params.get(k);
+  }
+  for (const [name, value] of params) {
+    if (!name.startsWith("cf_")) continue;
+    const col = name.slice(3);
+    if (!value) continue;
+    state.columnFilters.set(col, new Set(value.split("|")));
   }
   const sort = params.get("sort");
   if (sort) {
@@ -600,6 +1029,17 @@ function readUrl() {
       for (const slug of counties.split(",")) {
         if (known.has(slug)) state.selectedCounties.add(slug);
       }
+    }
+  }
+  const r = params.get("r");
+  if (r) {
+    state.pendingFocusId = r;
+    // If user landed on a ruling permalink without a county selection,
+    // load the county encoded in the ID so the row resolves.
+    if (state.selectedCounties.size === 0) {
+      const code = r.split("-")[0];
+      const slug = COUNTY_BY_CODE[code];
+      if (slug) state.selectedCounties.add(slug);
     }
   }
 }
@@ -632,7 +1072,6 @@ function wire() {
     };
     if (id === "q") {
       el.addEventListener("input", updateFilter);
-      el.addEventListener("keyup", updateFilter);
     } else {
       el.addEventListener("change", updateFilter);
     }
@@ -640,6 +1079,7 @@ function wire() {
 
   $("reset").addEventListener("click", () => {
     for (const k of FILTER_IDS) state.filters[k] = "";
+    state.columnFilters.clear();
     pushFiltersToUI();
     applyFilters();
   });
@@ -657,44 +1097,92 @@ function wire() {
 
   $("permalink").addEventListener("click", async () => {
     syncUrl();
-    try {
-      await navigator.clipboard.writeText(window.location.href);
-      $("permalink").textContent = "Copied!";
-      setTimeout(() => { $("permalink").textContent = "Copy link"; }, 1200);
-    } catch {
-      window.alert(window.location.href);
-    }
+    const ok = await copyText(window.location.href);
+    if (ok) flashCopied($("permalink"), "Copy link");
+    else window.alert(window.location.href);
   });
 
-  for (const th of document.querySelectorAll("thead th[data-col]")) {
-    th.addEventListener("click", () => {
+  for (const th of document.querySelectorAll("thead th.sortable")) {
+    th.addEventListener("click", (e) => {
+      // Ignore clicks on the filter ▾ button — that opens the popup, not sort.
+      if (e.target.closest(".col-filter-btn")) return;
       const col = th.dataset.col;
       if (!SORT_COLUMNS.has(col)) return;
       if (state.sort.col === col) {
         state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
       } else {
         state.sort.col = col;
-        state.sort.dir = "asc";
+        state.sort.dir = col === "hearing_date" ? "desc" : "asc";
       }
       applyFilters();
     });
   }
 
-  $("results-body").addEventListener("click", (e) => {
+  // One delegated click handler for the table body — share button vs. PDF
+  // link vs. row → open modal.
+  $("results-body").addEventListener("click", async (e) => {
+    const share = e.target.closest("button[data-share]");
+    if (share) {
+      e.stopPropagation();
+      const tr = e.target.closest("tr[data-id]");
+      if (!tr) return;
+      const url = modalUrlFor(tr.dataset.id);
+      const ok = await copyText(url);
+      if (ok) {
+        share.classList.add("copied");
+        const orig = share.textContent;
+        share.textContent = "✓";
+        setTimeout(() => {
+          share.classList.remove("copied");
+          share.textContent = orig;
+        }, 1100);
+      } else {
+        window.alert(url);
+      }
+      return;
+    }
+    if (e.target.closest("a")) return; // PDF link, let it through
     const row = e.target.closest("tr[data-idx]");
     if (!row) return;
-    if (e.target.closest("a")) return; // let PDF link work
-    openDrawer(Number(row.dataset.idx));
+    openModal(Number(row.dataset.idx));
   });
 
-  $("d-close").addEventListener("click", closeDrawer);
-  $("drawer").addEventListener("click", (e) => {
-    if (e.target === $("drawer")) closeDrawer();
+  // Column filter ▾ buttons. Delegated since the table re-renders.
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest(".col-filter-btn");
+    if (btn) {
+      e.stopPropagation();
+      const col = btn.dataset.filterCol;
+      if (_openColFilter === col) { closeColFilter(); return; }
+      openColFilter(col, btn);
+      return;
+    }
+    if (_openColFilter && !e.target.closest("#col-filter-pop")) {
+      closeColFilter();
+    }
+  });
+
+  // Modal controls.
+  $("modal-close").addEventListener("click", closeModal);
+  $("overlay").addEventListener("click", (e) => {
+    if (e.target === $("overlay")) closeModal();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeDrawer();
+    if (e.key === "Escape") {
+      if (_openColFilter) closeColFilter();
+      else closeModal();
+    }
+  });
+  $("modal-share").addEventListener("click", async () => {
+    const id = $("modal-share").dataset.id;
+    if (!id) return;
+    const url = modalUrlFor(id);
+    const ok = await copyText(url);
+    if (ok) flashCopied($("modal-share"), "🔗 Copy link");
+    else window.alert(url);
   });
 
+  // Pager.
   $("prev-page").addEventListener("click", () => { state.page--; render(); });
   $("next-page").addEventListener("click", () => { state.page++; render(); });
   $("page-size").addEventListener("change", (e) => {
@@ -702,6 +1190,23 @@ function wire() {
     state.page = 1;
     render();
   });
+
+  // Columns dropdown.
+  $("cols-btn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const menu = $("cols-menu");
+    const wasOpen = menu.classList.contains("open");
+    menu.classList.toggle("open", !wasOpen);
+    $("cols-btn").setAttribute("aria-expanded", String(!wasOpen));
+  });
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest("#cols-menu") && !e.target.closest("#cols-btn")) {
+      $("cols-menu").classList.remove("open");
+      $("cols-btn").setAttribute("aria-expanded", "false");
+    }
+  });
+
+  $("export-btn").addEventListener("click", exportCsv);
 }
 
 // ============================================================ BOOT
@@ -709,19 +1214,27 @@ function wire() {
 (async () => {
   try {
     await loadCountyManifest();
+    loadColVisibility();
     readUrl();
     pushFiltersToUI();
     buildCountiesPicker();
+    buildColsMenu();
     wire();
     if (state.selectedCounties.size > 0) {
       await ensureCountiesLoaded();
-      populateFilters();
-      pushFiltersToUI();
     }
     applyFilters();
     $("loading-banner").hidden = true;
     $("toolbar").hidden = false;
+    $("result-bar").hidden = false;
     $("results-wrap").hidden = false;
+
+    // Honour ?r=<id>: open the modal for that ruling once data is loaded.
+    if (state.pendingFocusId) {
+      const r = findRowById(state.pendingFocusId);
+      if (r) openModal(r);
+      state.pendingFocusId = null;
+    }
   } catch (e) {
     console.error(e);
     $("loading-msg").textContent = `Failed to load: ${e.message || e}`;

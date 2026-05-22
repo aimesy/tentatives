@@ -13,16 +13,24 @@
   </head>
   <body>
     <header class="hdr">
-      <div class="hdr-title">California Tentative Rulings</div>
-      <div class="hdr-stats" id="stats">loading...</div>
-      <div class="hdr-right">
-        <a class="link" id="repo-link" href="https://github.com/aimesy/tentatives" target="_blank" rel="noopener">Repo -&gt;</a>
+      <div class="hdr-left">
+        <h1>California Tentative Rulings</h1>
+        <span id="stats" class="hdr-stats">loading...</span>
       </div>
+      <div class="hdr-right">
+        <a class="hbtn hbtn-xref" href="https://aimesy.github.io/sfsc-tentatives/" target="_blank" rel="noopener" title="San Francisco Superior Court general civil, housing, probate, and asbestos litigation departments">San Francisco ↗</a>
+        <button class="hbtn" id="export-btn" title="Download filtered view as CSV">CSV</button>
+        <button class="hbtn" id="cols-btn" title="Show / hide table columns" aria-haspopup="true" aria-expanded="false">
+          Columns <span class="caret">▾</span>
+        </button>
+        <a class="hbtn" id="repo-link" href="https://github.com/aimesy/tentatives" target="_blank" rel="noopener">GitHub ↗</a>
+      </div>
+      <div class="cols-menu" id="cols-menu" role="menu" aria-label="Column visibility"></div>
     </header>
 
     <section class="toolbar" id="toolbar" hidden>
       <details class="chip chip-counties" id="counties-picker">
-        <summary><span class="counties-label">Counties</span><span class="counties-summary" id="counties-summary">none</span></summary>
+        <summary><span class="chip-lbl">Counties</span><span class="counties-summary" id="counties-summary">none</span></summary>
         <div class="counties-menu">
           <div class="counties-actions">
             <button type="button" class="btn" id="counties-all">All</button>
@@ -31,34 +39,32 @@
           <ul class="counties-list" id="counties-list"></ul>
         </div>
       </details>
-      <span class="chip">
-        <label for="q">Search</label>
-        <input id="q" type="search" placeholder="case #, title, motion, body..." />
+      <span class="chip" title="Free-text search across case #, title, motion, body, full text. Wildcards: * (any sequence), ? (single char).">
+        <label class="chip-lbl" for="q">Search</label>
+        <input id="q" type="search" placeholder="case #, title, motion, body...  (* and ? wildcards)" />
       </span>
       <span class="chip">
-        <label for="dept">Dept</label>
-        <select id="dept"><option value="">All</option></select>
-      </span>
-      <span class="chip">
-        <label for="outcome">Outcome</label>
-        <select id="outcome"><option value="">All</option></select>
-      </span>
-      <span class="chip">
-        <label for="from">From</label>
+        <label class="chip-lbl" for="from">From</label>
         <input id="from" type="date" />
       </span>
       <span class="chip">
-        <label for="to">To</label>
+        <label class="chip-lbl" for="to">To</label>
         <input id="to" type="date" />
       </span>
+      <button class="btn" id="reset">Clear</button>
       <span class="sep"></span>
-      <button class="btn" id="reset">Reset</button>
       <button class="btn" id="permalink" title="Copy a URL for the current view">Copy link</button>
     </section>
 
     <section class="banner" id="loading-banner">
+      <div class="spinner"></div>
       <div id="loading-msg">Loading parsed rulings...</div>
       <div class="stages" id="stages"></div>
+    </section>
+
+    <section class="result-bar" id="result-bar" hidden>
+      <span id="result-count" class="muted">-</span>
+      <span id="active-filters" class="active-filters"></span>
     </section>
 
     <section class="results-wrap" id="results-wrap" hidden>
@@ -66,29 +72,44 @@
         <table id="results-table">
           <thead>
             <tr>
-              <th data-col="county" class="col-county">County <span class="sort-marker"></span></th>
-              <th data-col="dept" class="col-dept">Dept <span class="sort-marker"></span></th>
-              <th data-col="hearing_date">Date <span class="sort-marker">↓</span></th>
-              <th data-col="case_number">Case # <span class="sort-marker"></span></th>
-              <th data-col="case_title">Title <span class="sort-marker"></span></th>
-              <th data-col="motion_type">Motion <span class="sort-marker"></span></th>
-              <th data-col="outcome">Outcome <span class="sort-marker"></span></th>
-              <th>Text</th>
-              <th>PDF</th>
+              <th class="col-county sortable" data-col="county">
+                <span class="col-head"><span class="col-label">County</span><button class="col-filter-btn" data-filter-col="county" title="Filter by County">▾</button></span>
+              </th>
+              <th class="col-dept sortable" data-col="dept">
+                <span class="col-head"><span class="col-label">Dept</span><button class="col-filter-btn" data-filter-col="dept" title="Filter by Dept">▾</button></span>
+              </th>
+              <th class="col-date sortable sort-desc" data-col="hearing_date">
+                <span class="col-head"><span class="col-label">Date</span></span>
+              </th>
+              <th class="col-case sortable" data-col="case_number">
+                <span class="col-head"><span class="col-label">Case #</span></span>
+              </th>
+              <th class="col-title sortable" data-col="case_title">
+                <span class="col-head"><span class="col-label">Title</span><button class="col-filter-btn" data-filter-col="case_title" title="Filter by Title — search and tick">▾</button></span>
+              </th>
+              <th class="col-mtype sortable" data-col="motion_type">
+                <span class="col-head"><span class="col-label">Motion</span><button class="col-filter-btn" data-filter-col="motion_type" title="Filter by Motion">▾</button></span>
+              </th>
+              <th class="col-outcome sortable" data-col="outcome">
+                <span class="col-head"><span class="col-label">Outcome</span><button class="col-filter-btn" data-filter-col="outcome" title="Filter by Outcome">▾</button></span>
+              </th>
+              <th class="col-text"><span class="col-head"><span class="col-label">Excerpt</span></span></th>
+              <th class="col-pdf"><span class="col-head"><span class="col-label">PDF</span></span></th>
+              <th class="col-id"><span class="col-head"><span class="col-label">ID</span></span></th>
+              <th class="col-share"><span class="col-head"><span class="col-label">Link</span></span></th>
             </tr>
           </thead>
           <tbody id="results-body"></tbody>
         </table>
       </div>
       <div class="ftr">
-        <span id="result-count" class="muted">-</span>
         <div class="pager">
-          <button class="btn" id="prev-page">&lt; Prev</button>
+          <button class="btn" id="prev-page">‹ Prev</button>
           <span id="page-info" class="muted">page 1</span>
-          <button class="btn" id="next-page">Next &gt;</button>
+          <button class="btn" id="next-page">Next ›</button>
           <span class="sep pager-sep"></span>
-          <label class="muted" for="page-size">Page size</label>
-          <select id="page-size" class="btn page-size-select">
+          <label class="muted" for="page-size">Rows</label>
+          <select id="page-size" class="page-size-select">
             <option>50</option>
             <option selected>100</option>
             <option>250</option>
@@ -98,19 +119,24 @@
       </div>
     </section>
 
-    <div class="drawer" id="drawer">
-      <div class="drawer-panel">
-        <div class="drawer-head">
-          <span class="case" id="d-case"></span>
-          <span class="title" id="d-title"></span>
-          <button class="x" id="d-close" aria-label="Close">x</button>
-        </div>
-        <div class="drawer-body">
-          <dl class="kv" id="d-kv"></dl>
-          <h3>Disposition</h3>
-          <pre id="d-outcome"></pre>
-          <h3>Full text</h3>
-          <pre id="d-full"></pre>
+    <!-- Single shared Excel-style column filter popup. Positioned per click. -->
+    <div class="col-filter-pop" id="col-filter-pop"></div>
+
+    <div class="overlay" id="overlay">
+      <div class="modal">
+        <button class="modal-close" id="modal-close" aria-label="Close">×</button>
+        <h2 id="modal-title"></h2>
+        <div class="meta" id="modal-meta"></div>
+        <div class="motion" id="modal-motion"></div>
+        <h3 class="section-label">Disposition</h3>
+        <div class="ruling" id="modal-outcome"></div>
+        <h3 class="section-label">Full text</h3>
+        <div class="ruling" id="modal-full"></div>
+        <div class="modal-footer">
+          <span class="ruling-id" id="modal-id" title="Short ruling ID — share via the link button."></span>
+          <button class="btn" id="modal-share">🔗 Copy link</button>
+          <a class="btn" id="modal-pdf" target="_blank" rel="noopener" hidden>📄 PDF</a>
+          <a class="btn" id="modal-source" target="_blank" rel="noopener" hidden>↗ Source</a>
         </div>
       </div>
     </div>
