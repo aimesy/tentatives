@@ -328,3 +328,44 @@ def test_run_county_continues_after_ref_failure_and_logs_success(tmp_path, monke
         for line in (tmp_path / "archive" / "fake" / "captures.ndjson").read_text(encoding="utf-8").splitlines()
     ]
     assert [row["source_url"] for row in rows] == [good.url]
+
+
+def test_run_swallows_per_county_failures_with_continue_on_error(monkeypatch):
+    """With --continue-on-error, run() exits 0 even if a county errored, so the
+    workflow's grep-the-log policy is what decides success (not a stray 503)."""
+    args = argparse.Namespace(
+        county="all",
+        live=True,
+        wayback=False,
+        from_year=None,
+        to_year=None,
+        url_from_year=None,
+        url_to_year=None,
+        limit=None,
+        dry_run=False,
+        continue_on_error=True,
+    )
+    # Pretend there are two counties; both report failures via _run_county.
+    monkeypatch.setattr(backfill, "COUNTY_MODULES", {"a": object(), "b": object()})
+    monkeypatch.setattr(backfill, "_run_county", lambda *_args, **_kwargs: 1)
+    assert backfill.run(args) == 0
+
+
+def test_run_propagates_failures_without_continue_on_error(monkeypatch):
+    """Without --continue-on-error, run() still surfaces non-zero so manual
+    runs without the flag still fail loudly."""
+    args = argparse.Namespace(
+        county="all",
+        live=True,
+        wayback=False,
+        from_year=None,
+        to_year=None,
+        url_from_year=None,
+        url_to_year=None,
+        limit=None,
+        dry_run=False,
+        continue_on_error=False,
+    )
+    monkeypatch.setattr(backfill, "COUNTY_MODULES", {"a": object()})
+    monkeypatch.setattr(backfill, "_run_county", lambda *_args, **_kwargs: 1)
+    assert backfill.run(args) == 1

@@ -619,6 +619,14 @@ def run(args: argparse.Namespace) -> int:
             status = 1
             if not args.continue_on_error:
                 break
+    if args.continue_on_error:
+        # With continue-on-error, per-county failures are logged but the
+        # process exits clean; the calling workflow grep-checks the log to
+        # decide whether enough refs landed to call the run a success.
+        # Without this swallow, a single 503 from one of 16 county sites
+        # fails the whole daily job (and trips set -o pipefail in the
+        # workflow shell) — even when 15 other counties produced data.
+        return 0
     return status
 
 

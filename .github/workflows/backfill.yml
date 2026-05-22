@@ -114,7 +114,10 @@ jobs:
           exit 1
 
       - name: File failure bug report
-        if: failure() && github.event_name == 'schedule'
+        # File on any failure (schedule or manual). Even when an operator
+        # dispatches the workflow themselves, the issue collects the diagnostic
+        # snapshot in one place for a follow-up agent to act on.
+        if: failure()
         env:
           WORKFLOW_LABEL: "Backfill captures"
           LOG_PATH: backfill.log
