@@ -43,16 +43,22 @@ jobs:
       - name: Parse new captures
         run: python -m ingest.orchestrate
 
-      - name: Commit updated parquet
+      - name: Slice ruling PDFs
+        # Idempotent: only ruling_ids without a slice on disk get sliced.
+        # The first run after this workflow is wired up generates ~4k slices
+        # (~940MB); subsequent runs only handle new rulings.
+        run: python -m ingest.slice_rulings
+
+      - name: Commit updated parquet and slices
         run: |
-          if git diff --quiet -- data/; then
-            echo "no parquet changes"
+          if git diff --quiet -- data/ && git diff --quiet -- archive/ && [ -z "$(git status --porcelain archive/)" ]; then
+            echo "no parquet or slice changes"
             exit 0
           fi
           git config user.name "tentatives-bot"
           git config user.email "tentatives-bot@users.noreply.github.com"
-          git add data/
-          git commit -m "ingest: update rulings.parquet"
+          git add data/ archive/
+          git commit -m "ingest: update rulings.parquet and per-ruling PDFs"
           for attempt in 1 2 3; do
             git pull --rebase origin "${GITHUB_REF_NAME}"
             if git push; then
