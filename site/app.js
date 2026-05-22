@@ -348,18 +348,26 @@ function safeHttpUrl(raw) {
   }
 }
 
-function pdfHref(r) {
-  const url = safeHttpUrl(r.source_url);
-  if (!url) return null;
+// Source PDFs live in the repo at archive/<county>/<two-hex>/<sha>.pdf, where
+// two-hex is the first 2 chars of the SHA. raw.githubusercontent.com serves
+// them with the right Content-Type, so the browser's built-in PDF viewer
+// honors the #page anchor and jumps straight to the ruling's page. We link
+// to *our* archive copy rather than the court's original — courts rotate /
+// delete tentatives weekly and the original URLs rot.
+const ARCHIVE_RAW_BASE = "https://raw.githubusercontent.com/aimesy/tentatives/master/archive";
+
+function archivePdfHref(r) {
+  if (!r.county || !r.source_sha256) return null;
+  const sha = String(r.source_sha256);
+  const prefix = sha.slice(0, 2);
   const page = pageNumber(r.page_start);
-  if (page) url.hash = `page=${page}`;
-  return url.href;
+  const anchor = page ? `#page=${page}` : "";
+  return `${ARCHIVE_RAW_BASE}/${r.county}/${prefix}/${sha}.pdf${anchor}`;
 }
 
 function sourceLabel(r) {
   if (String(r.style || "").startsWith("html-")) return "Page";
-  const source = String(r.source_url || "").split("?", 1)[0].toLowerCase();
-  return source.endsWith(".pdf") ? "PDF" : "Source";
+  return "PDF";
 }
 
 function renderRow(r, idx) {
@@ -392,14 +400,16 @@ function renderRow(r, idx) {
   if (previewText) textCell.title = previewText.slice(0, 600);
 
   const sourceCell = appendCell(row, "");
-  const pdf = pdfHref(r);
+  const pdf = archivePdfHref(r);
   if (pdf) {
     const link = document.createElement("a");
     link.href = pdf;
     link.target = "_blank";
     link.rel = "noopener";
     const page = pageNumber(r.page_start);
-    link.textContent = `${sourceLabel(r)}${page ? ` p.${page}` : ""}`;
+    const pageEnd = pageNumber(r.page_end);
+    const range = page && pageEnd && pageEnd !== page ? `pp.${page}-${pageEnd}` : (page ? `p.${page}` : "");
+    link.textContent = range ? `PDF ${range}` : "PDF";
     sourceCell.appendChild(link);
   } else {
     sourceCell.textContent = "-";
@@ -431,8 +441,10 @@ function openDrawer(idx) {
     if (value === null || value === undefined || value === "") continue;
     appendKeyValue(kv, key, value);
   }
+  const archivePdf = archivePdfHref(r);
+  if (archivePdf) appendKeyValue(kv, "Archive PDF", "github archive", archivePdf);
   const sourceUrl = safeHttpUrl(r.source_url);
-  if (sourceUrl) appendKeyValue(kv, "Source", sourceLabel(r), sourceUrl.href);
+  if (sourceUrl) appendKeyValue(kv, "Source", "original court PDF", sourceUrl.href);
   $("d-outcome").textContent = r.outcome_text || "(empty)";
   $("d-full").textContent = r.full_text || r.body_text || "(empty)";
   $("drawer").classList.add("open");
