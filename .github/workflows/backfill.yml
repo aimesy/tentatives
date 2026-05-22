@@ -32,14 +32,18 @@ on:
         description: Optional max refs per county/discovery run
         required: false
   schedule:
-    # Forward-capture public static pages daily without a browser.
-    - cron: "27 9 * * *"
+    # Daily live harvest at 5 PM PST = 01:00 UTC. Forward-captures the public
+    # static landing pages declared by each county's LANDING_PAGES (16 counties
+    # so far; Contra Costa stays out because its calendar is iframe-served and
+    # needs the browser extension).
+    - cron: "0 1 * * *"
     # Re-check Wayback weekly; existing current URLs may acquire new archived
     # versions over time.
     - cron: "17 11 * * 0"
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: archive-data-${{ github.ref }}
@@ -108,3 +112,16 @@ jobs:
             sleep $((attempt * 5))
           done
           exit 1
+
+      - name: File failure bug report
+        if: failure() && github.event_name == 'schedule'
+        env:
+          WORKFLOW_LABEL: "Backfill captures"
+          LOG_PATH: backfill.log
+          EXTRA_CONTEXT: |
+            Scheduled live harvest. Mode was inferred from the cron pattern
+            (`0 1 * * *` → live; `17 11 * * 0` → wayback). The job exits
+            non-zero when no county reports any new refs — that's the most
+            common failure when a single county's landing-page HTML changes.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/scripts/file_failure_report.sh

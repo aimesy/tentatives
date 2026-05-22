@@ -37,6 +37,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Iterator
+from urllib.parse import unquote
 
 import pypdf
 
@@ -47,13 +48,37 @@ from . import COUNTY_SLUG, PARSER_VERSION
 
 # ============================================================ DISCOVERY
 
+BASE = "https://www.placer.courts.ca.gov"
+
+# Two landing pages the scheduled backfill polls — the "Law and Motion" page
+# is the source for the rulings the parser currently handles; the index
+# "Tentative Rulings and Calendar Notes" page also enumerates some PDFs.
+LANDING_PAGES = [
+    f"{BASE}/online-services/tentative-rulings/tentative-rulings-law-and-motion",
+    f"{BASE}/online-services/tentative-rulings",
+]
+
+# Placer publishes ruling PDFs at .../sites/default/files/<YYYY-MM>/<filename>.pdf
+# (filename is typically <MDDYY> [Ww]eb.pdf but other names appear too).
+PDF_HREF_RE = re.compile(
+    r'href="(https?://(?:www\.)?placer\.courts\.ca\.gov/sites/default/files/'
+    r'\d{4}-\d{2}/[^"]+\.pdf)"',
+    re.IGNORECASE,
+)
+
 
 def discover_live(html: str, page_url: str | None = None) -> list[PdfRef]:
-    """Placer's tentative-ruling pages link to PDFs at
-    placer.courts.ca.gov/sites/default/files/<YYYY-MM>/<MDDYY> Web.pdf.
-    Discovery against the two department landing pages (law_motion, calendar_notes)
-    not yet implemented."""
-    return []
+    """Pull tentative-ruling PDF URLs out of a Placer landing page's HTML."""
+    seen: set[str] = set()
+    refs: list[PdfRef] = []
+    for m in PDF_HREF_RE.finditer(html):
+        url = m.group(1)
+        if url in seen:
+            continue
+        seen.add(url)
+        filename = unquote(url.rsplit("/", 1)[-1])
+        refs.append(PdfRef(url=url, filename=filename))
+    return refs
 
 
 # ============================================================ PARSE

@@ -64,6 +64,15 @@ TENTATIVE_PDF_RE = re.compile(
 )
 BASE = "https://www.eldorado.courts.ca.gov"
 
+# Per-dept landing pages the scheduled backfill polls. EDC publishes 12
+# numbered departments at predictable URLs; the index page links to all of
+# them but listing them explicitly here lets the daily harvest hit each one
+# in parallel without an extra round-trip discovery step.
+LANDING_PAGES = [
+    f"{BASE}/online-services/tentative-rulings/tentative-rulings-dept-{n}"
+    for n in range(1, 13)
+]
+
 
 def _dept_from_landing_url(url: str) -> str | None:
     m = re.search(r"tentative-rulings-dept-(\d+)", url)

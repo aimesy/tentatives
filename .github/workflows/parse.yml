@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: archive-data-${{ github.ref }}
@@ -41,13 +42,17 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Parse new captures
-        run: python -m ingest.orchestrate
+        run: |
+          set -o pipefail
+          python -m ingest.orchestrate 2>&1 | tee parse.log
 
       - name: Slice ruling PDFs
         # Idempotent: only ruling_ids without a slice on disk get sliced.
         # The first run after this workflow is wired up generates ~4k slices
         # (~940MB); subsequent runs only handle new rulings.
-        run: python -m ingest.slice_rulings
+        run: |
+          set -o pipefail
+          python -m ingest.slice_rulings 2>&1 | tee -a parse.log
 
       - name: Commit updated parquet and slices
         run: |
@@ -67,3 +72,16 @@ jobs:
             sleep $((attempt * 5))
           done
           exit 1
+
+      - name: File failure bug report
+        if: failure()
+        env:
+          WORKFLOW_LABEL: "Parse new PDFs"
+          LOG_PATH: parse.log
+          EXTRA_CONTEXT: |
+            Triggered by a push to archive/, data/, counties/, schema/, or
+            ingest/. The first failure mode is usually a new PDF whose
+            shape the existing parser doesn't handle — the source SHA is
+            in the log near the traceback.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/scripts/file_failure_report.sh
