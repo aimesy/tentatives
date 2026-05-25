@@ -37,7 +37,6 @@ import io
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Iterator
 from urllib.parse import urljoin
 
 import pypdf
@@ -86,7 +85,7 @@ def _dept_from_pdf_filename(url: str) -> str | None:
     `_dept_from_landing_url` hint, but the dept is often baked into the
     filename itself for the published civil tentative rulings.
     """
-    m = re.search(r"/tr-d-0?(\d{1,3})-", url)
+    m = re.search(r"/tr-d-0*(\d{1,3})-", url)
     return m.group(1) if m else None
 
 
@@ -186,9 +185,12 @@ BOILERPLATE_PATTERNS = [
     ),
 ]
 
-# "CONTINUED TO MONDAY, JULY 6, 2026" / "HEARING CONTINUED TO ..."
+# "CONTINUED TO MONDAY, JULY 6, 2026", "HEARING CONTINUED TO ...",
+# "CONTINUES THE MATTER TO ...", and time-prefixed "... TO 9:00 A.M. JULY 6, 2026".
 CONTINUED_TO_RE = re.compile(
-    r"CONTINUED\s+TO\s+(?:[A-Z]+,?\s+)?"
+    r"CONTINUE[SD]?(?:\s+THE\s+MATTER)?\s+TO\s+"
+    r"(?:[\w:.]+\s+(?:a\.m\.|p\.m\.|AM|PM)\s+(?:on\s+)?)?"  # optional time
+    r"(?:[A-Z]+,?\s+)?"                                      # optional weekday
     r"(?P<month>[A-Z]+)\s+(?P<day>\d{1,2}),?\s+(?P<year>\d{4})",
     re.IGNORECASE,
 )
@@ -500,7 +502,7 @@ def parse(
     page_offsets: list[int] = []  # offset into `plain` where page i starts
     cursor = 0
     SEP = "\n\n"
-    for i, page in enumerate(stripped_pages):
+    for page in stripped_pages:
         page_offsets.append(cursor)
         joined_parts.append(page)
         cursor += len(page) + len(SEP)
@@ -581,8 +583,11 @@ def parse(
         page_end = max(page_start, page_for_offset(max(header_start_abs, trimmed_end - 1)))
 
         full_text = plain[header_start_abs:disposition_end_abs].strip()
+        # Include the loop position and case number so two calendars in one PDF
+        # that both number rulings from 1 (e.g. an AM and PM session) can't
+        # collide on anchor_idx alone.
         ruling_id = hashlib.sha256(
-            f"{source_sha256}:{anchor_idx}".encode("utf-8")
+            f"{source_sha256}:{i}:{anchor_idx}:{case_number}".encode("utf-8")
         ).hexdigest()[:32]
 
         rulings.append(

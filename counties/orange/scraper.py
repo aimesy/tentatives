@@ -102,7 +102,7 @@ def discover_live(html: str, page_url: str | None = None, base_url: str = BASE) 
 #   25D006297                     (family law)
 #   01298596 / 01184189           (probate 8-digit)
 _CASE_NUMBER_INNER = (
-    r"30-20\d{2}-\d{6,9}(?:-?\s*(?:[A-Z]{2,4}-){1,3}[A-Z]{2,4})?"  # modern with suffix
+    r"(?<![\d-])30-20\d{2}-\d{6,9}(?:-?\s*(?:[A-Z]{2,4}-){1,3}[A-Z]{2,4})?"  # modern with suffix
     r"|\b\d{2}[A-Z]\d{6}\b"                                          # family law
     r"|\b\d{8}\b"                                                    # probate 8-digit
 )
@@ -146,32 +146,47 @@ CONTINUED_TO_RE = re.compile(
 )
 
 
+def _coerce_header_date(d_str: str) -> date | None:
+    d_str = d_str.strip()
+    if "/" in d_str:
+        parts = d_str.split("/")
+        try:
+            month = int(parts[0])
+            day = int(parts[1])
+            year = int(parts[2])
+            if year < 100:
+                year += 2000
+            return date(year, month, day)
+        except (ValueError, IndexError):
+            return None
+    mm = re.match(r"([A-Z][a-z]+)\s+(\d{1,2}),\s+(\d{4})", d_str)
+    if mm:
+        mo = mm.group(1).upper()
+        if mo in _MONTHS:
+            try:
+                return date(int(mm.group(3)), _MONTHS[mo], int(mm.group(2)))
+            except ValueError:
+                return None
+    return None
+
+
 def _parse_date(text: str) -> date | None:
+    # Prefer an explicit "Date:" / labeled hearing date (m1/m2) over a bare
+    # "Month D, YYYY" (m3), which can be a stray date elsewhere in the header.
+    bare: date | None = None
     for m in HEADER_DATE_RE.finditer(text):
-        d_str = m.group("m1") or m.group("m2") or m.group("m3")
+        explicit = m.group("m1") or m.group("m2")
+        d_str = explicit or m.group("m3")
         if not d_str:
             continue
-        d_str = d_str.strip()
-        if "/" in d_str:
-            parts = d_str.split("/")
-            try:
-                month = int(parts[0])
-                day = int(parts[1])
-                year = int(parts[2])
-                if year < 100:
-                    year += 2000
-                return date(year, month, day)
-            except (ValueError, IndexError):
-                continue
-        mm = re.match(r"([A-Z][a-z]+)\s+(\d{1,2}),\s+(\d{4})", d_str)
-        if mm:
-            mo = mm.group(1).upper()
-            if mo in _MONTHS:
-                try:
-                    return date(int(mm.group(3)), _MONTHS[mo], int(mm.group(2)))
-                except ValueError:
-                    continue
-    return None
+        parsed = _coerce_header_date(d_str)
+        if parsed is None:
+            continue
+        if explicit:
+            return parsed
+        if bare is None:
+            bare = parsed
+    return bare
 
 
 def _detect_division(header_text: str, hint: str | None) -> str | None:

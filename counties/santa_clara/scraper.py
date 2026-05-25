@@ -373,13 +373,13 @@ def parse(
         case_end = cm.end()
         line_start = case_start
 
-        # Look back for a "LINE N" marker on the same or previous 1-2 lines.
+        # 1-based position within the PDF (schema contract). The court's own
+        # "LINE N" labels are deliberately not used as the index: a single PDF
+        # can hold multiple calendars (e.g. 9:00 and 9:01 A.M.) that each restart
+        # numbering at LINE 1, plus "Scroll down to Line N" cross-references, so
+        # those labels collide and aren't positional.
         ruling_index_counter += 1
         ruling_index = ruling_index_counter
-        lookback = plain[max(0, case_start - 200):case_start]
-        ln_match = re.search(r"LINE\s+(\d{1,3})\b", lookback)
-        if ln_match:
-            ruling_index = int(ln_match.group(1))
 
         # The block runs to the next case number (or end of doc).
         block_end = case_matches[i + 1].start() if i + 1 < len(case_matches) else len(plain)

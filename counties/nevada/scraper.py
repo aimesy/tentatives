@@ -120,7 +120,6 @@ LONG_DATE_RE = re.compile(r"\b([A-Z][a-z]+)\s+(\d{1,2}),\s+(\d{4})\b")
 SHORT_DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
 
 # Department from header or body ("Dept. A", "Department 3", "in Dept. A").
-HEADER_DEPT_RE = re.compile(r"Department\s+(\d+|[A-Z])\b", re.IGNORECASE)
 INLINE_DEPT_RE = re.compile(r"\b(?:Dept\.|Department)\s+(\d+|[A-Z])\b", re.IGNORECASE)
 
 # Page-number footers ("1", "2", "Page 1 of 3").
@@ -145,14 +144,13 @@ _MONTHS = {
 
 
 def _parse_date(text: str) -> date | None:
-    m = LONG_DATE_RE.search(text)
-    if m:
+    for m in LONG_DATE_RE.finditer(text):
         mo = m.group(1).upper()
         if mo in _MONTHS:
             try:
                 return date(int(m.group(3)), _MONTHS[mo], int(m.group(2)))
             except ValueError:
-                pass
+                continue
     m = SHORT_DATE_RE.search(text)
     if m:
         try:
@@ -188,7 +186,7 @@ def _detect_location(header_text: str) -> str | None:
 
 
 def _detect_dept(text: str, hint: str | None) -> str | None:
-    m = HEADER_DEPT_RE.search(text)
+    m = INLINE_DEPT_RE.search(text)
     if m:
         return m.group(1)
     return hint

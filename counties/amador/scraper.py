@@ -116,8 +116,10 @@ def ref_from_wayback_url(url: str, wayback_ts: str | None = None) -> PdfRef:
 # Case-number formats observed:
 #   18-CVC-10752, 13-FCD-05303, 19-DCS-04140    (modern with dashes)
 #   19 CVC 11019, 21 FC 7597, 21 CVC 12114      (older, space separated)
+# Inner separators are space/tab/hyphen but NOT newline: a stray "21\nCVC\n12114"
+# across three pypdf lines must not be stitched into a phantom case number.
 CASE_NUMBER_RE = re.compile(
-    r"\b(?P<num>\d{2}[\s-]+[A-Z]{2,5}[\s-]+\d{4,6})\b"
+    r"\b(?P<num>\d{2}[ \t-]+[A-Z]{2,5}[ \t-]+\d{4,6})\b"
 )
 
 # Disposition anchor. Used across Styles A-D, both capitalised and
@@ -170,14 +172,13 @@ _MONTHS = {
 
 
 def _parse_date(text: str) -> date | None:
-    m = LONG_DATE_RE.search(text)
-    if m:
+    for m in LONG_DATE_RE.finditer(text):
         mo = m.group(1).upper()
         if mo in _MONTHS:
             try:
                 return date(int(m.group(3)), _MONTHS[mo], int(m.group(2)))
             except ValueError:
-                pass
+                continue
     m = SHORT_DATE_RE.search(text)
     if m:
         try:

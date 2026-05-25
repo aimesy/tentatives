@@ -1010,7 +1010,9 @@ function readUrl() {
   for (const [name, value] of params) {
     if (!name.startsWith("cf_")) continue;
     const col = name.slice(3);
-    if (!value) continue;
+    // Only restore filters for columns that actually support filtering; an
+    // unknown cf_ param would otherwise match nothing and blank the table.
+    if (!value || !(col in COL_FILTER_LABELS)) continue;
     state.columnFilters.set(col, new Set(value.split("|")));
   }
   const sort = params.get("sort");

@@ -37,7 +37,6 @@ from __future__ import annotations
 import hashlib
 import io
 import re
-from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from urllib.parse import urlparse
 
@@ -323,9 +322,10 @@ def parse(
         caption_end = cn_match.start() - section_start
         caption_block = section_text[:caption_end]
         petitioner, respondent = _extract_parties(caption_block)
-        case_title = f"{petitioner} vs {respondent}".strip(" vs ")
-        if not petitioner and not respondent:
-            case_title = ""
+        if petitioner and respondent:
+            case_title = f"{petitioner} vs {respondent}"
+        else:
+            case_title = petitioner or respondent
 
         # Motion type: text between metadata block end and TENTATIVE RULING marker.
         # Find the TENTATIVE RULING anchor within this section.

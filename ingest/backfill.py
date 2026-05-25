@@ -45,7 +45,7 @@ def _county_module(county: str):
         return COUNTY_MODULES[county]
     except KeyError:
         supported = ", ".join(sorted(COUNTY_MODULES))
-        raise ValueError(f"no discovery module for county={county!r}; supported: {supported}")
+        raise ValueError(f"no discovery module for county={county!r}; supported: {supported}") from None
 
 
 def utc_now() -> datetime:
@@ -388,7 +388,7 @@ def _cdx_rows(
         rows.append(
             {
                 str(key): "" if value is None else str(value)
-                for key, value in zip(header, row)
+                for key, value in zip(header, row, strict=False)
             }
         )
     return rows

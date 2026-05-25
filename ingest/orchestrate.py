@@ -24,7 +24,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from counties.registry import page_parser_functions, parser_functions
-from schema import Ruling
 
 REPO = Path(__file__).parent.parent
 ARCHIVE = REPO / "archive"

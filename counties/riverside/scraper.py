@@ -12,8 +12,12 @@ LANDING_PAGES = [BASE]
 
 
 def _dept_hint(parsed: ParseResult, text: str, _page_url: str) -> str | None:
+    # Require the "department"/"dept" keyword (with an optional separator) before
+    # the code. The old pattern's bare ^/ alternatives never matched the keyword
+    # and instead fabricated departments out of unrelated filename fragments
+    # (e.g. "T01tentative.pdf" → "T01").
     hay = f"{parsed.path} {text}"
-    m = re.search(r"(?:department|dept\.?|^|/)([A-Z]{1,3}\d{1,3})", hay, re.I)
+    m = re.search(r"(?:department|dept)\.?\s*[:#-]?\s*([A-Z]{1,3}\d{1,3})", hay, re.I)
     return m.group(1).upper() if m else None
 
 

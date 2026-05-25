@@ -38,7 +38,6 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from html.parser import HTMLParser
-from typing import Iterator
 
 import pypdf
 
@@ -97,7 +96,7 @@ def parse_page_capture(html: str, capture: dict) -> list[Ruling]:
     try:
         captured_at = datetime.fromisoformat(str(captured_at_raw).replace("Z", "+00:00"))
     except Exception:
-        raise ValueError(f"malformed captured_at for page capture: {captured_at_raw!r}")
+        raise ValueError(f"malformed captured_at for page capture: {captured_at_raw!r}") from None
     text = _html_text(html).strip()
     if not text:
         return []
@@ -157,7 +156,7 @@ TENTATIVE_RULING_ANCHOR_RE = re.compile(
 # Case-number line: ruling block always contains "CASE NUMBER: <num>".
 CASE_NUMBER_LINE_RE = re.compile(
     r"^\s*(?P<idx>\d{1,3}\.)?\s*"
-    r"(?P<time>\d{1,2}:\d{2}\s*[AP]M)?\s+"
+    r"(?P<time>\d{1,2}:\d{2}\s*[AP]M)?\s*"
     r"CASE\s+NUMBER:\s+(?P<case_number>[A-Z]{1,4}\d{2,4}-?\d{2,8})\s*$",
     re.MULTILINE | re.IGNORECASE,
 )

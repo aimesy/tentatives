@@ -403,7 +403,6 @@ def parse(
         header_start = region_start + cn_line_start
         if title_lines:
             # Recompute header_start as the start of the first title line.
-            header_text_rel_end = cn_line_start
             # Step back through title lines to find true start.
             t_idx = cn_line_start
             for _ in title_lines:

@@ -89,8 +89,11 @@ jobs:
           [ -n "$URL_TO_YEAR" ] && args+=(--url-to-year "$URL_TO_YEAR")
           [ -n "$LIMIT" ] && args+=(--limit "$LIMIT")
           python -m ingest.backfill "${args[@]}" | tee backfill.log
-          if [ "${{ github.event_name }}" = "schedule" ] && ! grep -Eq '^[-[:alnum:]]+: [1-9][0-9]* refs$' backfill.log; then
-            echo "scheduled backfill discovered zero capture refs" >&2
+          # Assert on refs actually fetched/archived (the "archived/logged N refs"
+          # line), not on refs merely discovered. Otherwise a run where discovery
+          # works but every download fails would still look green.
+          if [ "${{ github.event_name }}" = "schedule" ] && ! grep -Eq '^[-[:alnum:]]+: archived/logged [1-9][0-9]* refs$' backfill.log; then
+            echo "scheduled backfill archived zero capture refs" >&2
             exit 1
           fi
 

@@ -36,7 +36,6 @@ import io
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Iterator
 from urllib.parse import unquote
 
 import pypdf
@@ -233,7 +232,7 @@ def _classify(text: str) -> tuple[str, bool, date | None]:
     has_denied = bool(re.search(r"\bDENIED\b|\bDENIES\b|\bDISMISSED?\b", upper))
     has_granted = bool(re.search(r"\bGRANTED?\b|\bSUSTAINED\b", upper))
     has_continued = bool(re.search(r"\bCONTINUED TO\b|\bHEARING (?:IS )?CONTINUED\b", upper))
-    has_appearance = bool(re.search(r"\bAPPEARANCE\s+(?:OF|REQUIRED|IS REQUIRED)\b|\bAPPEARANCES?\s+ARE\s+REQUIRED\b", upper))
+    has_appearance = bool(re.search(r"\bAPPEARANCES?\s+(?:ARE\s+|IS\s+)?(?:REQUIRED|NECESSARY)\b", upper))
     has_off_cal = bool(re.search(r"\bOFF\s+CALENDAR\b|\bVACATED\b|\bDROPPED\s+FROM\b", upper))
 
     if has_denied:
@@ -341,7 +340,10 @@ def parse(
 ) -> list[Ruling]:
     if source_sha256 is None:
         source_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
-    reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+    except Exception:
+        return []
     raw_pages = [page.extract_text() or "" for page in reader.pages]
     if not raw_pages:
         return []

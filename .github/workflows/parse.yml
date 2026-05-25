@@ -56,7 +56,7 @@ jobs:
 
       - name: Commit updated parquet and slices
         run: |
-          if git diff --quiet -- data/ && git diff --quiet -- archive/ && [ -z "$(git status --porcelain archive/)" ]; then
+          if git diff --quiet -- data/ archive/ && [ -z "$(git status --porcelain data/ archive/)" ]; then
             echo "no parquet or slice changes"
             exit 0
           fi
