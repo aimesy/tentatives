@@ -9,7 +9,7 @@ The point is preservation first, parsing second. The archive keeps the court sou
 - Viewer: [aimesy.github.io/tentatives](https://aimesy.github.io/tentatives/)
 - Chrome extension: [tentatives-extension.zip](https://github.com/aimesy/tentatives/releases/download/extension-latest/tentatives-extension.zip)
 - Firefox extension: [tentatives-extension-firefox.zip](https://github.com/aimesy/tentatives/releases/download/extension-latest/tentatives-extension-firefox.zip)
-- Contact: amy@chattopadhyay.org
+- Contact: me@amyc.us
 
 ## Status
 
