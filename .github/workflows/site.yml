@@ -28,9 +28,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # NOTE: `enablement: true` is intentionally NOT set. Per the
+      # configure-pages action, enablement requires a token *other than* the
+      # default GITHUB_TOKEN (a PAT with repo/Pages-write, or a GitHub App with
+      # administration:write). With only GITHUB_TOKEN the enable-API call 403s,
+      # which fails this build job so `deploy` never runs and the whole site
+      # 404s. Pages must instead be enabled once in Settings -> Pages with
+      # "Source: GitHub Actions"; after that this workflow deploys on its own.
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - name: Assemble Pages payload
         run: |
