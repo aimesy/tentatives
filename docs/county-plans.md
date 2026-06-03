@@ -16,7 +16,7 @@ Current registered parsers:
 | County | Parser coverage | Tests present |
 |---|---|---|
 | Amador | Legacy PDF parser for archived/Wayback dropdown PDFs. | Discovery and parse tests. |
-| Contra Costa | PDF parser plus HTML page-capture parser. CLI discovery is not implemented. | Parse tests. |
+| Contra Costa | PDF parser plus HTML page-capture parser. CLI discovery uses the public retired.cc-courts.org iframe URL. | Discovery and parse tests. |
 | El Dorado | Probate, civil law-and-motion, probate calendar, and family-law PDF parser. | Discovery and parse tests. |
 | Nevada | Static-page PDF parser. `.docx` links are discovered as a source issue but not parsed. | Discovery and parse tests. |
 | Orange | Civil, family, and probate PDF parser for stable current URLs. | Discovery and parse tests. |
@@ -36,7 +36,7 @@ parser tests are added.
 |---|---|---|---|---|
 | Amador | `https://www.amadorcourt.org/os-tentativerulings.aspx` | Four legacy dropdowns with direct PDF option values. | Capture live dropdown PDFs and Wayback prefix captures for `www.amadorcourt.org/tentativeRulings/*`, especially 2020-2022. Current post-02/15/2022 access appears portal-based. | Parser registered for legacy PDFs. |
 | Calaveras | `https://www.calaveras.courts.ca.gov/online-services/tentative-rulings` | Static case-management and civil law-and-motion lists with many historical PDFs. | Capture both list pages. Do not assume filename regularity; use link text and URL. | Capture-only. |
-| Contra Costa | Public Contra Costa tentative-rulings pages with `cc-courts.org` iframe content. | Browser/iframe path; CLI discovery placeholder returns no refs. | Use the browser extension now. Add a Playwright/Xvfb or direct iframe adapter before calling it VPS-automated. | Parser registered for captured PDFs and page captures. |
+| Contra Costa | `https://retired.cc-courts.org/civil/motions-hearings-tentative.aspx`, embedded by the public Contra Costa tentative-rulings page. | ASP.NET iframe page with direct PDF anchors under `/civil/TR/`. | Capture current PDFs directly in `ingest.backfill`; keep the extension for page snapshots and manual browser scans. | Parser registered for captured PDFs and page captures. |
 | El Dorado | Court tentative-ruling pages. | Static direct PDF links across several divisions/styles. | Keep live capture and Wayback checks; maintain parser fixtures for each PDF family. | Parser registered. |
 | Fresno | `https://www.fresno.courts.ca.gov/online-services/tentative-rulings` | Static Law and Motion page with department PDF links. | Capture direct PDFs and infer department from filenames such as `dept-503`. | Capture-only. |
 | Merced | `https://www.merced.courts.ca.gov/online-services/tentative-rulings` | Static weekday PDF links, `tr-monday.pdf` through `tr-friday.pdf`. | Capture weekday PDFs; use hashes and Wayback for overwritten-file history. | Capture-only. |
@@ -62,7 +62,7 @@ scope unless there is a lawful public access path.
 
 | Source | Current CLI status | Why it is not fully automatic today | Potential desktop/app solution |
 |---|---|---|---|
-| Contra Costa | Not in `ingest.backfill --county all`; browser extension path exists. | Court content is exposed through iframe/browser state. The scraper module has a placeholder `discover_live` returning no refs. | Run Chromium under Xvfb with the extension or a Playwright adapter that opens the public court page, reads the iframe, and uploads changed PDFs/page captures. |
+| Contra Costa page snapshots | PDF capture is now automatic through the public retired.cc-courts.org iframe URL; HTML page snapshots remain extension-backed. | CLI backfill stores PDFs only. The extension still captures changed visible text/layout pages. | Use the browser extension or a future Playwright/Xvfb pass only when page snapshots, not PDFs, need refresh. |
 | Amador post-02/15/2022 | Legacy PDFs/Wayback are automatic; current portal is not. | Current access appears portal/account-based rather than public static PDFs. | If there is a public unauthenticated portal path, automate it with Playwright in a virtual window; otherwise keep to legacy public archive/Wayback. |
 | Nevada `.docx` links | PDF links are automatic; `.docx` links are not archived. | Pipeline is PDF-first and does not yet store or parse Word documents. | Add document capture for `.docx`, convert or parse with `python-docx`, and add fixtures before enabling parser rows. |
 | Google Drive folders (Napa, San Luis Obispo, Santa Cruz backlog) | Not implemented. | Drive folder markup and download URLs are unstable under basic HTML scraping. | Prefer Drive API or public folder JSON extraction; fallback to headed Chromium that enumerates visible files and downloads PDFs. |
@@ -98,7 +98,7 @@ scope unless there is a lawful public access path.
 3. Add static PDF-list counties first, then Google Drive support once for Napa,
    San Luis Obispo, and Santa Cruz.
 4. Add a reusable sessioned-form adapter for Los Angeles and Ventura.
-5. Add a VPS/headed-browser lane for Contra Costa and any future site that
-   requires active page execution but remains public.
+5. Add a VPS/headed-browser lane only for future public sites that genuinely
+   require active page execution after direct HTTP and sessioned HTTP fail.
 6. Treat SharePoint, Tyler/re:SearchCA, and login-backed portals as blocked
    until a lawful public access path is confirmed.

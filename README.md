@@ -294,7 +294,7 @@ The side panel can:
 - retry a failed landing page three times before moving on.
 - document page layout fingerprints the first time a page is scanned, then again only when the structure changes.
 
-Contra Costa should be opened through the public court pages, not the internal iframe URLs. The extension keeps `cc-courts.org` permission because the official Contra Costa pages load that host in an iframe, and the content script must read the frame.
+For Contra Costa page snapshots, open the public court pages rather than the internal iframe URLs. The extension keeps `cc-courts.org` permission because the official Contra Costa pages load that host in an iframe, and the content script must read the frame. PDF backfill now uses the public retired.cc-courts.org iframe URL directly.
 
 ## Backfill
 
@@ -307,7 +307,7 @@ python -m ingest.backfill --county amador --wayback --url-from-year 2020 --url-t
 python -m ingest.backfill --county orange --live --wayback --limit 25
 ```
 
-`--county all` means the CLI-backed counties. It does not include browser-only flows that need an iframe or active page execution.
+`--county all` means the configured CLI-backed counties. Contra Costa PDFs are included through a direct adapter for the public retired.cc-courts.org iframe URL. Browser-only work is limited to extension page snapshots or future public sites that still need active page execution after direct HTTP fails.
 
 The GitHub workflow runs live capture daily at 5 PM America/Los_Angeles, with a DST guard because GitHub cron is UTC-only. It also runs a bounded Wayback check weekly because current URLs may acquire archived versions later. For a VPS-based second live-capture path, see [docs/vps-daily-harvest.md](docs/vps-daily-harvest.md).
 
