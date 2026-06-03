@@ -9,7 +9,7 @@
       content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
     />
     <title>California Tentative Rulings</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=20260603-action-state" />
   </head>
   <body>
     <header class="hdr">
@@ -29,8 +29,8 @@
         </div>
         <div class="hdr-right">
           <span class="dl-wrap">
-            <button class="hbtn" id="dl-btn" title="Load county data files" aria-haspopup="true" aria-expanded="false">
-              <span class="hbtn-label">Database Downloads</span><span id="counties-summary" class="dl-summary">none</span><span class="caret">v</span>
+            <button class="hbtn" id="dl-btn" title="Load county data files" aria-label="Database downloads, no counties selected" aria-haspopup="true" aria-expanded="false">
+              <span class="hbtn-label">Database Downloads</span> <span id="counties-summary" class="dl-summary">none</span> <span class="caret">v</span>
             </button>
             <div class="dl-menu" id="dl-menu" role="menu" aria-label="Database downloads">
               <div class="dl-actions">
@@ -155,6 +155,6 @@
       </div>
     </div>
 
-    <script type="module" src="app.js"></script>
+    <script type="module" src="app.js?v=20260603-action-state"></script>
   </body>
 </html>

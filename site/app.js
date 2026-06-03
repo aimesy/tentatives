@@ -472,7 +472,18 @@ function render() {
 
   refreshColFilterButtons();
   updateCountiesSummary();
+  updateActionAvailability();
   applyColVisibility();
+}
+
+function updateActionAvailability() {
+  const exportBtn = $("export-btn");
+  if (!exportBtn) return;
+  const hasRows = state.filtered.length > 0;
+  exportBtn.disabled = !hasRows;
+  exportBtn.title = hasRows
+    ? "Download filtered view as CSV"
+    : "Load county data or adjust filters before exporting CSV";
 }
 
 function appendCell(tr, text, className = "") {
@@ -959,6 +970,15 @@ function updateCountiesSummary() {
       .map((s) => COUNTY_LABEL[s] || s).join(", ");
   } else {
     summary.textContent = `${n} selected`;
+  }
+  const dlBtn = $("dl-btn");
+  if (dlBtn) {
+    const label = n === 0
+      ? "Database downloads, no counties selected"
+      : n === total
+        ? `Database downloads, all ${total} counties selected, ${loaded} loaded`
+        : `Database downloads, ${n} counties selected, ${loaded} loaded`;
+    dlBtn.setAttribute("aria-label", label);
   }
 }
 
