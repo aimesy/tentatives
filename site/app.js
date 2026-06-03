@@ -6,7 +6,7 @@
 // linked into archive/<county>/rulings/<two-hex>/<ruling_id>.pdf on the
 // github.com blob view (which renders inline).
 //
-// The interface is patterned on aimesy/sfsc-tentatives — chip toolbar +
+// The interface is patterned on aimesy/sfsc-tentatives: chip toolbar,
 // Excel-style per-column filter popups + a modal overlay for the detail
 // view + URL-driven state so a permalink reproduces the view.
 
@@ -80,9 +80,10 @@ const state = {
   filters: { q: "", from: "", to: "" },
   // Excel-style per-column filters. Map<col, Set<value>>. Absence means
   // "no filter". An empty Set means "user explicitly unticked everything"
-  // → matches nothing.
+  // matches nothing.
   columnFilters: new Map(),
   loadedCounties: new Map(),
+  countyStatus: new Map(),
   selectedCounties: new Set(),
   sort: { col: "hearing_date", dir: "desc" },
   page: 1,
@@ -108,6 +109,21 @@ function setStage(name, value, kind = "active") {
   }
   row.className = `stage ${kind}`;
   row.querySelector(".s-val").textContent = value;
+}
+
+function setCountyStatus(slug, status = "idle", detail = "") {
+  state.countyStatus.set(slug, { status, detail });
+  const row = $(`county-row-${slug}`);
+  if (!row) return;
+  row.classList.remove("idle", "downloading", "loaded", "error");
+  row.classList.add(status);
+  const icon = row.querySelector(".dl-status");
+  if (icon) {
+    icon.classList.remove("idle", "downloading", "loaded", "error");
+    icon.classList.add(status);
+  }
+  const sub = row.querySelector(".county-sub");
+  if (sub) sub.textContent = detail || "not loaded";
 }
 
 // ============================================================ LOAD
@@ -179,19 +195,23 @@ async function fetchAndParse(county) {
   const root = await resolveDataRoot();
   const url = `${root}/${county.slug}/rulings.parquet`;
   setStage(county.label, "downloading...", "active");
+  setCountyStatus(county.slug, "downloading", "downloading data file...");
   let res;
   try {
     res = await fetch(url);
   } catch (e) {
     setStage(county.label, `network error: ${e.message || e}`, "err");
+    setCountyStatus(county.slug, "error", `network error: ${e.message || e}`);
     return [];
   }
   if (res.status === 404) {
     setStage(county.label, "no data yet", "done");
+    setCountyStatus(county.slug, "loaded", "no data yet");
     return [];
   }
   if (!res.ok) {
     setStage(county.label, `HTTP ${res.status}`, "err");
+    setCountyStatus(county.slug, "error", `HTTP ${res.status}`);
     return [];
   }
   const buffer = await res.arrayBuffer();
@@ -201,8 +221,10 @@ async function fetchAndParse(county) {
     async slice(start, end) { return buffer.slice(start, end); },
   };
   setStage(county.label, "parsing...", "active");
+  setCountyStatus(county.slug, "downloading", "parsing...");
   const rows = await parquetReadObjects({ file });
   setStage(county.label, `${rows.length.toLocaleString()} rulings`, "done");
+  setCountyStatus(county.slug, "loaded", `${rows.length.toLocaleString()} rulings loaded`);
   return rows;
 }
 
@@ -244,6 +266,7 @@ async function ensureCountiesLoaded() {
 
   for (const slug of toRemove) {
     state.loadedCounties.delete(slug);
+    setCountyStatus(slug, "idle", "not loaded");
     const stage = $(`stage-${COUNTY_LABEL[slug] || slug}`);
     if (stage) stage.remove();
   }
@@ -257,6 +280,7 @@ async function ensureCountiesLoaded() {
     } catch (e) {
       console.error(`Failed to load ${slug}:`, e);
       setStage(county.label, `error: ${e.message || e}`, "err");
+      setCountyStatus(slug, "error", `error: ${e.message || e}`);
       return [slug, []];
     }
   }));
@@ -302,7 +326,7 @@ function rowColumnValue(row, col) {
 function passesColumnFilters(row) {
   for (const [col, set] of state.columnFilters) {
     if (!(set instanceof Set)) continue;
-    if (set.size === 0) return false; // user-emptied → matches nothing
+    if (set.size === 0) return false; // user-emptied matches nothing
     const v = rowColumnValue(row, col);
     if (!set.has(v)) return false;
   }
@@ -383,6 +407,8 @@ function rulingPdfHref(r) {
 
 function render() {
   const total = state.filtered.length;
+  const selectedLoadedCount = [...state.selectedCounties].filter((slug) => state.loadedCounties.has(slug)).length;
+  const loadingSelected = selectedLoadedCount < state.selectedCounties.size;
   $("result-count").textContent =
     total === state.rows.length
       ? `${total.toLocaleString()} rulings`
@@ -404,9 +430,15 @@ function render() {
     const td = document.createElement("td");
     td.colSpan = 11;
     td.className = "no-data";
-    td.textContent = state.selectedCounties.size === 0
-      ? "Pick one or more counties above to load rulings."
-      : "No rulings match the current filters.";
+    if (state.selectedCounties.size === 0) {
+      td.textContent = "Open Database Downloads to load one or more county data files.";
+    } else if (loadingSelected) {
+      td.textContent = "Loading selected county data files...";
+    } else if (state.rows.length === 0) {
+      td.textContent = "Selected county data files contain no rulings.";
+    } else {
+      td.textContent = "No rulings match the current filters.";
+    }
     tr.appendChild(td);
     fragment.appendChild(tr);
   } else {
@@ -425,16 +457,21 @@ function render() {
   }
 
   if (state.rows.length === 0) {
+    const countyWord = selectedLoadedCount === 1 ? "county" : "counties";
     $("stats").textContent = state.selectedCounties.size === 0
       ? "no counties selected"
-      : "loading...";
+      : loadingSelected
+        ? "loading..."
+        : `0 rulings / ${selectedLoadedCount} ${countyWord}`;
   } else {
     const counties = new Set(state.rows.map((r) => r.county)).size;
+    const countyWord = counties === 1 ? "county" : "counties";
     $("stats").textContent =
-      `${state.rows.length.toLocaleString()} rulings | ${counties} counties`;
+      `${state.rows.length.toLocaleString()} rulings / ${counties} ${countyWord}`;
   }
 
   refreshColFilterButtons();
+  updateCountiesSummary();
   applyColVisibility();
 }
 
@@ -481,7 +518,7 @@ function renderRow(r, idx) {
   if (r.conditional) {
     const cond = document.createElement("span");
     cond.className = "cond";
-    cond.title = "ABSENT OBJECTION → granted";
+    cond.title = "ABSENT OBJECTION -> granted";
     cond.textContent = "cond.";
     outcomeCell.appendChild(cond);
   }
@@ -505,10 +542,10 @@ function renderRow(r, idx) {
     const page = pageNumber(r.page_start);
     const pageEnd = pageNumber(r.page_end);
     const range = page && pageEnd && pageEnd !== page ? `p.${page}-${pageEnd}` : (page ? `p.${page}` : "");
-    a.textContent = range ? `📄 ${range}` : "📄";
+    a.textContent = range ? `PDF ${range}` : "PDF";
     pdfCell.appendChild(a);
   } else {
-    pdfCell.textContent = "—";
+    pdfCell.textContent = "-";
   }
   tr.appendChild(pdfCell);
 
@@ -521,7 +558,7 @@ function renderRow(r, idx) {
   shareBtn.className = "share-btn";
   shareBtn.title = "Copy a permalink to this ruling";
   shareBtn.dataset.share = "1";
-  shareBtn.textContent = "🔗";
+  shareBtn.textContent = "URL";
   shareCell.appendChild(shareBtn);
   tr.appendChild(shareCell);
 
@@ -569,7 +606,7 @@ function openModal(rowOrIdx) {
     r.division ? { label: r.division } : null,
     r.hearing_date ? { label: r.hearing_date } : null,
     r.outcome ? { label: r.outcome + (r.conditional ? " (conditional)" : "") } : null,
-    r.continued_to ? { label: `continued → ${r.continued_to}` } : null,
+    r.continued_to ? { label: `continued -> ${r.continued_to}` } : null,
   ].filter(Boolean);
   for (const p of pills) {
     const span = document.createElement("span");
@@ -654,10 +691,10 @@ function openColFilter(col, btn) {
 
   const label = COL_FILTER_LABELS[col] || col;
   pop.innerHTML =
-    `<div class="cf-title">Filter — ${esc(label)}</div>` +
+    `<div class="cf-title">Filter - ${esc(label)}</div>` +
     `<div class="cf-sort">` +
-      `<button class="cf-az">A → Z</button>` +
-      `<button class="cf-za">Z → A</button>` +
+      `<button class="cf-az">A to Z</button>` +
+      `<button class="cf-za">Z to A</button>` +
       `<button class="cf-byn active">By count</button>` +
     `</div>` +
     `<input class="cf-search" type="search" placeholder="Search values...">` +
@@ -715,7 +752,7 @@ function openColFilter(col, btn) {
     let truncatedNote = "";
     if (isHighCard && view.length > HIGH_CARD_RENDER_CAP) {
       truncatedNote = `<div class="cf-empty" style="text-align:left;padding:0.3rem 0.5rem;color:#888">` +
-        `Showing ${HIGH_CARD_RENDER_CAP} of ${view.length.toLocaleString()} matches — refine your search.</div>`;
+        `Showing ${HIGH_CARD_RENDER_CAP} of ${view.length.toLocaleString()} matches - refine your search.</div>`;
       view = view.slice(0, HIGH_CARD_RENDER_CAP);
     }
     const allChecked = view.every((p) => selected.has(p.value));
@@ -876,6 +913,8 @@ function buildCountiesPicker() {
   list.replaceChildren();
   for (const county of KNOWN_COUNTIES) {
     const li = document.createElement("li");
+    li.id = `county-row-${county.slug}`;
+    li.className = "county-row idle";
     const label = document.createElement("label");
     const cb = document.createElement("input");
     cb.type = "checkbox";
@@ -886,11 +925,24 @@ function buildCountiesPicker() {
       else state.selectedCounties.delete(county.slug);
       refreshFromSelection();
     });
-    const text = document.createElement("span");
-    text.textContent = county.label;
-    label.append(cb, text);
+    const meta = document.createElement("span");
+    meta.className = "county-meta";
+    const name = document.createElement("span");
+    name.className = "county-name";
+    name.textContent = county.label;
+    const sub = document.createElement("span");
+    sub.className = "county-sub";
+    sub.textContent = "not loaded";
+    meta.append(name, sub);
+    const status = document.createElement("span");
+    status.className = "dl-status idle";
+    status.setAttribute("aria-hidden", "true");
+    label.append(cb, meta);
+    li.append(status);
     li.appendChild(label);
     list.appendChild(li);
+    const current = state.countyStatus.get(county.slug);
+    if (current) setCountyStatus(county.slug, current.status, current.detail);
   }
   updateCountiesSummary();
 }
@@ -899,8 +951,9 @@ function updateCountiesSummary() {
   const n = state.selectedCounties.size;
   const total = KNOWN_COUNTIES.length;
   const summary = $("counties-summary");
+  const loaded = [...state.selectedCounties].filter((slug) => state.loadedCounties.has(slug)).length;
   if (n === 0) summary.textContent = "none";
-  else if (n === total) summary.textContent = "all";
+  else if (n === total) summary.textContent = `all ${loaded}/${total}`;
   else if (n <= 2) {
     summary.textContent = [...state.selectedCounties]
       .map((s) => COUNTY_LABEL[s] || s).join(", ");
@@ -912,6 +965,7 @@ function updateCountiesSummary() {
 async function refreshFromSelection() {
   updateCountiesSummary();
   await ensureCountiesLoaded();
+  updateCountiesSummary();
   applyFilters();
 }
 
@@ -1097,6 +1151,25 @@ function wire() {
     refreshFromSelection();
   });
 
+  $("dl-btn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const menu = $("dl-menu");
+    const wasOpen = menu.classList.contains("open");
+    $("cols-menu").classList.remove("open");
+    $("cols-btn").classList.remove("active");
+    $("cols-btn").setAttribute("aria-expanded", "false");
+    menu.classList.toggle("open", !wasOpen);
+    $("dl-btn").classList.toggle("active", !wasOpen);
+    $("dl-btn").setAttribute("aria-expanded", String(!wasOpen));
+  });
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest("#dl-menu") && !e.target.closest("#dl-btn")) {
+      $("dl-menu").classList.remove("open");
+      $("dl-btn").classList.remove("active");
+      $("dl-btn").setAttribute("aria-expanded", "false");
+    }
+  });
+
   $("permalink").addEventListener("click", async () => {
     syncUrl();
     const ok = await copyText(window.location.href);
@@ -1106,7 +1179,7 @@ function wire() {
 
   for (const th of document.querySelectorAll("thead th.sortable")) {
     th.addEventListener("click", (e) => {
-      // Ignore clicks on the filter ▾ button — that opens the popup, not sort.
+      // Ignore clicks on the filter button; that opens the popup, not sort.
       if (e.target.closest(".col-filter-btn")) return;
       const col = th.dataset.col;
       if (!SORT_COLUMNS.has(col)) return;
@@ -1120,8 +1193,8 @@ function wire() {
     });
   }
 
-  // One delegated click handler for the table body — share button vs. PDF
-  // link vs. row → open modal.
+  // One delegated click handler for the table body: share button vs. PDF
+  // link vs. row to open modal.
   $("results-body").addEventListener("click", async (e) => {
     const share = e.target.closest("button[data-share]");
     if (share) {
@@ -1133,7 +1206,7 @@ function wire() {
       if (ok) {
         share.classList.add("copied");
         const orig = share.textContent;
-        share.textContent = "✓";
+        share.textContent = "OK";
         setTimeout(() => {
           share.classList.remove("copied");
           share.textContent = orig;
@@ -1149,7 +1222,7 @@ function wire() {
     openModal(Number(row.dataset.idx));
   });
 
-  // Column filter ▾ buttons. Delegated since the table re-renders.
+  // Column filter buttons. Delegated since the table re-renders.
   document.addEventListener("click", (e) => {
     const btn = e.target.closest(".col-filter-btn");
     if (btn) {
@@ -1180,7 +1253,7 @@ function wire() {
     if (!id) return;
     const url = modalUrlFor(id);
     const ok = await copyText(url);
-    if (ok) flashCopied($("modal-share"), "🔗 Copy link");
+    if (ok) flashCopied($("modal-share"), "Copy link");
     else window.alert(url);
   });
 
@@ -1198,12 +1271,17 @@ function wire() {
     e.stopPropagation();
     const menu = $("cols-menu");
     const wasOpen = menu.classList.contains("open");
+    $("dl-menu").classList.remove("open");
+    $("dl-btn").classList.remove("active");
+    $("dl-btn").setAttribute("aria-expanded", "false");
     menu.classList.toggle("open", !wasOpen);
+    $("cols-btn").classList.toggle("active", !wasOpen);
     $("cols-btn").setAttribute("aria-expanded", String(!wasOpen));
   });
   document.addEventListener("click", (e) => {
     if (!e.target.closest("#cols-menu") && !e.target.closest("#cols-btn")) {
       $("cols-menu").classList.remove("open");
+      $("cols-btn").classList.remove("active");
       $("cols-btn").setAttribute("aria-expanded", "false");
     }
   });

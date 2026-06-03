@@ -13,35 +13,50 @@
   </head>
   <body>
     <header class="hdr">
-      <div class="hdr-left">
-        <h1>California Tentative Rulings</h1>
-        <span id="stats" class="hdr-stats">loading...</span>
+      <div class="status-strip">
+        <strong>CA</strong>
+        <span class="dot">.</span>
+        <span>Tentatives</span>
+        <span class="dot">.</span>
+        <span>Multi-County</span>
+        <span class="grow"></span>
+        <span class="live">static viewer</span>
       </div>
-      <div class="hdr-right">
-        <a class="hbtn hbtn-xref" href="https://aimesy.github.io/sfsc-tentatives/" target="_blank" rel="noopener" title="San Francisco Superior Court general civil, housing, probate, and asbestos litigation departments">San Francisco ↗</a>
-        <button class="hbtn" id="export-btn" title="Download filtered view as CSV">CSV</button>
-        <button class="hbtn" id="cols-btn" title="Show / hide table columns" aria-haspopup="true" aria-expanded="false">
-          Columns <span class="caret">▾</span>
-        </button>
-        <a class="hbtn" id="repo-link" href="https://github.com/aimesy/tentatives" target="_blank" rel="noopener">GitHub ↗</a>
+      <div class="entity-bar">
+        <div class="hdr-left">
+          <h1>California Tentative Rulings</h1>
+          <span id="stats" class="hdr-stats">loading...</span>
+        </div>
+        <div class="hdr-right">
+          <span class="dl-wrap">
+            <button class="hbtn" id="dl-btn" title="Load county data files" aria-haspopup="true" aria-expanded="false">
+              <span class="hbtn-label">Database Downloads</span><span id="counties-summary" class="dl-summary">none</span><span class="caret">v</span>
+            </button>
+            <div class="dl-menu" id="dl-menu" role="menu" aria-label="Database downloads">
+              <div class="dl-actions">
+                <button type="button" class="dl-action" id="counties-all">Load all</button>
+                <button type="button" class="dl-action danger" id="counties-none">Unload all</button>
+              </div>
+              <ul class="counties-list" id="counties-list"></ul>
+            </div>
+          </span>
+          <span class="cols-wrap">
+            <button class="hbtn" id="cols-btn" title="Show / hide table columns" aria-haspopup="true" aria-expanded="false">
+              Columns <span class="caret">v</span>
+            </button>
+            <div class="cols-menu" id="cols-menu" role="menu" aria-label="Column visibility"></div>
+          </span>
+          <button class="hbtn" id="export-btn" title="Download filtered view as CSV">CSV</button>
+          <a class="hbtn hbtn-xref" href="https://aimesy.github.io/sfsc-tentatives/" target="_blank" rel="noopener" title="San Francisco Superior Court general civil, housing, probate, and asbestos litigation departments">SFSC</a>
+          <a class="hbtn" id="repo-link" href="https://github.com/aimesy/tentatives" target="_blank" rel="noopener">GitHub</a>
+        </div>
       </div>
-      <div class="cols-menu" id="cols-menu" role="menu" aria-label="Column visibility"></div>
     </header>
 
     <section class="toolbar" id="toolbar" hidden>
-      <details class="chip chip-counties" id="counties-picker">
-        <summary><span class="chip-lbl">Counties</span><span class="counties-summary" id="counties-summary">none</span></summary>
-        <div class="counties-menu">
-          <div class="counties-actions">
-            <button type="button" class="btn" id="counties-all">All</button>
-            <button type="button" class="btn" id="counties-none">Clear</button>
-          </div>
-          <ul class="counties-list" id="counties-list"></ul>
-        </div>
-      </details>
       <span class="chip" title="Free-text search across case #, title, motion, body, full text. Wildcards: * (any sequence), ? (single char).">
         <label class="chip-lbl" for="q">Search</label>
-        <input id="q" type="search" placeholder="case #, title, motion, body...  (* and ? wildcards)" />
+        <input id="q" type="search" placeholder="case #, title, motion, body... (* and ? wildcards)" />
       </span>
       <span class="chip">
         <label class="chip-lbl" for="from">From</label>
@@ -73,10 +88,10 @@
           <thead>
             <tr>
               <th class="col-county sortable" data-col="county">
-                <span class="col-head"><span class="col-label">County</span><button class="col-filter-btn" data-filter-col="county" title="Filter by County">▾</button></span>
+                <span class="col-head"><span class="col-label">County</span><button class="col-filter-btn" data-filter-col="county" title="Filter by County">v</button></span>
               </th>
               <th class="col-dept sortable" data-col="dept">
-                <span class="col-head"><span class="col-label">Dept</span><button class="col-filter-btn" data-filter-col="dept" title="Filter by Dept">▾</button></span>
+                <span class="col-head"><span class="col-label">Dept</span><button class="col-filter-btn" data-filter-col="dept" title="Filter by Dept">v</button></span>
               </th>
               <th class="col-date sortable sort-desc" data-col="hearing_date">
                 <span class="col-head"><span class="col-label">Date</span></span>
@@ -85,13 +100,13 @@
                 <span class="col-head"><span class="col-label">Case #</span></span>
               </th>
               <th class="col-title sortable" data-col="case_title">
-                <span class="col-head"><span class="col-label">Title</span><button class="col-filter-btn" data-filter-col="case_title" title="Filter by Title — search and tick">▾</button></span>
+                <span class="col-head"><span class="col-label">Title</span><button class="col-filter-btn" data-filter-col="case_title" title="Filter by Title - search and tick">v</button></span>
               </th>
               <th class="col-mtype sortable" data-col="motion_type">
-                <span class="col-head"><span class="col-label">Motion</span><button class="col-filter-btn" data-filter-col="motion_type" title="Filter by Motion">▾</button></span>
+                <span class="col-head"><span class="col-label">Motion</span><button class="col-filter-btn" data-filter-col="motion_type" title="Filter by Motion">v</button></span>
               </th>
               <th class="col-outcome sortable" data-col="outcome">
-                <span class="col-head"><span class="col-label">Outcome</span><button class="col-filter-btn" data-filter-col="outcome" title="Filter by Outcome">▾</button></span>
+                <span class="col-head"><span class="col-label">Outcome</span><button class="col-filter-btn" data-filter-col="outcome" title="Filter by Outcome">v</button></span>
               </th>
               <th class="col-text"><span class="col-head"><span class="col-label">Excerpt</span></span></th>
               <th class="col-pdf"><span class="col-head"><span class="col-label">PDF</span></span></th>
@@ -104,9 +119,9 @@
       </div>
       <div class="ftr">
         <div class="pager">
-          <button class="btn" id="prev-page">‹ Prev</button>
+          <button class="btn" id="prev-page">Prev</button>
           <span id="page-info" class="muted">page 1</span>
-          <button class="btn" id="next-page">Next ›</button>
+          <button class="btn" id="next-page">Next</button>
           <span class="sep pager-sep"></span>
           <label class="muted" for="page-size">Rows</label>
           <select id="page-size" class="page-size-select">
@@ -119,12 +134,11 @@
       </div>
     </section>
 
-    <!-- Single shared Excel-style column filter popup. Positioned per click. -->
     <div class="col-filter-pop" id="col-filter-pop"></div>
 
     <div class="overlay" id="overlay">
       <div class="modal">
-        <button class="modal-close" id="modal-close" aria-label="Close">×</button>
+        <button class="modal-close" id="modal-close" aria-label="Close">x</button>
         <h2 id="modal-title"></h2>
         <div class="meta" id="modal-meta"></div>
         <div class="motion" id="modal-motion"></div>
@@ -133,10 +147,10 @@
         <h3 class="section-label">Full text</h3>
         <div class="ruling" id="modal-full"></div>
         <div class="modal-footer">
-          <span class="ruling-id" id="modal-id" title="Short ruling ID — share via the link button."></span>
-          <button class="btn" id="modal-share">🔗 Copy link</button>
-          <a class="btn" id="modal-pdf" target="_blank" rel="noopener" hidden>📄 PDF</a>
-          <a class="btn" id="modal-source" target="_blank" rel="noopener" hidden>↗ Source</a>
+          <span class="ruling-id" id="modal-id" title="Short ruling ID - share via the link button."></span>
+          <button class="btn" id="modal-share">Copy link</button>
+          <a class="btn" id="modal-pdf" target="_blank" rel="noopener" hidden>PDF</a>
+          <a class="btn" id="modal-source" target="_blank" rel="noopener" hidden>Source</a>
         </div>
       </div>
     </div>

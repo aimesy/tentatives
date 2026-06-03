@@ -42,20 +42,87 @@ See [docs/county-plans.md](docs/county-plans.md) for the broader county triage.
 ## Parsed Date Coverage
 
 This section reflects normalized rows in `data/<county>/rulings.parquet`.
-Capture-only counties can have archived PDFs without appearing here.
+Source counts are distinct `source_sha256` values, which may represent PDFs or captured HTML/pages depending on the county.
+Capture-only counties can have archived source material without appearing here.
 
 <details>
-<summary>Amador - 11 rulings across 2 PDFs</summary>
+<summary>Amador - 206 rulings across 31 source hashes</summary>
 
 | Division | Department | First hearing date | Last hearing date | Rows |
 |---|---:|---:|---:|---:|
-| Civil Case Management Conference | 3 | 2015-09-21 | 2015-09-21 | 8 |
+| Child Support | 3 | 2020-01-06 | 2021-02-05 | 9 |
+| Civil Case Management Conference | 2 | 2019-07-01 | 2019-07-01 | 29 |
+| Civil Case Management Conference | 3 | 2015-09-21 | 2022-05-11 | 73 |
+| Civil Case Management Conference | Unspecified | 2015-09-30 | 2022-01-26 | 14 |
 | Civil Law and Motion | 1 | 2022-04-11 | 2022-04-11 | 3 |
+| Family Law Case Management | Unspecified | 2018-12-12 | 2022-02-02 | 17 |
+| Law and Motion | 1 | 2020-01-17 | 2022-01-10 | 6 |
+| Law and Motion | 2 | 2020-01-03 | 2022-02-03 | 4 |
+| Law and Motion | 3 | 2020-02-07 | 2020-02-07 | 2 |
+| Law and Motion | Unspecified | 2020-01-10 | 2022-02-07 | 17 |
+| Unspecified | 3 | 2020-01-27 | 2022-02-04 | 32 |
 
 </details>
 
 <details>
-<summary>Nevada - 589 rulings across 60 PDFs</summary>
+<summary>Contra Costa - 2004 rulings across 137 source hashes</summary>
+
+| Division | Department | First hearing date | Last hearing date | Rows |
+|---|---:|---:|---:|---:|
+| Discovery | 34 | 2026-03-23 | 2026-03-23 | 18 |
+| Law & Motion | 09 | 2025-12-01 | 2025-12-22 | 73 |
+| Law & Motion | 10 | 2026-03-05 | 2026-05-14 | 148 |
+| Law & Motion | 14 | 2026-01-06 | 2026-05-19 | 214 |
+| Law & Motion | 16 | 2025-11-26 | 2026-05-20 | 349 |
+| Law & Motion | 18 | 2025-11-21 | 2025-12-26 | 86 |
+| Law & Motion | 32 | 2026-01-09 | 2026-05-15 | 276 |
+| Law & Motion | 34 | 2025-11-25 | 2026-05-18 | 362 |
+| Law & Motion | 39 | 2025-11-20 | 2026-03-12 | 227 |
+| Law & Motion Add On | 09 | 2025-12-15 | 2025-12-22 | 8 |
+| Law & Motion Add On | 10 | 2026-03-26 | 2026-05-07 | 7 |
+| Law & Motion Add ON | 16 | 2026-03-18 | 2026-03-18 | 1 |
+| Law & Motion Add On | 16 | 2026-04-15 | 2026-05-13 | 6 |
+| Law & Motion Add On | 18 | 2025-11-21 | 2025-11-21 | 1 |
+| Law & Motion Add On | 32 | 2026-01-16 | 2026-05-01 | 7 |
+| Law & Motion Add on | 32 | 2026-02-20 | 2026-02-20 | 1 |
+| Law & Motion Add On | 34 | 2026-02-02 | 2026-05-11 | 17 |
+| Law & Motion Add On | 39 | 2025-11-20 | 2026-02-19 | 7 |
+| Law & Motion Add On 2 | 09 | 2025-12-22 | 2025-12-22 | 1 |
+| Law & Motion Add On 2 | 10 | 2026-04-02 | 2026-04-02 | 1 |
+| Law & Motion Add On 2 | 16 | 2026-04-22 | 2026-04-22 | 1 |
+| Law & Motion Add On 2 | 32 | 2026-02-20 | 2026-02-20 | 2 |
+| Law & Motion Add on 2 | 32 | 2026-02-06 | 2026-02-06 | 1 |
+| Law & Motion Add On 2 | 34 | 2026-02-09 | 2026-02-09 | 1 |
+| Law & Motion Add On 3 | 10 | 2026-04-02 | 2026-04-02 | 1 |
+| Law & Motion Add On 3 | 32 | 2026-02-06 | 2026-05-01 | 3 |
+| Unspecified | 10 | 2026-04-09 | 2026-05-14 | 18 |
+| Unspecified | 14 | 2026-04-07 | 2026-04-07 | 1 |
+| Unspecified | 16 | 2025-11-26 | 2026-05-20 | 60 |
+| Unspecified | 20 | 2025-12-04 | 2026-04-23 | 22 |
+| Unspecified | 34 | 2026-02-23 | 2026-05-04 | 9 |
+| Unspecified | 39 | 2026-01-08 | 2026-03-12 | 5 |
+| Unspecified | 57 | 2025-11-21 | 2026-05-22 | 70 |
+
+</details>
+
+<details>
+<summary>El Dorado - 549 rulings across 58 source hashes</summary>
+
+| Division | Department | First hearing date | Last hearing date | Rows |
+|---|---:|---:|---:|---:|
+| Law and Motion | 12 | 2026-03-18 | 2026-05-20 | 28 |
+| Law and Motion | 4 | 2026-03-20 | 2026-05-22 | 39 |
+| Law and Motion | 5 | 2026-03-26 | 2026-05-21 | 165 |
+| Probate | 4 | 2026-03-20 | 2026-05-22 | 25 |
+| Probate | 9 | 2026-03-16 | 2026-05-18 | 130 |
+| Unspecified | 8 | 2026-03-18 | 2026-04-22 | 16 |
+| Unspecified | 9 | 2026-03-20 | 2026-05-22 | 103 |
+| Unspecified | Unspecified | 2017-06-16 | 2026-04-21 | 43 |
+
+</details>
+
+<details>
+<summary>Nevada - 589 rulings across 60 source hashes</summary>
 
 | Division | Department | First hearing date | Last hearing date | Rows |
 |---|---:|---:|---:|---:|
@@ -76,96 +143,123 @@ Capture-only counties can have archived PDFs without appearing here.
 </details>
 
 <details>
-<summary>Orange - 296 rulings across 36 PDFs</summary>
+<summary>Orange - 737 rulings across 84 source hashes</summary>
 
 | Division | Department | First hearing date | Last hearing date | Rows |
 |---|---:|---:|---:|---:|
-| Civil | C11 | 2026-05-18 | 2026-05-18 | 11 |
-| Civil | C12 | 2026-05-15 | 2026-05-15 | 12 |
-| Civil | C13 | 2026-05-15 | 2026-05-15 | 8 |
-| Civil | C15 | 2026-05-18 | 2026-05-18 | 15 |
-| Civil | C23 | 2026-05-14 | 2026-05-21 | 29 |
-| Civil | C25 | 2026-05-19 | 2026-05-19 | 11 |
+| Civil | C11 | 2026-05-18 | 2026-05-26 | 12 |
+| Civil | C12 | 2023-09-21 | 2026-05-22 | 48 |
+| Civil | C13 | 2025-01-06 | 2026-05-22 | 35 |
+| Civil | C15 | 2023-09-25 | 2026-05-18 | 51 |
+| Civil | C16 | 2023-09-25 | 2025-04-21 | 25 |
+| Civil | C23 | 2023-09-25 | 2026-05-21 | 43 |
+| Civil | C24 | 2024-08-06 | 2025-04-15 | 14 |
+| Civil | C25 | 2023-09-15 | 2026-05-26 | 38 |
 | Civil | C26 | 2026-01-30 | 2026-01-30 | 1 |
-| Civil | C27 | 2026-05-18 | 2026-05-18 | 2 |
-| Civil | C28 | 2026-05-18 | 2026-05-18 | 11 |
-| Civil | C32 | 2026-05-19 | 2026-05-19 | 13 |
-| Civil | C33 | 2026-05-14 | 2026-05-21 | 22 |
-| Civil | C34 | 2026-05-21 | 2026-05-21 | 9 |
-| Civil | C44 | 2026-05-07 | 2026-05-07 | 8 |
-| Civil | CM2 | 2026-05-21 | 2026-05-21 | 14 |
+| Civil | C27 | 2025-04-14 | 2026-05-18 | 12 |
+| Civil | C28 | 2023-09-18 | 2026-05-18 | 38 |
+| Civil | C32 | 2023-09-26 | 2026-05-19 | 73 |
+| Civil | C33 | 2023-09-21 | 2026-05-21 | 78 |
+| Civil | C34 | 2025-04-17 | 2026-05-21 | 28 |
+| Civil | C44 | 2025-03-06 | 2026-05-07 | 9 |
+| Civil | C65 | 2025-04-18 | 2025-04-18 | 1 |
+| Civil | CM2 | 2026-05-14 | 2026-05-21 | 17 |
 | Civil | CX101 | 2026-05-22 | 2026-05-22 | 8 |
-| Civil | CX103 | 2026-05-18 | 2026-05-18 | 17 |
+| Civil | CX103 | 2026-05-18 | 2026-05-26 | 18 |
+| Civil | CX104 | 2023-09-21 | 2025-04-17 | 35 |
 | Civil | CX105 | 2026-05-14 | 2026-05-21 | 26 |
 | Civil | N14 | 2026-05-18 | 2026-05-18 | 9 |
 | Civil | N15 | 2026-05-18 | 2026-05-18 | 18 |
 | Civil | N17 | 2026-05-18 | 2026-05-18 | 2 |
-| Civil | Unspecified | 2025-10-24 | 2026-05-20 | 9 |
-| Civil | W15 | 2026-05-21 | 2026-05-21 | 11 |
+| Civil | Unspecified | 2025-10-24 | 2026-05-20 | 26 |
+| Civil | W02 | 2025-04-18 | 2025-04-18 | 5 |
+| Civil | W15 | 2026-05-14 | 2026-05-21 | 26 |
 | Family Law | C22 | 2025-12-05 | 2025-12-05 | 3 |
+| Family Law | N16 | 2025-04-09 | 2025-04-09 | 1 |
 | Probate | C10 | 2026-05-21 | 2026-05-21 | 1 |
-| Probate | C21 | 2026-05-15 | 2026-05-15 | 9 |
+| Probate | C21 | 2025-04-18 | 2026-05-15 | 18 |
 | Probate | CM04 | 2026-01-16 | 2026-01-16 | 1 |
 | Probate | CM05 | 2026-05-20 | 2026-05-20 | 2 |
 | Probate | CM06 | 2026-05-14 | 2026-05-14 | 2 |
 | Probate | CM08 | 2026-05-20 | 2026-05-20 | 8 |
 | Probate | CM3 | 2026-05-06 | 2026-05-06 | 1 |
 | Probate | Unspecified | 2026-05-20 | 2026-05-20 | 3 |
+| Unspecified | Unspecified | 2026-05-13 | 2026-05-13 | 1 |
 
 </details>
 
 <details>
-<summary>San Francisco - 175 rulings across 23 PDFs</summary>
+<summary>Placer - 231 rulings across 19 source hashes</summary>
 
 | Division | Department | First hearing date | Last hearing date | Rows |
 |---|---:|---:|---:|---:|
-| Family Law | 403 | 2026-04-21 | 2026-05-21 | 90 |
-| Family Law | 404 | 2026-04-21 | 2026-05-21 | 82 |
+| Civil Law and Motion | 3 | 2026-04-30 | 2026-05-21 | 69 |
+| Civil Law and Motion | 33 | 2026-05-01 | 2026-05-15 | 13 |
+| Civil Law and Motion | 42 | 2026-04-28 | 2026-05-19 | 58 |
+| Probate | 30 | 2026-02-27 | 2026-05-08 | 3 |
+| Probate | 32 | 2026-05-11 | 2026-05-11 | 10 |
+| Probate | 40 | 2026-05-08 | 2026-05-15 | 53 |
+| Unspecified | 32 | 2026-05-18 | 2026-05-18 | 13 |
+| Unspecified | 40 | 2026-05-15 | 2026-05-15 | 12 |
+
+</details>
+
+<details>
+<summary>San Francisco - 187 rulings across 25 source hashes</summary>
+
+| Division | Department | First hearing date | Last hearing date | Rows |
+|---|---:|---:|---:|---:|
+| Family Law | 403 | 2026-04-21 | 2026-05-26 | 95 |
+| Family Law | 404 | 2026-04-21 | 2026-05-26 | 89 |
 | Family Law | 414 | 2026-03-26 | 2026-05-07 | 3 |
 
 </details>
 
 <details>
-<summary>Santa Clara - 73 rulings across 12 PDFs</summary>
+<summary>Santa Clara - 376 rulings across 56 source hashes</summary>
 
 | Division | Department | First hearing date | Last hearing date | Rows |
 |---|---:|---:|---:|---:|
-| Civil Law and Motion | 10 | 2026-05-19 | 2026-05-21 | 11 |
-| Civil Law and Motion | 12 | 2026-05-15 | 2026-05-20 | 11 |
-| Civil Law and Motion | 13 | 2026-05-08 | 2026-05-20 | 17 |
-| Civil Law and Motion | 6 | 2026-05-19 | 2026-05-21 | 13 |
-| Law and Motion | 1 | 2026-05-19 | 2026-05-21 | 17 |
-| Probate Law and Motion | 2 | 2026-05-07 | 2026-05-18 | 4 |
+| Civil Law and Motion | 10 | 2024-06-27 | 2026-05-26 | 120 |
+| Civil Law and Motion | 12 | 2026-04-15 | 2026-05-22 | 35 |
+| Civil Law and Motion | 13 | 2025-03-07 | 2026-05-22 | 101 |
+| Civil Law and Motion | 6 | 2024-08-01 | 2026-05-26 | 86 |
+| Law and Motion | 1 | 2026-05-14 | 2026-05-21 | 25 |
+| Probate Law and Motion | 2 | 2024-08-01 | 2026-05-18 | 9 |
 
 </details>
 
 <details>
-<summary>Shasta - 133 rulings across 9 PDFs</summary>
+<summary>Shasta - 866 rulings across 47 source hashes</summary>
 
 | Division | Department | First hearing date | Last hearing date | Rows |
 |---|---:|---:|---:|---:|
 | Civil / Probate / Family Law | 24 | 2024-06-10 | 2024-06-10 | 1 |
-| Civil / Probate / Family Law | 42 | 2026-05-04 | 2026-05-18 | 19 |
+| Civil / Probate / Family Law | 42 | 2024-07-29 | 2026-05-18 | 138 |
 | Civil / Probate / Family Law | 6 | 2023-05-22 | 2023-05-22 | 1 |
-| Conservatorships | 44 | 2026-05-18 | 2026-05-18 | 46 |
+| Civil / Probate / Family Law | Unspecified | 2025-06-02 | 2025-08-04 | 45 |
+| Conservatorships | 44 | 2024-09-16 | 2026-05-18 | 214 |
+| Conservatorships | Unspecified | 2025-06-02 | 2025-08-04 | 82 |
+| Law and Motion | 42 | 2025-07-07 | 2025-07-07 | 1 |
 | Law and Motion | 53 | 2022-06-06 | 2022-06-06 | 9 |
-| Law and Motion | 63 | 2026-05-18 | 2026-05-18 | 26 |
-| Law and Motion | 64 | 2026-05-18 | 2026-05-18 | 22 |
-| Law and Motion | Unspecified | 2026-05-01 | 2026-05-01 | 3 |
-| Trusts | 44 | 2026-05-18 | 2026-05-18 | 6 |
+| Law and Motion | 63 | 2024-09-16 | 2026-05-26 | 174 |
+| Law and Motion | 64 | 2024-11-04 | 2026-05-26 | 147 |
+| Law and Motion | Unspecified | 2024-09-06 | 2026-05-01 | 21 |
+| Trusts | 44 | 2024-09-16 | 2026-05-18 | 22 |
+| Trusts | Unspecified | 2025-06-02 | 2025-08-04 | 11 |
 
 </details>
 
 <details>
-<summary>Solano - 37 rulings across 7 PDFs</summary>
+<summary>Solano - 103 rulings across 27 source hashes</summary>
 
 | Division | Department | First hearing date | Last hearing date | Rows |
 |---|---:|---:|---:|---:|
-| Civil | 3 | 2026-05-19 | 2026-05-22 | 5 |
-| Civil | 7 | 2026-05-19 | 2026-05-22 | 12 |
-| Civil | 8 | 2026-05-21 | 2026-05-21 | 5 |
-| Probate / Civil | 22 | 2026-05-21 | 2026-05-21 | 14 |
-| Probate / Civil | 5 | 2025-12-23 | 2025-12-23 | 1 |
+| Civil | 3 | 2025-03-14 | 2026-05-26 | 15 |
+| Civil | 7 | 2025-03-18 | 2026-05-26 | 30 |
+| Civil | 8 | 2025-11-14 | 2026-05-21 | 11 |
+| Probate / Civil | 22 | 2023-12-28 | 2026-05-21 | 45 |
+| Probate / Civil | 5 | 2025-12-23 | 2025-12-23 | 2 |
 
 </details>
 
@@ -239,7 +333,7 @@ python -m ingest.orchestrate --county contra-costa --reparse-existing --dry-run
 python -m ingest.orchestrate --max-sources-per-county 50
 ```
 
-By default, `ingest.orchestrate` skips source hashes already represented in Parquet. Use `--reparse-existing` for parser migrations. The Actions workflow parses at most 50 new sources per county per run so archive bursts do not turn into long failing jobs. The parser registry is derived from county modules with a callable `parse`; capture-only counties stay in the archive until a parser has representative fixtures and tests.
+By default, `ingest.orchestrate` skips source hashes already represented in Parquet. Use `--reparse-existing` for parser migrations, or `--max-sources-per-county` for bounded local smoke runs. The Actions workflow parses all new archived sources and files a failure report if a new source shape breaks parsing. The parser registry is derived from county modules with a callable `parse`; capture-only counties stay in the archive until a parser has representative fixtures and tests.
 
 ## Layout
 
@@ -264,7 +358,7 @@ site/                            static viewer
 3. Add fixture HTML and discovery tests.
 4. Add parser tests only after you have representative source files.
 5. Implement `parse(...) -> list[Ruling]`.
-6. Register the parser in `ingest/orchestrate.py`.
+6. Make `parse` callable from `counties/<slug>/scraper.py`; the registry is derived dynamically.
 7. Add extension support only when the browser path is needed or useful.
 
 Filename and link-text hints are allowed for capture. Parser facts should come from the source document or page text whenever possible.
