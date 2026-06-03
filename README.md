@@ -215,7 +215,7 @@ python -m ingest.backfill --county orange --live --wayback --limit 25
 
 `--county all` means the CLI-backed counties. It does not include browser-only flows that need an iframe or active page execution.
 
-The GitHub workflow runs live capture daily. It also runs a bounded Wayback check weekly because current URLs may acquire archived versions later.
+The GitHub workflow runs live capture daily at 5 PM America/Los_Angeles, with a DST guard because GitHub cron is UTC-only. It also runs a bounded Wayback check weekly because current URLs may acquire archived versions later. For a VPS-based second live-capture path, see [docs/vps-daily-harvest.md](docs/vps-daily-harvest.md).
 
 Wayback has not been broadly backfilled yet. The local archive currently shows one Wayback row, for Amador. Start bounded, then widen.
 
@@ -239,7 +239,7 @@ python -m ingest.orchestrate --county contra-costa --reparse-existing --dry-run
 python -m ingest.orchestrate --max-sources-per-county 50
 ```
 
-By default, `ingest.orchestrate` skips source hashes already represented in Parquet. Use `--reparse-existing` for parser migrations. The Actions workflow parses at most 50 new sources per county per run so archive bursts do not turn into long failing jobs. The parser registry is intentionally narrow. Capture-only counties stay in the archive until a parser has fixtures and tests.
+By default, `ingest.orchestrate` skips source hashes already represented in Parquet. Use `--reparse-existing` for parser migrations. The Actions workflow parses at most 50 new sources per county per run so archive bursts do not turn into long failing jobs. The parser registry is derived from county modules with a callable `parse`; capture-only counties stay in the archive until a parser has representative fixtures and tests.
 
 ## Layout
 
@@ -277,3 +277,4 @@ Filename and link-text hints are allowed for capture. Parser facts should come f
 - Nevada can publish `.docx`; this repo is still PDF-first.
 - Contra Costa page captures are normalized as page rows, not as PDF rulings.
 - Login-backed or authenticated systems are out of scope unless there is a public lawful access path.
+- Before treating a source as not automatically scrapeable, try direct HTTP, sessioned form replay, headless browser, and a headed browser in a VPS virtual display. `docs/county-plans.md` tracks the current blockers and app/desktop fallbacks.

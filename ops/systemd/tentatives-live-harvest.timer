@@ -1,0 +1,13 @@
+[Unit]
+Description=Run aimesy/tentatives live harvest at 5 PM Pacific
+
+[Timer]
+# Run both UTC slots that can correspond to 5 PM America/Los_Angeles.
+# The service gates on TZ=America/Los_Angeles, so the non-matching slot exits.
+OnCalendar=*-*-* 00:00:00 UTC
+OnCalendar=*-*-* 01:00:00 UTC
+Persistent=true
+RandomizedDelaySec=2m
+
+[Install]
+WantedBy=timers.target

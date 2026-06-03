@@ -1,0 +1,13 @@
+[Unit]
+Description=aimesy/tentatives daily live harvest
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/aimesy/tentatives
+Environment=GATE_PACIFIC_5PM=1
+ExecStart=/opt/aimesy/tentatives/ops/vps-live-harvest.sh
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6

@@ -32,11 +32,10 @@ on:
         description: Optional max refs per county/discovery run
         required: false
   schedule:
-    # Daily live harvest at 5 PM PST = 01:00 UTC. Forward-captures the public
-    # static landing pages declared by each county's LANDING_PAGES (16 counties
-    # so far; Contra Costa stays out because its calendar is iframe-served and
-    # needs the browser extension).
-    - cron: "0 1 * * *"
+    # Daily live harvest at 5 PM America/Los_Angeles. GitHub cron is UTC and
+    # cannot express Pacific DST directly, so run both possible UTC slots and
+    # gate inside the job.
+    - cron: "0 0,1 * * *"
     # Re-check Wayback weekly; existing current URLs may acquire new archived
     # versions over time.
     - cron: "17 11 * * 0"
@@ -76,6 +75,13 @@ jobs:
           LIMIT: ${{ github.event.inputs.limit || (github.event.schedule == '17 11 * * 0' && '50' || '') }}
         run: |
           set -o pipefail
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" != "17 11 * * 0" ]; then
+            pacific_hour="$(TZ=America/Los_Angeles date +%H)"
+            if [ "$pacific_hour" != "17" ]; then
+              echo "not 5 PM Pacific (hour=$pacific_hour); skipping duplicate UTC slot"
+              exit 0
+            fi
+          fi
           args=(--county "$COUNTY" --continue-on-error)
           case "$MODE" in
             live) args+=(--live) ;;
@@ -126,8 +132,9 @@ jobs:
           LOG_PATH: backfill.log
           EXTRA_CONTEXT: |
             Scheduled live harvest. Mode was inferred from the cron pattern
-            (`0 1 * * *` → live; `17 11 * * 0` → wayback). The job exits
-            non-zero when no county reports any new refs — that's the most
-            common failure when a single county's landing-page HTML changes.
+            (`0 0,1 * * *` plus the Pacific-hour gate -> live;
+            `17 11 * * 0` -> wayback). The job exits non-zero when no county
+            reports any new refs - that's the most common failure when a
+            single county's landing-page HTML changes.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: .github/scripts/file_failure_report.sh
