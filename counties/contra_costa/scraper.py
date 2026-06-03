@@ -25,9 +25,9 @@ Case-number formats seen:
     MSC21-02266              (legacy: 2-3 letters + YY + dash + 5 digits)
     N23-0180                 (1-letter + YY + dash + 4 digits)
 
-Discovery for CCC is iframe-driven from the public Contra Costa pages. CLI
-discovery is not implemented yet; the extension handles the public page and
-its frames.
+Discovery for CCC uses the direct URL loaded by the official Contra Costa
+public-page iframe. The parent court page is still the best browser entry point,
+but the iframe URL itself is public and works for CLI capture.
 """
 
 from __future__ import annotations
@@ -38,21 +38,86 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from html.parser import HTMLParser
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import pypdf
 
-from counties.common import PdfRef
+from counties.common import PdfRef, absolute_url, clean_text, extract_links, filename_from_url, unique_refs
 from schema import Ruling
 from . import COUNTY_SLUG, PARSER_VERSION
 
 
 # ============================================================ DISCOVERY
 
+LANDING_PAGES = [
+    # Official parent page embeds this retired.cc-courts.org ASP.NET page.
+    # Fetching the retired host directly avoids cross-origin iframe execution
+    # while preserving the court-published PDF list.
+    "https://retired.cc-courts.org/civil/motions-hearings-tentative.aspx",
+]
+
+WAYBACK_PDF_PATTERNS = [
+    "https://retired.cc-courts.org/civil/TR/*/*.pdf",
+    "https://www.cc-courts.org/civil/TR/*/*.pdf",
+]
+
+CCC_HOST_RE = re.compile(r"(^|\.)((retired|www)\.)?cc-courts\.org$|(^|\.)contracosta\.courts\.ca\.gov$", re.I)
+CCC_TR_PDF_PATH_RE = re.compile(r"^/civil/TR/.+\.pdf$", re.I)
+CCC_SYSTEM_RULING_PATH_RE = re.compile(r"^/system/files/tentative-rulings?/[^/]+\.pdf$", re.I)
+NON_RULING_NAME_RE = re.compile(
+    r"\b(judicial[-_ ]directory|department[-_ ]phone|directory[-_ ]of[-_ ]judicial|"
+    r"phone[-_ ]numbers?|instructions?[-_ ]for[-_ ]contesting)\b",
+    re.I,
+)
+DEPT_HINT_RE = re.compile(r"(?:^|/)Department\s+(\d{1,3})\b|/(\d{1,3})_\d{6}\.pdf$", re.I)
+
+
+def _canonical_url(raw_url: str, page_url: str | None) -> str:
+    raw = raw_url.replace("\\", "/")
+    url = absolute_url(raw, page_url or LANDING_PAGES[0])
+    parts = urlsplit(url)
+    path = quote(unquote(parts.path), safe="/%")
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+
+
+def _is_ruling_pdf(url: str) -> bool:
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    path = unquote(parts.path)
+    if not parts.scheme.startswith("http") or not host or not path.lower().endswith(".pdf"):
+        return False
+    if not CCC_HOST_RE.search(host):
+        return False
+    if NON_RULING_NAME_RE.search(unquote(path)):
+        return False
+    return bool(CCC_TR_PDF_PATH_RE.search(path) or CCC_SYSTEM_RULING_PATH_RE.search(path))
+
+
+def _dept_hint(url: str) -> str | None:
+    match = DEPT_HINT_RE.search(unquote(urlsplit(url).path))
+    if not match:
+        return None
+    dept = match.group(1) or match.group(2)
+    return str(int(dept)) if dept else None
+
 
 def discover_live(html: str, page_url: str | None = None) -> list[PdfRef]:
-    """Placeholder: CCC tentative rulings are exposed through iframes on the
-    public court pages. CLI discovery needs a browser or a direct frame adapter."""
-    return []
+    refs: list[PdfRef] = []
+    for link in extract_links(html):
+        url = _canonical_url(link.url, page_url)
+        if not _is_ruling_pdf(url):
+            continue
+        refs.append(
+            PdfRef(
+                url=url,
+                filename=filename_from_url(url),
+                dept_hint=_dept_hint(url),
+                division_hint="Civil",
+                link_text=clean_text(link.text),
+                source_page_url=page_url,
+            )
+        )
+    return unique_refs(refs)
 
 
 class _VisibleTextParser(HTMLParser):
