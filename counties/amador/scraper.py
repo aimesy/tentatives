@@ -46,6 +46,8 @@ from . import COUNTY_SLUG, PARSER_VERSION
 
 BASE = "https://www.amadorcourt.org/os-tentativerulings.aspx"
 LANDING_PAGES = [BASE]
+ROUTINE_LIVE = False
+ROUTINE_LIVE_DISABLED_REASON = "legacy dropdowns only expose 2020-2022 PDFs; current access moved after 2022-02-15"
 WAYBACK_PDF_PATTERNS = [
     "www.amadorcourt.org/tentativeRulings/*",
     "amadorcourt.org/tentativeRulings/*",

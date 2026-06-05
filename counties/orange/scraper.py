@@ -53,6 +53,7 @@ LANDING_PAGES = [
     f"{BASE}/online-services/tentative-rulings/family-law-tentative-rulings",
     f"{BASE}/online-services/tentative-rulings/probate-tentative-rulings",
 ]
+ALLOWED_SOURCE_HOSTS = {"live-jcc-oc.pantheonsite.io"}
 
 
 def _division_from_page(page_url: str) -> str | None:

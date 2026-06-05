@@ -133,8 +133,8 @@
         return m ? m[1] : null;
       },
       divisionHint: (_u, _text, _source, pageUrl) => {
-        if (/department-(2|7)-/i.test(pageUrl.pathname)) return "Probate";
-        if (/department-(19|22)-/i.test(pageUrl.pathname)) return "Complex Civil";
+        if (/(?:department|dept)-(2|7)-/i.test(pageUrl.pathname)) return "Probate";
+        if (/(?:department|dept)-(19|22)-/i.test(pageUrl.pathname)) return "Complex Civil";
         return "Civil Law and Motion";
       },
       dateHint: (u, text, _source, pageUrl) =>

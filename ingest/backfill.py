@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import unquote, urljoin, urlparse
 import requests
+import urllib3
 
 from counties.common import PdfRef, filename_from_url, unique_refs
 from counties.registry import discovery_modules
@@ -79,6 +80,7 @@ def _host_matches(host: str, allowed_host: str) -> bool:
 def _allowed_hosts_for_county(county: str) -> set[str]:
     module = _county_module(county)
     hosts: set[str] = set()
+    hosts.update(str(host).lower() for host in getattr(module, "ALLOWED_SOURCE_HOSTS", set()))
     for attr in ("LANDING_PAGES", "WAYBACK_PDF_PATTERNS"):
         for raw in getattr(module, attr, []):
             candidate = str(raw).replace("*", "")
@@ -88,6 +90,21 @@ def _allowed_hosts_for_county(county: str) -> set[str]:
             if parsed.hostname:
                 hosts.add(parsed.hostname.lower())
     return hosts
+
+
+def _verify_tls_for_county(county: str) -> bool:
+    module = _county_module(county)
+    return bool(getattr(module, "VERIFY_TLS", True))
+
+
+def _routine_live_enabled(county: str) -> bool:
+    module = _county_module(county)
+    return bool(getattr(module, "ROUTINE_LIVE", True))
+
+
+def _routine_live_disabled_reason(county: str) -> str:
+    module = _county_module(county)
+    return str(getattr(module, "ROUTINE_LIVE_DISABLED_REASON", "routine live discovery disabled"))
 
 
 def _validate_source_host(url: str, allowed_hosts: set[str]) -> None:
@@ -321,6 +338,7 @@ def fetch_ref(
     session: requests.Session,
     *,
     allowed_hosts: set[str] | None = None,
+    verify_tls: bool = True,
     max_bytes: int = MAX_SOURCE_BYTES,
 ) -> tuple[bytes, str]:
     allowed = allowed_hosts or set()
@@ -329,7 +347,7 @@ def fetch_ref(
     fetch_url = _replay_url(ref)
     for _ in range(REDIRECT_LIMIT + 1):
         _validate_fetch_host(fetch_url, ref.url, allowed, wayback=bool(ref.wayback_ts))
-        r = session.get(fetch_url, timeout=90, stream=True, allow_redirects=False)
+        r = session.get(fetch_url, timeout=90, stream=True, allow_redirects=False, verify=verify_tls)
         if 300 <= r.status_code < 400 and r.headers.get("Location"):
             fetch_url = urljoin(fetch_url, r.headers["Location"])
             continue
@@ -444,10 +462,11 @@ def discover_live_refs(
     errors: list[str] | None = None,
 ) -> list[PdfRef]:
     module = _county_module(county)
+    verify_tls = _verify_tls_for_county(county)
     refs: list[PdfRef] = []
     for url in getattr(module, "LANDING_PAGES", []):
         try:
-            r = session.get(url, timeout=60)
+            r = session.get(url, timeout=60, verify=verify_tls)
             r.raise_for_status()
             landing_text = r.text
         except Exception as landing_error:
@@ -675,6 +694,7 @@ def _wayback_needs_live_refs(county: str) -> bool:
 def _run_county(args: argparse.Namespace, county: str, session: requests.Session) -> int:
     failures: list[str] = []
     allowed_hosts = _allowed_hosts_for_county(county)
+    verify_tls = _verify_tls_for_county(county)
     do_live = args.live or not args.wayback
     needs_live_for_wayback = args.wayback and _wayback_needs_live_refs(county)
     try:
@@ -727,7 +747,7 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
     wrote = 0
     for ref in refs:
         try:
-            content, sha = fetch_ref(ref, session, allowed_hosts=allowed_hosts)
+            content, sha = fetch_ref(ref, session, allowed_hosts=allowed_hosts, verify_tls=verify_tls)
         except Exception as e:
             _record_failure(
                 failures,
@@ -755,8 +775,17 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
 def run(args: argparse.Namespace) -> int:
     session = requests.Session()
     session.headers.update({"User-Agent": "aimesy-tentatives/1.0"})
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     counties = sorted(COUNTY_MODULES) if args.county == "all" else [args.county]
+    if args.county == "all" and args.live and not args.wayback:
+        live_counties = []
+        for county in counties:
+            if _routine_live_enabled(county):
+                live_counties.append(county)
+            else:
+                print(f"{county}: skipped routine live check ({_routine_live_disabled_reason(county)})")
+        counties = live_counties
     status = 0
     for county in counties:
         try:

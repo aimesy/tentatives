@@ -21,8 +21,8 @@ Parser support means archived material is converted into normalized rows in `dat
 |---|---:|---:|---|
 | Contra Costa | yes | yes | PDFs, archive pages, and changed HTML page captures for ruling pages and probate calendar notes. |
 | El Dorado | yes | yes | Probate, civil law and motion, probate calendar, and family law PDF styles. |
-| Placer | yes | yes | Civil law and motion PDFs. |
-| Amador | yes | yes | Legacy dropdown PDFs from public archive/Wayback sources. Current post-02/15/2022 access appears portal-based. |
+| Placer | yes | yes | Civil law and motion PDFs; live pages use relative court-hosted PDF links. |
+| Amador | legacy/Wayback | yes | Legacy dropdown PDFs from public archive/Wayback sources. Current post-02/15/2022 access appears portal-based, so routine daily live checks skip Amador. |
 | Calaveras | yes | yes | Case-management and civil law-and-motion PDFs. |
 | Fresno | yes | yes | Law and Motion department PDFs. |
 | Merced | yes | yes | Weekday civil law-and-motion PDFs. |

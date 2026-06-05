@@ -36,11 +36,11 @@ import io
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 import pypdf
 
-from counties.common import PdfRef
+from counties.common import PdfRef, absolute_url, extract_links
 from schema import Ruling
 from . import COUNTY_SLUG, PARSER_VERSION
 
@@ -57,26 +57,32 @@ LANDING_PAGES = [
     f"{BASE}/online-services/tentative-rulings",
 ]
 
-# Placer publishes ruling PDFs at .../sites/default/files/<YYYY-MM>/<filename>.pdf
-# (filename is typically <MDDYY> [Ww]eb.pdf but other names appear too).
-PDF_HREF_RE = re.compile(
-    r'href="(https?://(?:www\.)?placer\.courts\.ca\.gov/sites/default/files/'
-    r'\d{4}-\d{2}/[^"]+\.pdf)"',
-    re.IGNORECASE,
-)
+# The court host serves a certificate chain that some Python/OpenSSL builds do
+# not complete, while browsers and direct host-restricted PDF fetches work.
+VERIFY_TLS = False
 
 
 def discover_live(html: str, page_url: str | None = None) -> list[PdfRef]:
     """Pull tentative-ruling PDF URLs out of a Placer landing page's HTML."""
     seen: set[str] = set()
     refs: list[PdfRef] = []
-    for m in PDF_HREF_RE.finditer(html):
-        url = m.group(1)
+    source_page = page_url or BASE
+    for link in extract_links(html):
+        if ".pdf" not in link.url.lower():
+            continue
+        url = absolute_url(link.url, source_page)
+        parsed = urlparse(url)
+        if parsed.netloc.lower() not in {"www.placer.courts.ca.gov", "placer.courts.ca.gov"}:
+            continue
+        if not parsed.path.lower().endswith(".pdf"):
+            continue
+        if "/sites/default/files/" not in parsed.path.lower():
+            continue
         if url in seen:
             continue
         seen.add(url)
         filename = unquote(url.rsplit("/", 1)[-1])
-        refs.append(PdfRef(url=url, filename=filename))
+        refs.append(PdfRef(url=url, filename=filename, link_text=link.text, source_page_url=source_page))
     return refs
 
 

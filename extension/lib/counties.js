@@ -93,6 +93,7 @@ export const COUNTY_SCAN = {
     root: "https://www.amadorcourt.org/os-tentativerulings.aspx",
     landings: ["https://www.amadorcourt.org/os-tentativerulings.aspx"],
     pathTest: () => true,
+    routineLive: false,
   },
   "san-francisco": {
     root: "https://webapps.sftc.org/ufctr/ufctr.dll",
@@ -149,7 +150,7 @@ export const COUNTY_SCAN = {
   "santa-clara": {
     root: "https://santaclara.courts.ca.gov/online-services/tentative-rulings",
     pathTest: (path) =>
-      /^\/online-services\/tentative-rulings\/department-\d+-tentative-rulings\/?$/i.test(path),
+      /^\/online-services\/tentative-rulings\/(?:department|dept)-\d+-tentative-rulings\/?$/i.test(path),
   },
   "shasta": {
     root: "https://shasta.courts.ca.gov/online-services/tentative-rulings",
@@ -227,9 +228,9 @@ export const SIDEBAR_PAGES = {
     { label: "Dept 10", url: "https://santaclara.courts.ca.gov/online-services/tentative-rulings/department-10-tentative-rulings" },
     { label: "Dept 12", url: "https://santaclara.courts.ca.gov/online-services/tentative-rulings/department-12-tentative-rulings" },
     { label: "Dept 13", url: "https://santaclara.courts.ca.gov/online-services/tentative-rulings/department-13-tentative-rulings" },
-    { label: "Dept 16", url: "https://santaclara.courts.ca.gov/online-services/tentative-rulings/department-16-tentative-rulings" },
-    { label: "Dept 19", url: "https://santaclara.courts.ca.gov/online-services/tentative-rulings/department-19-tentative-rulings" },
-    { label: "Dept 22", url: "https://santaclara.courts.ca.gov/online-services/tentative-rulings/department-22-tentative-rulings" },
+    { label: "Dept 16", url: "https://santaclara.courts.ca.gov/online-services/tentative-rulings/dept-16-tentative-rulings" },
+    { label: "Dept 19", url: "https://santaclara.courts.ca.gov/online-services/tentative-rulings/dept-19-tentative-rulings" },
+    { label: "Dept 22", url: "https://santaclara.courts.ca.gov/online-services/tentative-rulings/dept-22-tentative-rulings" },
     { label: "All depts (index)", url: "https://santaclara.courts.ca.gov/online-services/tentative-rulings" },
   ],
   "shasta": [

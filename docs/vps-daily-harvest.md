@@ -30,6 +30,16 @@ The clone must be able to push to `aimesy/tentatives`. Use a deploy key, a
 machine account, or Git Credential Manager. Do not put tokens in the repo or in
 the unit file.
 
+The VPS lane intentionally runs the same `ingest.backfill` entry point as
+GitHub Actions. County-specific fallbacks stay in the repo code:
+
+- Amador is skipped for routine all-county live runs because the public page is
+  historical-only.
+- Riverside uses reader fallback for discovery when direct HTTP sees
+  Cloudflare.
+- Placer has a scoped TLS-verification exception for court-hosted source files.
+- Santa Clara departments 16, 19, and 22 use `dept-N` page slugs.
+
 ## Verify
 
 ```bash

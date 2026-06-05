@@ -19,6 +19,7 @@ from ingest.backfill import (
     _run_county,
     _source_url_year,
     _validate_source_host,
+    _verify_tls_for_county,
     _wayback_needs_live_refs,
     _wayback_timestamp,
     fetch_ref,
@@ -166,6 +167,16 @@ def test_allowed_hosts_include_schemeless_wayback_patterns():
     hosts = _allowed_hosts_for_county("amador")
     assert "amadorcourt.org" in hosts
     assert "www.amadorcourt.org" in hosts
+
+
+def test_allowed_hosts_include_explicit_orange_source_host():
+    hosts = _allowed_hosts_for_county("orange")
+    assert "live-jcc-oc.pantheonsite.io" in hosts
+
+
+def test_placer_tls_verification_is_county_scoped():
+    assert _verify_tls_for_county("placer") is False
+    assert _verify_tls_for_county("orange") is True
 
 
 def test_run_county_returns_failure_when_ref_fetch_fails(monkeypatch):
@@ -397,6 +408,7 @@ def test_run_county_continues_after_ref_failure_and_logs_success(tmp_path, monke
 
     monkeypatch.setattr(backfill, "ARCHIVE", tmp_path / "archive")
     monkeypatch.setattr(backfill, "_allowed_hosts_for_county", lambda _county: {"example.test"})
+    monkeypatch.setattr(backfill, "_verify_tls_for_county", lambda _county: True)
     monkeypatch.setattr(backfill, "discover_live_refs", lambda *_args, **_kwargs: [bad, good])
     monkeypatch.setattr(backfill, "_existing_capture_keys", lambda _county: set())
 
@@ -460,6 +472,60 @@ def test_run_swallows_per_county_failures_with_continue_on_error(monkeypatch):
     monkeypatch.setattr(backfill, "COUNTY_MODULES", {"a": object(), "b": object()})
     monkeypatch.setattr(backfill, "_run_county", lambda *_args, **_kwargs: 1)
     assert backfill.run(args) == 0
+
+
+def test_run_skips_routine_disabled_counties_for_all_live(monkeypatch):
+    args = argparse.Namespace(
+        county="all",
+        live=True,
+        wayback=False,
+        from_year=None,
+        to_year=None,
+        url_from_year=None,
+        url_to_year=None,
+        limit=None,
+        dry_run=False,
+        continue_on_error=True,
+    )
+    calls = []
+
+    class _RoutineDisabled:
+        ROUTINE_LIVE = False
+        ROUTINE_LIVE_DISABLED_REASON = "historical only"
+
+    class _RoutineEnabled:
+        pass
+
+    monkeypatch.setattr(backfill, "COUNTY_MODULES", {"amador": _RoutineDisabled, "orange": _RoutineEnabled})
+    monkeypatch.setattr(backfill, "_run_county", lambda _args, county, _session: calls.append(county) or 0)
+
+    assert backfill.run(args) == 0
+    assert calls == ["orange"]
+
+
+def test_run_keeps_routine_disabled_county_for_wayback(monkeypatch):
+    args = argparse.Namespace(
+        county="all",
+        live=False,
+        wayback=True,
+        from_year=None,
+        to_year=None,
+        url_from_year=None,
+        url_to_year=None,
+        limit=None,
+        dry_run=False,
+        continue_on_error=True,
+    )
+    calls = []
+
+    class _RoutineDisabled:
+        ROUTINE_LIVE = False
+
+    monkeypatch.setattr(backfill, "COUNTY_MODULES", {"amador": _RoutineDisabled})
+    monkeypatch.setattr(backfill, "_run_county", lambda _args, county, _session: calls.append(county) or 0)
+
+    assert backfill.run(args) == 0
+    assert calls == ["amador"]
 
 
 def test_run_propagates_failures_without_continue_on_error(monkeypatch):

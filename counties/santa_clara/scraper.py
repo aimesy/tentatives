@@ -44,24 +44,36 @@ from schema import Ruling
 from . import COUNTY_SLUG, PARSER_VERSION
 
 BASE = "https://santaclara.courts.ca.gov/online-services/tentative-rulings"
-DEPARTMENTS = [1, 2, 6, 7, 10, 12, 13, 16, 19, 22]
+DEPARTMENT_PAGE_SLUGS = {
+    1: "department-1",
+    2: "department-2",
+    6: "department-6",
+    7: "department-7",
+    10: "department-10",
+    12: "department-12",
+    13: "department-13",
+    16: "dept-16",
+    19: "dept-19",
+    22: "dept-22",
+}
+DEPARTMENTS = list(DEPARTMENT_PAGE_SLUGS)
 LANDING_PAGES = [
-    f"https://santaclara.courts.ca.gov/online-services/tentative-rulings/department-{dept}-tentative-rulings"
-    for dept in DEPARTMENTS
+    f"{BASE}/{slug}-tentative-rulings"
+    for slug in DEPARTMENT_PAGE_SLUGS.values()
 ]
 
 
 def _dept_hint(parsed: ParseResult, _text: str, page_url: str) -> str | None:
     m = re.search(r"dept[-_ ]?(\d+)", parsed.path, re.I)
     if not m:
-        m = re.search(r"department-(\d+)-", page_url, re.I)
+        m = re.search(r"(?:department|dept)-(\d+)-", page_url, re.I)
     return m.group(1) if m else None
 
 
 def _division_hint(_parsed: ParseResult, _text: str, page_url: str) -> str | None:
-    if "department-2-" in page_url or "department-7-" in page_url:
+    if re.search(r"(?:department|dept)-(?:2|7)-", page_url, re.I):
         return "Probate"
-    if "department-19-" in page_url or "department-22-" in page_url:
+    if re.search(r"(?:department|dept)-(?:19|22)-", page_url, re.I):
         return "Complex Civil"
     return "Civil Law and Motion"
 

@@ -29,3 +29,15 @@ def test_discover_live_ignores_unrelated_pdfs():
     html = '<a href="https://example.com/sites/default/files/2026-05/something.pdf">noise</a>'
     refs = discover_live(html)
     assert refs == []
+
+
+def test_discover_live_accepts_relative_pdf_links():
+    html = '<a href="/sites/default/files/2026-06/060526%20Web%20AMENDED.pdf">Tentative Rulings</a>'
+    refs = discover_live(
+        html,
+        page_url="https://www.placer.courts.ca.gov/online-services/tentative-rulings/tentative-rulings-law-and-motion",
+    )
+
+    assert len(refs) == 1
+    assert refs[0].url == "https://www.placer.courts.ca.gov/sites/default/files/2026-06/060526%20Web%20AMENDED.pdf"
+    assert refs[0].filename == "060526 Web AMENDED.pdf"
