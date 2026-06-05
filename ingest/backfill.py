@@ -20,6 +20,7 @@ import hashlib
 import io
 import json
 import re
+import subprocess
 import sys
 import zipfile
 from datetime import datetime, timezone
@@ -174,7 +175,25 @@ def _capture_path(county: str) -> Path:
     return ARCHIVE / county / "captures.ndjson"
 
 
+def _materialize_capture_path_from_head(county: str) -> None:
+    """Sparse checkouts can omit capture logs; restore them before appending."""
+    path = _capture_path(county)
+    if path.exists():
+        return
+    try:
+        rel = path.relative_to(REPO).as_posix()
+    except ValueError:
+        return
+    try:
+        content = subprocess.check_output(["git", "show", f"HEAD:{rel}"], cwd=REPO)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+
+
 def _existing_capture_keys(county: str) -> set[tuple[str, str, str | None]]:
+    _materialize_capture_path_from_head(county)
     path = _capture_path(county)
     if not path.exists():
         return set()
@@ -210,6 +229,7 @@ def _append_capture(county: str, ref: PdfRef, sha: str, content_length: int, dry
     if dry_run:
         print(f"  would log capture {ref.filename} sha={sha[:12]} wayback={ref.wayback_ts or '-'}")
         return
+    _materialize_capture_path_from_head(county)
     path = _capture_path(county)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:

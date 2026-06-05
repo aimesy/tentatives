@@ -416,6 +416,31 @@ def test_run_county_continues_after_ref_failure_and_logs_success(tmp_path, monke
     assert [row["source_url"] for row in rows] == [good.url]
 
 
+def test_existing_capture_keys_materializes_sparse_capture_log(tmp_path, monkeypatch):
+    archive = tmp_path / "archive"
+    path = archive / "fake" / "captures.ndjson"
+    sha = "a" * 64
+    row = {
+        "source_sha256": sha,
+        "source_url": "https://example.test/ruling.pdf",
+        "wayback_ts": None,
+    }
+
+    def fake_check_output(cmd, cwd=None):
+        assert cmd == ["git", "show", "HEAD:archive/fake/captures.ndjson"]
+        assert cwd == tmp_path
+        return (json.dumps(row) + "\n").encode("utf-8")
+
+    monkeypatch.setattr(backfill, "REPO", tmp_path)
+    monkeypatch.setattr(backfill, "ARCHIVE", archive)
+    monkeypatch.setattr(backfill.subprocess, "check_output", fake_check_output)
+
+    assert backfill._existing_capture_keys("fake") == {
+        (sha, "https://example.test/ruling.pdf", None)
+    }
+    assert path.read_text(encoding="utf-8").strip() == json.dumps(row)
+
+
 def test_run_swallows_per_county_failures_with_continue_on_error(monkeypatch):
     """With --continue-on-error, run() exits 0 even if a county errored, so the
     workflow's grep-the-log policy is what decides success (not a stray 503)."""
