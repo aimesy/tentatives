@@ -1,2 +1,2 @@
 COUNTY_SLUG = "fresno"
-PARSER_VERSION = "fresno-discovery-v1"
+PARSER_VERSION = "fresno-parse-v1"

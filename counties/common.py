@@ -1,13 +1,14 @@
 """Small shared helpers for county-specific discovery.
 
-Parsing tentative-ruling PDFs stays county-specific. Link discovery is less
-specialized: most court pages expose anchors or dropdown options that point at
-PDFs. These helpers keep that plumbing out of each scraper without imposing a
-generic PDF parser.
+Parsing tentative-ruling source files stays county-specific. Link discovery is
+less specialized: most court pages expose anchors or dropdown options that
+point at files. These helpers keep that plumbing out of each scraper without
+imposing a generic parser.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from urllib.parse import unquote, urljoin, urlparse
@@ -15,7 +16,7 @@ from urllib.parse import unquote, urljoin, urlparse
 
 @dataclass(frozen=True)
 class PdfRef:
-    """A ruling document discovered from a court page or Wayback CDX."""
+    """A ruling source document discovered from a court page or Wayback CDX."""
 
     url: str
     filename: str
@@ -104,10 +105,34 @@ def clean_text(value: str) -> str:
     return " ".join(value.split())
 
 
+MARKDOWN_SOURCE_LINK_RE = re.compile(
+    r"\[(?P<text>[^\]]*)\]\("
+    r"(?P<url>[^)\s]+?\.(?:pdf|docx)(?:\?[^)\s]*)?)"
+    r"(?:\s+(?:\"[^\"]*\"|'[^']*'|[^)]*))?"
+    r"\)",
+    re.IGNORECASE,
+)
+
+
 def extract_links(html: str) -> list[HtmlLink]:
     parser = _LinkParser()
     parser.feed(html)
-    return parser.links
+    links = list(parser.links)
+    seen = {(link.tag, link.url, link.text) for link in links}
+    for match in MARKDOWN_SOURCE_LINK_RE.finditer(html):
+        link = HtmlLink(
+            tag="markdown-a",
+            url=match.group("url"),
+            text=clean_text(match.group("text")),
+            attrs={},
+            parent_attrs=None,
+        )
+        key = (link.tag, link.url, link.text)
+        if key in seen:
+            continue
+        seen.add(key)
+        links.append(link)
+    return links
 
 
 def filename_from_url(url: str) -> str:

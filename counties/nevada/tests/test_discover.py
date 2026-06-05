@@ -1,7 +1,7 @@
 from counties.nevada.scraper import discover_live
 
 
-def test_discovers_nevada_pdf_links_but_not_docx():
+def test_discovers_nevada_pdf_and_docx_links():
     html = """
     <a href="/system/files/tentative-rulings/cmc-51526-dept-truckee.docx">
       May 15, 2026, Case Management Conference Tentative Rulings
@@ -11,6 +11,8 @@ def test_discovers_nevada_pdf_links_but_not_docx():
     </a>
     """
     refs = discover_live(html, page_url="https://www.nevada.courts.ca.gov/online-services/tentative-rulings")
-    assert len(refs) == 1
-    assert refs[0].filename == "cmc-41726-dept-truckee.pdf"
-    assert refs[0].division_hint == "Case Management"
+    assert [ref.filename for ref in refs] == [
+        "cmc-51526-dept-truckee.docx",
+        "cmc-41726-dept-truckee.pdf",
+    ]
+    assert [ref.division_hint for ref in refs] == ["Case Management", "Case Management"]

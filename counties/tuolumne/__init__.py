@@ -1,2 +1,2 @@
 COUNTY_SLUG = "tuolumne"
-PARSER_VERSION = "tuolumne-discovery-v1"
+PARSER_VERSION = "tuolumne-parse-v1"

@@ -1,10 +1,12 @@
 import argparse
 import hashlib
+import io
 import json
+import zipfile
 
 import pytest
 
-from counties.common import PdfRef
+from counties.common import PdfRef, extract_links
 from ingest import backfill
 from ingest.backfill import (
     MAX_PDF_BYTES,
@@ -122,6 +124,14 @@ class _FakeSession:
         return self.responses.pop(0)
 
 
+def _minimal_docx_bytes() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("[Content_Types].xml", "<Types></Types>")
+        zf.writestr("word/document.xml", "<w:document></w:document>")
+    return buf.getvalue()
+
+
 def test_read_limited_pdf_requires_pdf_magic():
     resp = _FakeResponse([b"<html>not a pdf</html>"])
     try:
@@ -176,6 +186,50 @@ def test_run_county_returns_failure_when_ref_fetch_fails(monkeypatch):
     monkeypatch.setattr(backfill, "_existing_capture_keys", lambda _county: set())
 
     assert _run_county(args, "amador", object()) == 1
+
+
+def test_extract_links_accepts_reader_markdown_source_links():
+    links = extract_links(
+        "[Department 10](https://www.riverside.courts.ca.gov/system/files/2023-10/Riv10ruling102323.pdf)"
+    )
+
+    assert links[0].tag == "markdown-a"
+    assert links[0].text == "Department 10"
+    assert links[0].url.endswith("/Riv10ruling102323.pdf")
+
+
+def test_discover_live_refs_uses_reader_fallback(monkeypatch):
+    class _Module:
+        LANDING_PAGES = ["https://www.riverside.courts.ca.gov/online-services/tentative-rulings"]
+        READER_FALLBACK_LANDING_PAGES = True
+
+        @staticmethod
+        def discover_live(text, page_url=None):
+            links = extract_links(text)
+            return [
+                PdfRef(
+                    url=links[0].url,
+                    filename="Riv10ruling102323.pdf",
+                    source_page_url=page_url,
+                    link_text=links[0].text,
+                )
+            ]
+
+    monkeypatch.setattr(backfill, "COUNTY_MODULES", {"riverside": _Module})
+    session = _FakeSession([
+        _FakeResponse(status_code=403),
+        _FakeResponse(
+            text=(
+                "[Department 10]"
+                "(https://www.riverside.courts.ca.gov/system/files/2023-10/Riv10ruling102323.pdf)"
+            )
+        ),
+    ])
+
+    refs = backfill.discover_live_refs("riverside", session)
+
+    assert [ref.filename for ref in refs] == ["Riv10ruling102323.pdf"]
+    assert session.urls[1] == backfill._reader_landing_url(_Module.LANDING_PAGES[0])
 
 
 def test_cdx_rows_returns_empty_for_unexpected_json():
@@ -272,6 +326,38 @@ def test_fetch_ref_rejects_oversized_pdf_from_content_length():
     ])
 
     with pytest.raises(ValueError, match="too large"):
+        fetch_ref(ref, session, allowed_hosts={"example.test"})
+
+
+def test_fetch_ref_accepts_docx_source():
+    content = _minimal_docx_bytes()
+    ref = PdfRef(url="https://example.test/ruling.docx", filename="ruling.docx")
+    session = _FakeSession([
+        _FakeResponse(
+            [content],
+            headers={
+                "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "Content-Length": str(len(content)),
+            },
+        )
+    ])
+
+    fetched, sha = fetch_ref(ref, session, allowed_hosts={"example.test"})
+
+    assert fetched == content
+    assert sha == hashlib.sha256(content).hexdigest()
+
+
+def test_fetch_ref_rejects_invalid_docx_source():
+    ref = PdfRef(url="https://example.test/ruling.docx", filename="ruling.docx")
+    session = _FakeSession([
+        _FakeResponse(
+            [b"PK\x03\x04not really a docx"],
+            headers={"Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+        )
+    ])
+
+    with pytest.raises(ValueError, match="not a DOCX"):
         fetch_ref(ref, session, allowed_hosts={"example.test"})
 
 

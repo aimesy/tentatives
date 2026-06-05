@@ -1,7 +1,7 @@
-"""Walk archive/, parse any PDFs not yet in data/<county>/rulings.parquet, append rows.
+"""Walk archive/, parse any source files not yet in data/<county>/rulings.parquet, append rows.
 
 Designed to be idempotent and to be run by GitHub Actions after the browser
-extension commits new PDFs to archive/. Also runnable locally:
+extension commits new source files to archive/. Also runnable locally:
 
     python -m ingest.orchestrate                     # parse everything
     python -m ingest.orchestrate --county el-dorado  # one county only
@@ -23,13 +23,14 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from counties.registry import page_parser_functions, parser_functions
+from counties.registry import page_parser_functions, parser_functions, parser_source_extensions
 
 REPO = Path(__file__).parent.parent
 ARCHIVE = REPO / "archive"
 DATA = REPO / "data"
 
 PARSERS = parser_functions()
+PARSER_EXTENSIONS = parser_source_extensions()
 PAGE_PARSERS = page_parser_functions()
 
 
@@ -112,14 +113,19 @@ def page_captures(county_dir: Path) -> list[dict]:
     return rows
 
 
-def iter_content_addressed_pdfs(county_archive: Path) -> list[Path]:
-    """Only PDFs under archive/<county>/<two-hex>/<sha>.pdf are parse inputs."""
+def iter_content_addressed_sources(county_archive: Path, extensions: set[str]) -> list[Path]:
+    """Only content-addressed files under archive/<county>/<two-hex>/<sha>.<ext> are parse inputs."""
     paths: list[Path] = []
     for prefix_dir in county_archive.iterdir() if county_archive.exists() else []:
         if not prefix_dir.is_dir() or not re_fullmatch_hex2(prefix_dir.name):
             continue
-        paths.extend(sorted(prefix_dir.glob("*.pdf")))
+        for ext in sorted(extensions):
+            paths.extend(sorted(prefix_dir.glob(f"*{ext}")))
     return sorted(paths)
+
+
+def iter_content_addressed_pdfs(county_archive: Path) -> list[Path]:
+    return iter_content_addressed_sources(county_archive, {".pdf"})
 
 
 def re_fullmatch_hex2(value: str) -> bool:
@@ -217,7 +223,7 @@ def process_county(
     reparse_existing: bool = False,
     max_sources: int | None = None,
 ) -> int:
-    """Parse any unprocessed PDFs for the given county. Returns count of new rulings."""
+    """Parse any unprocessed source files for the given county. Returns count of new rulings."""
     parser = PARSERS.get(county)
     if parser is None:
         print(f"no parser registered for county={county}", file=sys.stderr)
@@ -233,34 +239,35 @@ def process_county(
 
     # When the caller asks for a full reparse we want the new parser output to
     # *replace* what's on disk, not append on top. Reset both gates so every
-    # PDF gets parsed and every ruling row gets emitted; we also skip the
+    # source gets parsed and every ruling row gets emitted; we also skip the
     # existing-table merge below.
     seen_ids = set() if reparse_existing else existing_ruling_ids(parquet_path)
     seen_source_shas = set() if reparse_existing else existing_source_shas(parquet_path)
     captures = captures_index(county_archive)
 
     new_rulings: list[dict] = []
-    pdf_paths = iter_content_addressed_pdfs(county_archive)
+    source_extensions = PARSER_EXTENSIONS.get(county, {".pdf"})
+    source_paths = iter_content_addressed_sources(county_archive, source_extensions)
     skipped_existing = 0
     parsed_sources = 0
-    for pdf_path in pdf_paths:
+    for source_path in source_paths:
         if max_sources is not None and parsed_sources >= max_sources:
             break
         # sha256 is in the filename; verify by recomputing.
-        declared_sha = pdf_path.stem
+        declared_sha = source_path.stem
         if declared_sha in seen_source_shas:
             skipped_existing += 1
             continue
-        content = pdf_path.read_bytes()
+        content = source_path.read_bytes()
         actual_sha = hashlib.sha256(content).hexdigest()
         if declared_sha != actual_sha:
-            quarantine_hash_mismatch(county, pdf_path, declared_sha, actual_sha, dry_run)
+            quarantine_hash_mismatch(county, source_path, declared_sha, actual_sha, dry_run)
             continue
         if actual_sha in seen_source_shas:
             skipped_existing += 1
             continue
         cap = captures.get(actual_sha, {})
-        source_url = cap.get("source_url") or f"archive://{county}/{actual_sha}.pdf"
+        source_url = cap.get("source_url") or f"archive://{county}/{actual_sha}{source_path.suffix.lower()}"
 
         rulings = parser(
             content,
@@ -277,7 +284,7 @@ def process_county(
         seen_ids.update(row["ruling_id"] for row in unseen)
         if rulings:
             print(
-                f"  {pdf_path.name}: {len(rulings)} rulings"
+                f"  {source_path.name}: {len(rulings)} rulings"
                 f" ({len(unseen)} new)"
             )
 
@@ -315,7 +322,7 @@ def process_county(
 
     print(
         f"\n{county}: {len(new_rulings)} new rows across "
-        f"{len(pdf_paths)} PDFs and {len(page_rows)} page captures"
+        f"{len(source_paths)} source files and {len(page_rows)} page captures"
         f" ({skipped_existing} existing source hashes skipped,"
         f" {parsed_sources} sources parsed)"
     )

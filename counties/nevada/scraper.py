@@ -5,8 +5,8 @@ Discovery
 The Nevada page is a static Drupal page with accordion sections for Nevada
 City and Truckee. Ruling documents are court-hosted files under
 `/system/files/tentative-rulings/`. Current pages may include Word documents;
-this discovery module returns PDFs only because the archive parser pipeline is
-currently PDF-based.
+discovery returns both PDFs and DOCX files for archiving. Parsing handles PDFs
+and supported Word-text calendars.
 
 Parsing
 -------
@@ -36,9 +36,11 @@ from __future__ import annotations
 import hashlib
 import io
 import re
+import zipfile
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from urllib.parse import urlparse
+import xml.etree.ElementTree as ET
 
 import pypdf
 
@@ -50,6 +52,7 @@ BASE = "https://www.nevada.courts.ca.gov"
 LANDING_PAGES = [
     f"{BASE}/online-services/tentative-rulings",
 ]
+PARSE_EXTENSIONS = {".pdf", ".docx"}
 
 
 def _division_from_text(text: str) -> str | None:
@@ -71,7 +74,8 @@ def discover_live(html: str, page_url: str | None = None, base_url: str = BASE) 
     source_page = page_url or base_url
     refs: list[PdfRef] = []
     for link in extract_links(html):
-        if not link.url.lower().split("?", 1)[0].endswith(".pdf"):
+        lower_url = link.url.lower().split("?", 1)[0]
+        if not lower_url.endswith((".pdf", ".docx")):
             continue
         text = link.text
         if "tentative" not in text.lower():
@@ -114,6 +118,11 @@ RULING_HEADER_RE = re.compile(
     r"\s+(?P<title>.+?)\s*$",
     re.MULTILINE,
 )
+DOCX_RULING_HEADER_RE = re.compile(
+    rf"^(?:\d{{1,3}}\.\s+)?(?:Case\s+No\.?\s+)?"
+    rf"(?P<num>{_CASE_NUMBER_INNER})"
+    r"\s+(?P<title>.+?)\s*$"
+)
 
 # Long date "April 27, 2026" or short "4/27/2026" or "05/07/2026".
 LONG_DATE_RE = re.compile(r"\b([A-Z][a-z]+)\s+(\d{1,2}),\s+(\d{4})\b")
@@ -127,7 +136,9 @@ PAGE_NUMBER_RE = re.compile(r"^\s*(?:Page\s+\d+\s+of\s+\d+|\d{1,3})\s*$", re.IGN
 
 # Continued-to extractor.
 CONTINUED_TO_RE = re.compile(
-    r"continued\s+(?:on[^.,]*?to|to)\s+"
+    r"(?:continued\s+(?:on[^.,]*?to|to)"
+    r"|continues\s+(?:the\s+)?(?:case\s+management\s+conference|matter|hearing|cmc)\s+to"
+    r"|matter\s+is\s+continued\s+to)\s+"
     r"(?:[\w:.]+\s+(?:a\.m\.|p\.m\.|AM|PM)\s+(?:on\s+)?)?"
     r"(?P<month>[A-Z][a-z]+)\s+(?P<day>\d{1,2}),?\s+(?P<year>\d{4})",
     re.IGNORECASE,
@@ -141,6 +152,7 @@ _MONTHS = {
         start=1,
     )
 }
+_W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
 def _parse_date(text: str) -> date | None:
@@ -235,6 +247,30 @@ def _strip_page_artifacts(page_texts: list[str]) -> list[str]:
     return out
 
 
+def _docx_paragraph_lines(docx_bytes: bytes) -> list[str]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(docx_bytes)) as zf:
+            root = ET.fromstring(zf.read("word/document.xml"))
+    except (KeyError, ET.ParseError, zipfile.BadZipFile):
+        return []
+
+    lines: list[str] = []
+    for para in root.findall(f".//{_W_NS}p"):
+        parts: list[str] = []
+        for node in para.iter():
+            if node.tag == f"{_W_NS}t":
+                parts.append(node.text or "")
+            elif node.tag == f"{_W_NS}tab":
+                parts.append("\t")
+            elif node.tag == f"{_W_NS}br":
+                parts.append("\n")
+        for line in "".join(parts).splitlines():
+            clean = line.strip()
+            if clean:
+                lines.append(clean)
+    return lines
+
+
 def _classify(text: str) -> tuple[str, bool, date | None]:
     upper = text.upper()
     conditional = "ABSENT OBJECTION" in upper
@@ -290,6 +326,80 @@ def _classify(text: str) -> tuple[str, bool, date | None]:
     return outcome, conditional, continued_to
 
 
+def _parse_docx(
+    docx_bytes: bytes,
+    source_url: str,
+    source_sha256: str,
+    dept_hint: str | None,
+    division_hint: str | None,
+) -> list[Ruling]:
+    lines = _docx_paragraph_lines(docx_bytes)
+    if not lines:
+        return []
+
+    header_text = lines[0]
+    hearing_date = _parse_date(header_text)
+    if hearing_date is None:
+        return []
+
+    division = _detect_division(header_text, division_hint)
+    style = _detect_style(header_text)
+    location = _detect_location(f"{header_text}\n{source_url}")
+    default_dept = _detect_dept(header_text, dept_hint)
+
+    headers: list[tuple[int, re.Match[str]]] = []
+    for idx, line in enumerate(lines[1:], start=1):
+        match = DOCX_RULING_HEADER_RE.match(line)
+        if match:
+            headers.append((idx, match))
+    if not headers:
+        return []
+
+    rulings: list[Ruling] = []
+    for ruling_index, (line_idx, hm) in enumerate(headers, start=1):
+        next_line_idx = headers[ruling_index][0] if ruling_index < len(headers) else len(lines)
+        body_lines = lines[line_idx + 1:next_line_idx]
+        body = "\n".join(body_lines).strip()
+        section_text = "\n".join([lines[line_idx], *body_lines]).strip()
+
+        case_number = hm.group("num")
+        case_title = " ".join(hm.group("title").split())
+        outcome, conditional, continued_to = _classify(body)
+        local_dept = default_dept or _detect_dept(section_text, dept_hint)
+
+        ruling_id = hashlib.sha256(
+            f"{source_sha256}:{ruling_index}:{case_number}".encode("utf-8")
+        ).hexdigest()[:32]
+
+        rulings.append(
+            Ruling(
+                ruling_id=ruling_id,
+                county=COUNTY_SLUG,
+                division=division,
+                dept=local_dept,
+                hearing_date=hearing_date,
+                ruling_index=ruling_index,
+                case_number=case_number,
+                case_title=case_title,
+                motion_type=location or "",
+                outcome=outcome,
+                outcome_text=body,
+                conditional=conditional,
+                continued_to=continued_to,
+                body_text="",
+                full_text=section_text,
+                page_start=1,
+                page_end=1,
+                source_sha256=source_sha256,
+                source_url=source_url,
+                style=f"{style}-docx",
+                parser_version=PARSER_VERSION,
+                ingest_ts=datetime.now(UTC),
+            )
+        )
+    return rulings
+
+
 def parse(
     pdf_bytes: bytes,
     source_url: str,
@@ -299,6 +409,14 @@ def parse(
 ) -> list[Ruling]:
     if source_sha256 is None:
         source_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
+    if pdf_bytes.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+        return _parse_docx(
+            pdf_bytes,
+            source_url=source_url,
+            source_sha256=source_sha256,
+            dept_hint=dept_hint,
+            division_hint=division_hint,
+        )
     try:
         reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
     except Exception:

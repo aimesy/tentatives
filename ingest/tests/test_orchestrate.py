@@ -144,3 +144,25 @@ def test_process_county_ruling_ids_stay_stable_for_same_source(tmp_path, monkeyp
     assert orchestrate.process_county("fake", dry_run=True) == 1
     assert len(seen_ids) == 2
     assert seen_ids[0] == seen_ids[1]
+
+
+def test_process_county_uses_registered_source_extensions(tmp_path, monkeypatch):
+    _patch_roots(monkeypatch, tmp_path)
+    content = b"docx-ish source for fake parser"
+    source_sha = hashlib.sha256(content).hexdigest()
+    source_path = orchestrate.ARCHIVE / "fake" / source_sha[:2] / f"{source_sha}.docx"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(content)
+
+    seen = []
+
+    def parser(content_bytes, *, source_url, source_sha256, dept_hint=None):
+        seen.append((content_bytes, source_url, source_sha256))
+        return [_ruling(source_sha256, source_url)]
+
+    monkeypatch.setattr(orchestrate, "PARSERS", {"fake": parser})
+    monkeypatch.setattr(orchestrate, "PARSER_EXTENSIONS", {"fake": {".docx"}})
+    monkeypatch.setattr(orchestrate, "PAGE_PARSERS", {})
+
+    assert orchestrate.process_county("fake", dry_run=True) == 1
+    assert seen == [(content, f"archive://fake/{source_sha}.docx", source_sha)]

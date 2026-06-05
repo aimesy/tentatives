@@ -61,6 +61,18 @@ def parser_functions() -> dict[str, Callable]:
     return parsers
 
 
+def parser_source_extensions() -> dict[str, set[str]]:
+    extensions: dict[str, set[str]] = {}
+    for slug, module in scraper_modules().items():
+        parse = getattr(module, "parse", None)
+        if not callable(parse):
+            continue
+        raw = getattr(module, "PARSE_EXTENSIONS", {".pdf"})
+        normalized = {str(ext).lower() if str(ext).startswith(".") else f".{str(ext).lower()}" for ext in raw}
+        extensions[slug] = normalized or {".pdf"}
+    return extensions
+
+
 def page_parser_functions() -> dict[str, Callable]:
     parsers: dict[str, Callable] = {}
     for slug, module in scraper_modules().items():

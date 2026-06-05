@@ -1,9 +1,10 @@
-"""Fetch live or Wayback tentative-ruling PDFs into archive/.
+"""Fetch live or Wayback tentative-ruling source files into archive/.
 
 This is the local companion to the browser extension. The extension is best
 for forward capture from a browser tab. This module is for historical backfill:
-discover PDF URLs from configured county pages, query Wayback CDX, fetch raw
-captures, store content-addressed PDFs, and append capture provenance rows.
+discover source-file URLs from configured county pages, query Wayback CDX,
+fetch raw captures, store content-addressed files, and append capture
+provenance rows.
 
 Examples:
 
@@ -16,13 +17,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import re
 import sys
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 import requests
 
 from counties.common import PdfRef, filename_from_url, unique_refs
@@ -33,9 +36,13 @@ REPO = Path(__file__).parent.parent
 ARCHIVE = REPO / "archive"
 CDX_ENDPOINT = "https://web.archive.org/cdx"
 AVAILABILITY_ENDPOINT = "https://archive.org/wayback/available"
+READER_ENDPOINT_PREFIX = "https://r.jina.ai/http://"
 MAX_PDF_BYTES = 50 * 1024 * 1024
+MAX_SOURCE_BYTES = MAX_PDF_BYTES
 PDF_MAGIC = b"%PDF-"
+DOCX_MAGIC_PREFIXES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 REDIRECT_LIMIT = 5
+SUPPORTED_SOURCE_EXTENSIONS = {".pdf", ".docx"}
 
 COUNTY_MODULES = discovery_modules()
 
@@ -56,6 +63,10 @@ def _record_failure(errors: list[str] | None, message: str) -> None:
     print(message, file=sys.stderr)
     if errors is not None:
         errors.append(message)
+
+
+def _reader_landing_url(url: str) -> str:
+    return f"{READER_ENDPOINT_PREFIX}{url}"
 
 
 def _host_matches(host: str, allowed_host: str) -> bool:
@@ -122,6 +133,43 @@ def _content_type_is_pdfish(value: str) -> bool:
     }
 
 
+def _content_type_is_docxish(value: str) -> bool:
+    ctype = value.split(";", 1)[0].strip().lower()
+    return ctype in {
+        "",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/octet-stream",
+        "application/zip",
+        "binary/octet-stream",
+    }
+
+
+def _source_extension(ref: PdfRef) -> str:
+    for candidate in (ref.filename, unquote(urlparse(ref.url).path)):
+        suffix = Path(candidate).suffix.lower()
+        if suffix:
+            if suffix not in SUPPORTED_SOURCE_EXTENSIONS:
+                raise ValueError(f"unsupported source file extension for {ref.url}: {suffix}")
+            return suffix
+    raise ValueError(f"source URL has no supported file extension: {ref.url}")
+
+
+def _url_has_supported_source_extension(url: str) -> bool:
+    return Path(unquote(urlparse(url).path)).suffix.lower() in SUPPORTED_SOURCE_EXTENSIONS
+
+
+def _source_format(ref: PdfRef) -> str:
+    return _source_extension(ref).lstrip(".")
+
+
+def _content_type_matches_source(value: str, extension: str) -> bool:
+    if extension == ".pdf":
+        return _content_type_is_pdfish(value)
+    if extension == ".docx":
+        return _content_type_is_docxish(value)
+    return False
+
+
 def _capture_path(county: str) -> Path:
     return ARCHIVE / county / "captures.ndjson"
 
@@ -156,6 +204,8 @@ def _append_capture(county: str, ref: PdfRef, sha: str, content_length: int, dry
         dept_hint=ref.dept_hint,
         division_hint=ref.division_hint,
         source_page_url=ref.source_page_url,
+        source_format=_source_format(ref),
+        archive_extension=_source_extension(ref).lstrip("."),
     ).to_row()
     if dry_run:
         print(f"  would log capture {ref.filename} sha={sha[:12]} wayback={ref.wayback_ts or '-'}")
@@ -251,9 +301,10 @@ def fetch_ref(
     session: requests.Session,
     *,
     allowed_hosts: set[str] | None = None,
-    max_bytes: int = MAX_PDF_BYTES,
+    max_bytes: int = MAX_SOURCE_BYTES,
 ) -> tuple[bytes, str]:
     allowed = allowed_hosts or set()
+    extension = _source_extension(ref)
     _validate_source_host(ref.url, allowed)
     fetch_url = _replay_url(ref)
     for _ in range(REDIRECT_LIMIT + 1):
@@ -264,9 +315,14 @@ def fetch_ref(
             continue
         r.raise_for_status()
         ctype = r.headers.get("Content-Type", "")
-        if not _content_type_is_pdfish(ctype):
-            raise ValueError(f"unexpected content type for {ref.url}: {ctype}")
-        content = _read_limited_pdf(r, max_bytes=max_bytes, source_url=ref.url)
+        if not _content_type_matches_source(ctype, extension):
+            raise ValueError(f"unexpected content type for {extension} source {ref.url}: {ctype}")
+        content = _read_limited_source(
+            r,
+            max_bytes=max_bytes,
+            source_url=ref.url,
+            extension=extension,
+        )
         break
     else:
         raise ValueError(f"too many redirects for {ref.url}")
@@ -279,11 +335,26 @@ def _read_limited_pdf(
     max_bytes: int,
     source_url: str,
 ) -> bytes:
+    return _read_limited_source(
+        response,
+        max_bytes=max_bytes,
+        source_url=source_url,
+        extension=".pdf",
+    )
+
+
+def _read_limited_source(
+    response: requests.Response,
+    *,
+    max_bytes: int,
+    source_url: str,
+    extension: str,
+) -> bytes:
     content_length = response.headers.get("Content-Length")
     if content_length:
         try:
             if int(content_length) > max_bytes:
-                raise ValueError(f"PDF too large for {source_url}: {content_length} bytes")
+                raise ValueError(f"source file too large for {source_url}: {content_length} bytes")
         except ValueError:
             if content_length.isdigit():
                 raise
@@ -295,15 +366,15 @@ def _read_limited_pdf(
             continue
         if not first:
             first = chunk[:1024]
-            if len(first) >= len(PDF_MAGIC) and not _looks_like_pdf(first):
-                raise ValueError(f"response is not a PDF for {source_url}")
+            if len(first) >= 4 and not _looks_like_source_start(first, extension):
+                raise ValueError(f"response is not a {_source_label(extension)} for {source_url}")
         total += len(chunk)
         if total > max_bytes:
-            raise ValueError(f"PDF too large for {source_url}: >{max_bytes} bytes")
+            raise ValueError(f"source file too large for {source_url}: >{max_bytes} bytes")
         chunks.append(chunk)
     content = b"".join(chunks)
-    if not _looks_like_pdf(content):
-        raise ValueError(f"response is not a PDF for {source_url}")
+    if not _looks_like_source(content, extension):
+        raise ValueError(f"response is not a {_source_label(extension)} for {source_url}")
     return content
 
 
@@ -312,6 +383,37 @@ def _looks_like_pdf(content: bytes) -> bool:
     if sample.startswith(b"\xef\xbb\xbf"):
         sample = sample[3:]
     return sample.lstrip().startswith(PDF_MAGIC)
+
+
+def _looks_like_docx(content: bytes) -> bool:
+    if not content.startswith(DOCX_MAGIC_PREFIXES):
+        return False
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            names = set(zf.namelist())
+    except zipfile.BadZipFile:
+        return False
+    return "[Content_Types].xml" in names and "word/document.xml" in names
+
+
+def _looks_like_source_start(content: bytes, extension: str) -> bool:
+    if extension == ".pdf":
+        return _looks_like_pdf(content)
+    if extension == ".docx":
+        return content.startswith(DOCX_MAGIC_PREFIXES)
+    return False
+
+
+def _looks_like_source(content: bytes, extension: str) -> bool:
+    if extension == ".pdf":
+        return _looks_like_pdf(content)
+    if extension == ".docx":
+        return _looks_like_docx(content)
+    return False
+
+
+def _source_label(extension: str) -> str:
+    return extension.lstrip(".").upper() or "source file"
 
 
 def discover_live_refs(
@@ -327,9 +429,34 @@ def discover_live_refs(
         try:
             r = session.get(url, timeout=60)
             r.raise_for_status()
-            refs.extend(module.discover_live(r.text, page_url=url))
+            landing_text = r.text
+        except Exception as landing_error:
+            if not getattr(module, "READER_FALLBACK_LANDING_PAGES", False):
+                _record_failure(errors, f"  ERROR discover landing {url}: {landing_error}")
+                if not continue_on_error:
+                    raise
+                continue
+            reader_url = _reader_landing_url(url)
+            print(
+                f"  WARN discover landing {url} failed; trying reader fallback: {landing_error}",
+                file=sys.stderr,
+            )
+            try:
+                r = session.get(reader_url, timeout=90)
+                r.raise_for_status()
+                landing_text = r.text
+                if "Warning: Target URL returned error" in landing_text and ".pdf" not in landing_text.lower():
+                    raise RuntimeError("reader fallback did not expose source links")
+            except Exception as reader_error:
+                _record_failure(errors, f"  ERROR discover landing {url}: {landing_error}")
+                _record_failure(errors, f"  ERROR reader fallback {reader_url}: {reader_error}")
+                if not continue_on_error:
+                    raise
+                continue
+        try:
+            refs.extend(module.discover_live(landing_text, page_url=url))
         except Exception as e:
-            _record_failure(errors, f"  ERROR discover landing {url}: {e}")
+            _record_failure(errors, f"  ERROR parse landing {url}: {e}")
             if not continue_on_error:
                 raise
     return unique_refs(refs)
@@ -455,7 +582,7 @@ def discover_wayback_refs(
             except ValueError as e:
                 print(f"  WARN skipping CDX row outside allowlist: {e}", file=sys.stderr)
                 continue
-            if not original.lower().split("?", 1)[0].endswith(".pdf"):
+            if not _url_has_supported_source_extension(original):
                 continue
             ref_from_wayback_url = getattr(module, "ref_from_wayback_url", None)
             if ref_from_wayback_url:
@@ -474,7 +601,7 @@ def discover_wayback_refs(
                     )
                 )
 
-    # Counties with stable "current" PDF URLs, especially Orange, need exact
+    # Counties with stable "current" source URLs, especially Orange, need exact
     # CDX queries for each live URL to recover prior contents.
     for live_ref in live_refs:
         rows = _cdx_rows(
@@ -587,7 +714,7 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
                 f"  ERROR fetch {ref.url} wayback={ref.wayback_ts or '-'}: {e}",
             )
             continue
-        archive_path = ARCHIVE / county / sha[:2] / f"{sha}.pdf"
+        archive_path = ARCHIVE / county / sha[:2] / f"{sha}{_source_extension(ref)}"
         key = (sha, ref.url, ref.wayback_ts)
         if args.dry_run:
             print(f"  would store {ref.filename} sha={sha[:12]} from {ref.url}")
@@ -633,12 +760,12 @@ def run(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--county", required=True, choices=["all", *sorted(COUNTY_MODULES)])
-    parser.add_argument("--live", action="store_true", help="Fetch PDFs from configured live landing pages")
-    parser.add_argument("--wayback", action="store_true", help="Fetch matching Wayback PDF captures")
+    parser.add_argument("--live", action="store_true", help="Fetch source files from configured live landing pages")
+    parser.add_argument("--wayback", action="store_true", help="Fetch matching Wayback source-file captures")
     parser.add_argument("--from-year", type=int, help="First Wayback capture year, e.g. 2020")
     parser.add_argument("--to-year", type=int, help="Last Wayback capture year, e.g. 2022")
-    parser.add_argument("--url-from-year", type=int, help="First year embedded in the source PDF URL")
-    parser.add_argument("--url-to-year", type=int, help="Last year embedded in the source PDF URL")
+    parser.add_argument("--url-from-year", type=int, help="First year embedded in the source file URL")
+    parser.add_argument("--url-to-year", type=int, help="Last year embedded in the source file URL")
     parser.add_argument("--limit", type=int, help="Maximum refs to fetch after discovery")
     parser.add_argument("--continue-on-error", action="store_true", help="Keep processing remaining counties after a county-level failure")
     parser.add_argument("--dry-run", action="store_true")

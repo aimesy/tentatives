@@ -1,9 +1,11 @@
 from datetime import date
+import io
 from pathlib import Path
+import zipfile
 
 import pytest
 
-from counties.nevada.scraper import parse_file
+from counties.nevada.scraper import parse, parse_file
 
 FIXTURE_DIR = Path(__file__).parent.parent / "fixtures"
 
@@ -69,3 +71,47 @@ def test_ruling_ids_unique_and_stable():
     ids = [r.ruling_id for r in a]
     assert len(set(ids)) == len(ids)
     assert ids == [r.ruling_id for r in b]
+
+
+def _docx_with_paragraphs(paragraphs: list[str]) -> bytes:
+    body = "".join(
+        "<w:p><w:r><w:t>" + p.replace("&", "&amp;") + "</w:t></w:r></w:p>"
+        for p in paragraphs
+    )
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{body}</w:body></w:document>"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("[Content_Types].xml", "<Types></Types>")
+        zf.writestr("word/document.xml", xml)
+    return buf.getvalue()
+
+
+def test_docx_case_management_parser():
+    content = _docx_with_paragraphs([
+        "May 15, 2026 Case Management Conference Tentative Rulings",
+        "CL0003211\tLVNV Funding, LLC vs. Kathleen Mumaw",
+        "No appearances are required. The Court sets the matter for a court trial.",
+        "Trial: July 17, 2027, 10:30 a.m., Dept. A",
+        "CU0001178\tGregory Ludlum vs. Joshua Terranova, Executor, et al.",
+        "No appearances are required. The Court continues the case management conference to August 21, 2026 at 9:00 a.m., in Department A.",
+    ])
+
+    rs = parse(
+        content,
+        source_url="https://www.nevada.courts.ca.gov/system/files/tentative-rulings/cmc-51526-dept-truckee.docx",
+        source_sha256="d" * 64,
+        division_hint="Case Management",
+    )
+
+    assert [r.case_number for r in rs] == ["CL0003211", "CU0001178"]
+    assert all(r.hearing_date == date(2026, 5, 15) for r in rs)
+    assert all(r.division == "Case Management" for r in rs)
+    assert all(r.dept == "A" for r in rs)
+    assert all(r.motion_type == "Truckee" for r in rs)
+    assert rs[1].outcome == "continued"
+    assert rs[1].continued_to == date(2026, 8, 21)
+    assert rs[0].style == "nevada-cmc-docx"

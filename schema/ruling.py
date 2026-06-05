@@ -1,12 +1,12 @@
 """Shared schema for cross-county tentative-ruling records.
 
 Two record types:
-  - Capture: one row per PDF fetch event. Lives in archive/<county>/captures.ndjson.
-  - Ruling:  one row per (case × motion) extracted from a PDF. Lives in data/<county>/rulings.parquet.
+  - Capture: one row per source fetch event. Lives in archive/<county>/captures.ndjson.
+  - Ruling:  one row per (case × motion) extracted from a supported source. Lives in data/<county>/rulings.parquet.
 
-A Ruling references its source PDF by sha256, not by URL: the same content captured
-from the live site and from N Wayback timestamps is one PDF in storage, N rows in
-captures.ndjson, and the rulings parse once.
+A Ruling references its source by sha256, not by URL: the same content captured
+from the live site and from N Wayback timestamps is one file in storage, N rows
+in captures.ndjson, and parsed rulings parse once.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ def utc_now() -> datetime:
 
 @dataclass(frozen=True)
 class Capture:
-    """One capture of a PDF. Multiple captures can share a source_sha256."""
+    """One capture of a source file. Multiple captures can share a source_sha256."""
 
     source_sha256: str
     source_url: str
@@ -43,6 +43,8 @@ class Capture:
     dept_hint: str | None = None
     division_hint: str | None = None
     source_page_url: str | None = None
+    source_format: str = "pdf"
+    archive_extension: str = "pdf"
 
     def to_row(self) -> dict[str, Any]:
         d = asdict(self)
@@ -52,7 +54,7 @@ class Capture:
 
 @dataclass(frozen=True)
 class Ruling:
-    """One ruling extracted from a PDF. Stable across re-parses via ruling_id.
+    """One ruling extracted from a supported source file. Stable across re-parses via ruling_id.
 
     `dept` and `division` are Optional because some PDF styles don't carry the
     dept in the header (callers can supply via dept_hint from the discovery URL).
@@ -63,7 +65,7 @@ class Ruling:
     division: str | None    # "Probate", "Law and Motion", "Civil", "Family Law", ...
     dept: str | None        # e.g. "9", "12"
     hearing_date: date
-    ruling_index: int       # 1-based position within the PDF
+    ruling_index: int       # 1-based position within the source
     case_number: str        # e.g. "25PR0206", "SFL20210053"
     case_title: str         # e.g. "MATTER OF ANDRESEN TRUST"
     motion_type: str        # e.g. "Discovery Motions & Motion for Relief". May be empty.
@@ -73,10 +75,10 @@ class Ruling:
     continued_to: date | None  # if outcome == "continued"
     body_text: str          # narrative between header and TENTATIVE RULING line
     full_text: str          # entire per-ruling text, page headers stripped
-    page_start: int         # 1-based page in source PDF
+    page_start: int         # 1-based page in source when page-addressed
     page_end: int
     source_sha256: str      # FK → Capture.source_sha256
-    source_url: str         # canonical court URL of the source PDF
+    source_url: str         # canonical court URL of the source
     parser_version: str
     style: str = ""         # e.g. "probate-dept-header", "lawandmotion-calendar"
     ingest_ts: datetime = field(default_factory=utc_now)

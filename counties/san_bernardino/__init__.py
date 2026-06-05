@@ -1,2 +1,2 @@
 COUNTY_SLUG = "san-bernardino"
-PARSER_VERSION = "san-bernardino-discovery-v1"
+PARSER_VERSION = "san-bernardino-parse-v1"

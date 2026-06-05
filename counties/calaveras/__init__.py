@@ -1,2 +1,2 @@
 COUNTY_SLUG = "calaveras"
-PARSER_VERSION = "calaveras-discovery-v1"
+PARSER_VERSION = "calaveras-parse-v1"

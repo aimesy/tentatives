@@ -16,41 +16,44 @@ Current registered parsers:
 | County | Parser coverage | Tests present |
 |---|---|---|
 | Amador | Legacy PDF parser for archived/Wayback dropdown PDFs. | Discovery and parse tests. |
+| Calaveras | Case-management and civil law-and-motion PDF parser. | Discovery and parse tests. |
 | Contra Costa | PDF parser plus HTML page-capture parser. CLI discovery uses the public retired.cc-courts.org iframe URL. | Discovery and parse tests. |
 | El Dorado | Probate, civil law-and-motion, probate calendar, and family-law PDF parser. | Discovery and parse tests. |
-| Nevada | Static-page PDF parser. `.docx` links are discovered as a source issue but not parsed. | Discovery and parse tests. |
+| Fresno | Law-and-motion PDF parser, including cover-page continued matters. | Parse tests. |
+| Merced | Weekday civil law-and-motion PDF parser. | Parse tests. |
+| Nevada | Static-page PDF parser plus supported DOCX case-management parser. | Discovery and parse tests. |
 | Orange | Civil, family, and probate PDF parser for stable current URLs. | Discovery and parse tests. |
 | Placer | Civil law-and-motion PDF parser. | Discovery and parse tests. |
+| Plumas | Department 2 PDF parser. | Parse tests. |
+| Riverside | Regional/department numbered-table PDF parser. | Discovery and parse tests. |
+| San Bernardino | Legacy civil-table PDF parser. | Parse tests. |
 | San Francisco | Unified Family Court PDF parser for departments 403, 404, and 414. | Discovery and parse tests. |
 | Santa Clara | Department-page PDF parser. | Parse tests. |
 | Shasta | Department PDF parser. | Parse tests. |
 | Solano | Civil/probate PDF parser. | Parse tests. |
-
-Capture-only counties in the implemented-source table are archived with
-provenance, but do not produce viewer rows until representative fixtures and
-parser tests are added.
+| Tuolumne | Consolidated tentative-ruling PDF parser. | Parse tests. |
 
 ## Implemented Capture Sources
 
 | County | Source | Structure | Current plan | Parser status |
 |---|---|---|---|---|
 | Amador | `https://www.amadorcourt.org/os-tentativerulings.aspx` | Four legacy dropdowns with direct PDF option values. | Capture live dropdown PDFs and Wayback prefix captures for `www.amadorcourt.org/tentativeRulings/*`, especially 2020-2022. Current post-02/15/2022 access appears portal-based. | Parser registered for legacy PDFs. |
-| Calaveras | `https://www.calaveras.courts.ca.gov/online-services/tentative-rulings` | Static case-management and civil law-and-motion lists with many historical PDFs. | Capture both list pages. Do not assume filename regularity; use link text and URL. | Capture-only. |
+| Calaveras | `https://www.calaveras.courts.ca.gov/online-services/tentative-rulings` | Static case-management and civil law-and-motion lists with many historical PDFs. | Capture both list pages. Do not assume filename regularity; use link text and URL. | Parser registered. |
 | Contra Costa | `https://retired.cc-courts.org/civil/motions-hearings-tentative.aspx`, embedded by the public Contra Costa tentative-rulings page. | ASP.NET iframe page with direct PDF anchors under `/civil/TR/`. | Capture current PDFs directly in `ingest.backfill`; keep the extension for page snapshots and manual browser scans. | Parser registered for captured PDFs and page captures. |
 | El Dorado | Court tentative-ruling pages. | Static direct PDF links across several divisions/styles. | Keep live capture and Wayback checks; maintain parser fixtures for each PDF family. | Parser registered. |
-| Fresno | `https://www.fresno.courts.ca.gov/online-services/tentative-rulings` | Static Law and Motion page with department PDF links. | Capture direct PDFs and infer department from filenames such as `dept-503`. | Capture-only. |
-| Merced | `https://www.merced.courts.ca.gov/online-services/tentative-rulings` | Static weekday PDF links, `tr-monday.pdf` through `tr-friday.pdf`. | Capture weekday PDFs; use hashes and Wayback for overwritten-file history. | Capture-only. |
-| Nevada | `https://www.nevada.courts.ca.gov/online-services/tentative-rulings` | Static Drupal page with Nevada City and Truckee sections. | Capture court-hosted PDFs under `/system/files/tentative-rulings/`; add `.docx` capture/parsing separately. | Parser registered for PDFs. |
+| Fresno | `https://www.fresno.courts.ca.gov/online-services/tentative-rulings` | Static Law and Motion page with department PDF links. | Capture direct PDFs and infer department from filenames such as `dept-503`. | Parser registered. |
+| Merced | `https://www.merced.courts.ca.gov/online-services/tentative-rulings` | Static weekday PDF links, `tr-monday.pdf` through `tr-friday.pdf`. | Capture weekday PDFs; use hashes and Wayback for overwritten-file history. | Parser registered. |
+| Nevada | `https://www.nevada.courts.ca.gov/online-services/tentative-rulings` | Static Drupal page with Nevada City and Truckee sections. | Capture court-hosted PDFs and DOCX files under `/system/files/tentative-rulings/`; parse supported Word-text calendars directly. | Parser registered for PDFs and supported DOCX. |
 | Orange | `https://www.occourts.org/online-services/tentative-rulings` | Router to civil, family, and probate index pages, each linking stable current PDFs. | Capture current PDFs from the three index pages. Use exact Wayback CDX queries against stable PDF URLs for history. | Parser registered. |
 | Placer | Court tentative-ruling page. | Static civil law-and-motion PDFs. | Continue live and Wayback capture; preserve date/dept hints from source metadata. | Parser registered. |
-| Plumas | `https://plumas.courts.ca.gov/online-services/tentative-rulings` | Static Department 2 list with direct PDF links. | Capture direct PDFs with Department 2 hint. | Capture-only. |
-| Riverside | `https://www.riverside.courts.ca.gov/online-services/tentative-rulings` | Regional/department page linking department ruling PDFs. | Capture direct PDFs and infer department from URL/text where possible. | Capture-only. |
-| San Bernardino | `https://old.sb-court.org/GeneralInfo/TentativeRulings.aspx` | Legacy table with date, civil division, and direct PDF filename. | Capture the legacy table; infer civil department from filenames such as `CVS36052026.pdf`. | Capture-only. |
+| Plumas | `https://plumas.courts.ca.gov/online-services/tentative-rulings` | Static Department 2 list with direct PDF links. | Capture direct PDFs with Department 2 hint. | Parser registered. |
+| Riverside | `https://www.riverside.courts.ca.gov/online-services/tentative-rulings` | Regional/department page linking department ruling PDFs. | Capture direct PDFs and infer department from URL/text where possible; use reader fallback for landing-page discovery when direct HTTP gets Cloudflare. | Parser registered. |
+| San Bernardino | `https://old.sb-court.org/GeneralInfo/TentativeRulings.aspx` | Legacy table with date, civil division, and direct PDF filename. | Capture the legacy table; infer civil department from filenames such as `CVS36052026.pdf`. | Parser registered. |
 | San Francisco | `https://webapps.sftc.org/ufctr/ufctr.dll` | Static UFC family-law page with current and previous PDF links. | Capture PDFs for departments 403, 404, and 414. | Parser registered for UFC PDFs. |
 | Santa Clara | `https://santaclara.courts.ca.gov/online-services/tentative-rulings` | Index links department pages; department pages link stable PDF files. | Capture department pages for civil, probate, and complex departments. | Parser registered. |
 | Shasta | `https://shasta.courts.ca.gov/online-services/tentative-rulings` | Static department list with direct PDFs under `/system/files/tentative/`. | Capture direct PDFs and map old department labels when filenames expose them. | Parser registered. |
 | Solano | `https://solano.courts.ca.gov/divisions/civil-court/tentative-rulings` | Static civil/probate page with direct department PDFs. | Capture the ruling PDFs and skip request-for-argument forms. | Parser registered. |
-| Tuolumne | `https://www.tuolumne.courts.ca.gov/online-services/tentative-rulings-and-case-notes` | Static tentative-ruling and Case Notes links. | Capture tentative-ruling PDFs and Case Notes, tagged by division hint. | Capture-only. |
+| Tuolumne | `https://www.tuolumne.courts.ca.gov/online-services/tentative-rulings-and-case-notes` | Static tentative-ruling and Case Notes links. | Capture tentative-ruling PDFs and Case Notes, tagged by division hint. | Parser registered. |
 
 ## Automation Constraints and Fallbacks
 
@@ -64,7 +67,8 @@ scope unless there is a lawful public access path.
 |---|---|---|---|
 | Contra Costa page snapshots | PDF capture is now automatic through the public retired.cc-courts.org iframe URL; HTML page snapshots remain extension-backed. | CLI backfill stores PDFs only. The extension still captures changed visible text/layout pages. | Use the browser extension or a future Playwright/Xvfb pass only when page snapshots, not PDFs, need refresh. |
 | Amador post-02/15/2022 | Legacy PDFs/Wayback are automatic; current portal is not. | Current access appears portal/account-based rather than public static PDFs. | If there is a public unauthenticated portal path, automate it with Playwright in a virtual window; otherwise keep to legacy public archive/Wayback. |
-| Nevada `.docx` links | PDF links are automatic; `.docx` links are not archived. | Pipeline is PDF-first and does not yet store or parse Word documents. | Add document capture for `.docx`, convert or parse with `python-docx`, and add fixtures before enabling parser rows. |
+| Nevada `.docx` links | PDF and `.docx` links are automatic. | Pipeline stores original DOCX source files and parses supported Word-text calendars into rows. | For unsupported Word layouts, retain original DOCX bytes and add fixtures before expanding parser coverage. |
+| Riverside landing page | Automatic through a reader fallback for link discovery; source PDFs are still fetched directly from the court host. | Basic `requests` receives Cloudflare 403 on the landing page, while direct linked PDFs remain public. | Keep the reader fallback scoped to discovery. If it breaks, use a browser/extension scan to refresh the court-hosted PDF links. |
 | Google Drive folders (Napa, San Luis Obispo, Santa Cruz backlog) | Not implemented. | Drive folder markup and download URLs are unstable under basic HTML scraping. | Prefer Drive API or public folder JSON extraction; fallback to headed Chromium that enumerates visible files and downloads PDFs. |
 | SharePoint folder (Kings backlog) | Not implemented. | Basic requests redirect toward Microsoft login. Anonymous folder enumeration may or may not be available. | Try public sharing-link APIs first; if login is required, do not automate absent a lawful public access path. A desktop profile can verify whether files are public. |
 | ASP.NET/token forms (Los Angeles, Ventura backlog) | Not implemented. | Requires session cookies, hidden fields, validation tokens, and POST replay. | Build a reusable sessioned form adapter; fallback to Playwright in a virtual window if JavaScript or bot checks mutate tokens. |

@@ -1,2 +1,2 @@
 COUNTY_SLUG = "plumas"
-PARSER_VERSION = "plumas-discovery-v1"
+PARSER_VERSION = "plumas-parse-v1"

@@ -34,8 +34,9 @@ on:
   schedule:
     # Daily live harvest at 5 PM America/Los_Angeles. GitHub cron is UTC and
     # cannot express Pacific DST directly, so run both possible UTC slots and
-    # gate inside the job.
-    - cron: "0 0,1 * * *"
+    # gate inside the job by offset, not by the runner's delayed start hour.
+    - cron: "0 0 * * *"
+    - cron: "0 1 * * *"
     # Re-check Wayback weekly; existing current URLs may acquire new archived
     # versions over time.
     - cron: "17 11 * * 0"
@@ -76,11 +77,14 @@ jobs:
         run: |
           set -o pipefail
           if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" != "17 11 * * 0" ]; then
-            pacific_hour="$(TZ=America/Los_Angeles date +%H)"
-            if [ "$pacific_hour" != "17" ]; then
-              echo "not 5 PM Pacific (hour=$pacific_hour); skipping duplicate UTC slot"
-              exit 0
-            fi
+            pacific_offset="$(TZ=America/Los_Angeles date +%z)"
+            case "${{ github.event.schedule }}:$pacific_offset" in
+              "0 0 * * *:-0700"|"0 1 * * *:-0800") ;;
+              *)
+                echo "skipping duplicate DST slot (schedule=${{ github.event.schedule }}, Pacific offset=$pacific_offset)"
+                exit 0
+                ;;
+            esac
           fi
           args=(--county "$COUNTY" --continue-on-error)
           case "$MODE" in
@@ -103,16 +107,40 @@ jobs:
             exit 1
           fi
 
-      - name: Commit archive updates
+      - name: Parse archived sources
+        env:
+          COUNTY: ${{ github.event.inputs.county || 'all' }}
         run: |
-          if git diff --quiet -- archive/; then
-            echo "no archive changes"
+          set -o pipefail
+          printf '\n== parse archived sources ==\n' >> backfill.log
+          if [ "$COUNTY" = "all" ]; then
+            python -m ingest.orchestrate | tee -a backfill.log
+          else
+            python -m ingest.orchestrate --county "$COUNTY" | tee -a backfill.log
+          fi
+
+      - name: Slice parsed PDF rulings
+        env:
+          COUNTY: ${{ github.event.inputs.county || 'all' }}
+        run: |
+          set -o pipefail
+          printf '\n== slice parsed PDF rulings ==\n' >> backfill.log
+          if [ "$COUNTY" = "all" ]; then
+            python -m ingest.slice_rulings | tee -a backfill.log
+          else
+            python -m ingest.slice_rulings --county "$COUNTY" | tee -a backfill.log
+          fi
+
+      - name: Commit archive and data updates
+        run: |
+          if git diff --quiet -- archive/ data/; then
+            echo "no archive or data changes"
             exit 0
           fi
           git config user.name "tentatives-bot"
           git config user.email "tentatives-bot@users.noreply.github.com"
-          git add archive/
-          git commit -m "archive: backfill captures"
+          git add archive/ data/
+          git commit -m "archive: backfill captures and parsed data"
           for attempt in 1 2 3; do
             git pull --rebase origin "${GITHUB_REF_NAME}"
             if git push; then
@@ -132,9 +160,10 @@ jobs:
           LOG_PATH: backfill.log
           EXTRA_CONTEXT: |
             Scheduled live harvest. Mode was inferred from the cron pattern
-            (`0 0,1 * * *` plus the Pacific-hour gate -> live;
-            `17 11 * * 0` -> wayback). The job exits non-zero when no county
-            reports any new refs - that's the most common failure when a
-            single county's landing-page HTML changes.
+            (`0 0 * * *` during Pacific daylight time or `0 1 * * *` during
+            Pacific standard time -> live; `17 11 * * 0` -> wayback). The job
+            exits non-zero when no county reports any new refs - that's the
+            most common failure when a single county's landing-page HTML
+            changes.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: .github/scripts/file_failure_report.sh

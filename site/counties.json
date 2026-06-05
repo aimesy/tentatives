@@ -1,12 +1,19 @@
 [
   { "slug": "amador",        "label": "Amador",        "code": "AMA" },
+  { "slug": "calaveras",     "label": "Calaveras",     "code": "CAL" },
   { "slug": "contra-costa",  "label": "Contra Costa",  "code": "CC" },
   { "slug": "el-dorado",     "label": "El Dorado",     "code": "ELD" },
+  { "slug": "fresno",        "label": "Fresno",        "code": "FRE" },
+  { "slug": "merced",        "label": "Merced",        "code": "MER" },
   { "slug": "nevada",        "label": "Nevada",        "code": "NEV" },
   { "slug": "orange",        "label": "Orange",        "code": "ORA" },
   { "slug": "placer",        "label": "Placer",        "code": "PLA" },
+  { "slug": "plumas",        "label": "Plumas",        "code": "PLU" },
+  { "slug": "riverside",     "label": "Riverside",     "code": "RIV" },
+  { "slug": "san-bernardino", "label": "San Bernardino", "code": "SBD" },
   { "slug": "san-francisco", "label": "San Francisco UFC", "code": "SF" },
   { "slug": "santa-clara",   "label": "Santa Clara",   "code": "SCL" },
   { "slug": "shasta",        "label": "Shasta",        "code": "SHA" },
-  { "slug": "solano",        "label": "Solano",        "code": "SOL" }
+  { "slug": "solano",        "label": "Solano",        "code": "SOL" },
+  { "slug": "tuolumne",      "label": "Tuolumne",      "code": "TUO" }
 ]
