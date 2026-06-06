@@ -6,10 +6,13 @@
     <meta name="tentatives-data-deploy" content="2026-05-30" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
+      content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
     />
     <title>California Tentative Decisions Database</title>
-    <link rel="stylesheet" href="styles.css?v=20260604-license-footer" />
+    <meta name="theme-color" content="#24211d" />
+    <link rel="stylesheet" href="styles.css?v=20260605-theme" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/aimesy/themes@main/src/theme.css" />
+    <script src="https://cdn.jsdelivr.net/gh/aimesy/themes@main/src/theme.js" defer></script>
   </head>
   <body>
     <header class="hdr">
@@ -21,6 +24,15 @@
         <span>Multi-County</span>
         <span class="grow"></span>
         <span class="live">static viewer</span>
+        <button class="theme-toggle" type="button" data-theme-toggle aria-label="Theme spectrum" title="Theme spectrum">
+          <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3a9 9 0 0 0 0 18h1.2a1.9 1.9 0 0 0 1.4-3.2 1.9 1.9 0 0 1 1.4-3.2h1.1A4.9 4.9 0 0 0 21 9.8C21 6 17 3 12 3Z"></path>
+            <circle cx="7.7" cy="10.2" r="1"></circle>
+            <circle cx="10.5" cy="6.9" r="1"></circle>
+            <circle cx="14.7" cy="7.4" r="1"></circle>
+            <circle cx="16.6" cy="11" r="1"></circle>
+          </svg>
+        </button>
       </div>
       <div class="entity-bar">
         <div class="hdr-left">
@@ -155,8 +167,8 @@
       </div>
     </div>
 
-    <footer id="site-credit" style="text-align:center;font-size:0.68rem;color:#9aa3ad;padding:0.6rem 1rem 1.1rem;border-top:1px solid #eee;margin-top:1rem">
-      Compiled by Amy Chattopadhyay &middot; contact <a href="mailto:me@amyc.us" style="color:#7a8aa0;text-decoration:none">me@amyc.us</a>
+    <footer id="site-credit" class="site-credit">
+      Compiled by Amy Chattopadhyay &middot; contact <a href="mailto:me@amyc.us">me@amyc.us</a>
     </footer>
 
     <script type="module" src="app.js?v=20260603-action-state"></script>
