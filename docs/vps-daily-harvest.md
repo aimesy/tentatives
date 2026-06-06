@@ -1,29 +1,64 @@
-# VPS Daily Harvest
+# VPS Daily Harvest (Retired)
 
-This repo already has a GitHub Actions live harvest. A VPS timer is useful as a
-second forward-capture path, especially for sites where a real browser or
-desktop session may later be needed.
+The scheduled live harvest now runs in GitHub Actions. Do not install or keep a
+persistent VPS checkout for this repository.
 
-The VPS timer runs at 5 PM America/Los_Angeles every day. It uses two UTC
-systemd calendar slots, 00:00 and 01:00, then gates inside the script using
-`TZ=America/Los_Angeles`; this keeps the schedule correct across Pacific DST
-without changing the VPS system timezone.
+The old VPS timer cloned the repository to `/opt/aimesy/tentatives` and reused
+that working tree. Because archive sources are tracked in the repo, that left a
+full copy of every archived source PDF on the SFSC VPS. That is not the default
+architecture anymore. GitHub Actions is the canonical scheduled lane, and it
+commits `archive/` plus parsed `data/` updates directly to the repository.
 
-## Install
+## Canonical Automation
 
-On the VPS:
+- `.github/workflows/backfill.yml` runs the daily live harvest at 5 PM
+  America/Los_Angeles and the weekly Wayback check.
+- The same workflow parses archived sources and slices PDF rulings before
+  committing `archive/` and `data/`.
+- Pushing archive changes updates the Pages viewer through the existing site
+  workflow.
+
+## Retiring an Old VPS Install
+
+On any VPS that still has the old timer:
 
 ```bash
-sudo mkdir -p /opt/aimesy
-sudo chown "$USER":"$USER" /opt/aimesy
-git clone https://github.com/aimesy/tentatives.git /opt/aimesy/tentatives
-cd /opt/aimesy/tentatives
-chmod +x ops/vps-live-harvest.sh
-
-sudo cp ops/systemd/tentatives-live-harvest.service /etc/systemd/system/
-sudo cp ops/systemd/tentatives-live-harvest.timer /etc/systemd/system/
+sudo systemctl disable --now tentatives-live-harvest.timer || true
+sudo systemctl stop tentatives-live-harvest.service || true
+sudo rm -f /etc/systemd/system/tentatives-live-harvest.service
+sudo rm -f /etc/systemd/system/tentatives-live-harvest.timer
 sudo systemctl daemon-reload
-sudo systemctl enable --now tentatives-live-harvest.timer
+```
+
+Before deleting `/opt/aimesy/tentatives`, verify it has no active process and no
+unpushed work:
+
+```bash
+cd /opt/aimesy/tentatives
+git fetch origin master
+git status --short --branch
+git rev-list --left-right --count HEAD...origin/master
+```
+
+If the checkout is clean and aligned, remove it:
+
+```bash
+sudo rm -rf --one-file-system /opt/aimesy/tentatives
+sudo rmdir /opt/aimesy 2>/dev/null || true
+```
+
+## Temporary VPS Fallback
+
+Use this only when GitHub Actions cannot reach a source and a real VPS network
+path is needed. Run it from a temporary clone, then delete the clone in the same
+shell:
+
+```bash
+workdir="$(mktemp -d /var/tmp/aimesy-tentatives-live.XXXXXX)"
+trap 'rm -rf "$workdir"' EXIT
+git clone --depth 1 https://github.com/aimesy/tentatives.git "$workdir/repo"
+cd "$workdir/repo"
+GATE_PACIFIC_5PM=0 ops/vps-live-harvest.sh
 ```
 
 The clone must be able to push to `aimesy/tentatives`. Use a deploy key, a
@@ -43,17 +78,15 @@ GitHub Actions. County-specific fallbacks stay in the repo code:
 ## Verify
 
 ```bash
-systemctl list-timers tentatives-live-harvest.timer
-sudo systemctl start tentatives-live-harvest.service
-journalctl -u tentatives-live-harvest.service -n 200 --no-pager
+gh workflow run "Backfill captures" -f county=all -f mode=live
+gh run list --workflow "Backfill captures" --limit 5
 ```
 
-If the manual start is not during the 5 PM Pacific hour, the service exits
-cleanly with a "skipping duplicate UTC slot" message. To force a manual run:
+For a temporary VPS fallback, verify the temporary working tree is gone after
+the shell exits and that the VPS has no retained PDFs:
 
 ```bash
-cd /opt/aimesy/tentatives
-GATE_PACIFIC_5PM=0 ops/vps-live-harvest.sh
+find / -xdev -type f -iname '*.pdf' 2>/dev/null
 ```
 
 ## What It Does

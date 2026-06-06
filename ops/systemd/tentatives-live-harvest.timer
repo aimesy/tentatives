@@ -1,9 +1,9 @@
 [Unit]
-Description=Run aimesy/tentatives live harvest at 5 PM Pacific
+Description=Retired aimesy/tentatives VPS live harvest
 
 [Timer]
-# Run both UTC slots that can correspond to 5 PM America/Los_Angeles.
-# The service gates on TZ=America/Los_Angeles, so the non-matching slot exits.
+# Retired. The canonical schedule is .github/workflows/backfill.yml.
+# This timer is kept only so old install notes point at a harmless no-op unit.
 OnCalendar=*-*-* 00:00:00 UTC
 OnCalendar=*-*-* 01:00:00 UTC
 Persistent=true

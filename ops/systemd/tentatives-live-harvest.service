@@ -1,13 +1,11 @@
 [Unit]
-Description=aimesy/tentatives daily live harvest
+Description=retired aimesy/tentatives VPS live harvest
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/aimesy/tentatives
-Environment=GATE_PACIFIC_5PM=1
-ExecStart=/opt/aimesy/tentatives/ops/vps-live-harvest.sh
+ExecStart=/bin/sh -c 'echo "retired: scheduled live harvest runs in GitHub Actions; use docs/vps-daily-harvest.md for temporary VPS fallback"; exit 0'
 Nice=5
 IOSchedulingClass=best-effort
 IOSchedulingPriority=6

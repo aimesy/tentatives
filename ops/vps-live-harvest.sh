@@ -4,6 +4,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# The scheduled harvest now runs in GitHub Actions. The old SFSC VPS install
+# kept a full persistent checkout under /opt/aimesy/tentatives, which meant the
+# VPS carried every archived source PDF. Manual VPS fallback runs should use a
+# temporary clone and let the trap in the operator's wrapper delete it.
+if [[ "${ALLOW_PERSISTENT_VPS_CHECKOUT:-0}" != "1" && "$ROOT" == "/opt/aimesy/tentatives" ]]; then
+  echo "refusing to run from persistent /opt/aimesy/tentatives checkout" >&2
+  echo "GitHub Actions is the canonical scheduled harvest; use a temporary clone for VPS fallback" >&2
+  exit 2
+fi
+
 if [[ "${GATE_PACIFIC_5PM:-0}" == "1" ]]; then
   pacific_hour="$(TZ=America/Los_Angeles date +%H)"
   if [[ "$pacific_hour" != "17" ]]; then
