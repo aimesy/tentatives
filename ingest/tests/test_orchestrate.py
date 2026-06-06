@@ -66,6 +66,27 @@ def test_write_parquet_atomic_preserves_existing_on_failure(tmp_path, monkeypatc
     assert not list(tmp_path.glob(".rulings.parquet.*.tmp"))
 
 
+def test_schema_merge_promotes_existing_null_column():
+    existing = pa.table(
+        {
+            "ruling_id": pa.array(["old"]),
+            "dept": pa.nulls(1),
+        }
+    )
+    new = pa.table({"ruling_id": ["new"], "dept": ["RIV-1"]})
+
+    schema = orchestrate.merged_table_schema(existing, new)
+    combined = pa.concat_tables(
+        [
+            orchestrate.cast_table_to_schema(existing, schema),
+            orchestrate.cast_table_to_schema(new, schema),
+        ]
+    )
+
+    assert combined.schema.field("dept").type == pa.string()
+    assert combined.column("dept").to_pylist() == [None, "RIV-1"]
+
+
 def test_process_county_quarantines_and_skips_hash_mismatch(tmp_path, monkeypatch):
     repo = _patch_roots(monkeypatch, tmp_path)
     declared_sha = "a" * 64

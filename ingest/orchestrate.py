@@ -217,6 +217,51 @@ def write_parquet_atomic(table: pa.Table, parquet_path: Path) -> None:
             pass
 
 
+def merged_table_schema(existing_table: pa.Table, new_table: pa.Table) -> pa.Schema:
+    """Return a schema that can hold both tables without pinning null columns."""
+    fields: list[pa.Field] = []
+    seen: set[str] = set()
+    for schema in (existing_table.schema, new_table.schema):
+        for field in schema:
+            if field.name in seen:
+                continue
+            seen.add(field.name)
+            existing_field = (
+                existing_table.schema.field(field.name)
+                if field.name in existing_table.schema.names
+                else None
+            )
+            new_field = (
+                new_table.schema.field(field.name)
+                if field.name in new_table.schema.names
+                else None
+            )
+            if existing_field is None:
+                chosen = new_field
+            elif new_field is None:
+                chosen = existing_field
+            elif pa.types.is_null(existing_field.type) and not pa.types.is_null(new_field.type):
+                chosen = new_field
+            else:
+                chosen = existing_field
+            if chosen is not None:
+                fields.append(chosen.with_nullable(True))
+    return pa.schema(fields)
+
+
+def cast_table_to_schema(table: pa.Table, schema: pa.Schema) -> pa.Table:
+    arrays = []
+    for field in schema:
+        if field.name in table.schema.names:
+            column = table[field.name]
+            if not column.type.equals(field.type):
+                column = column.cast(field.type, safe=False)
+        else:
+            column = pa.nulls(table.num_rows, type=field.type)
+        arrays.append(column)
+    return pa.Table.from_arrays(arrays, schema=schema)
+
+
 def process_county(
     county: str,
     dry_run: bool = False,
@@ -339,9 +384,14 @@ def process_county(
     new_table = pa.Table.from_pylist(new_rulings)
     if parquet_path.exists() and not reparse_existing:
         existing_table = pq.read_table(parquet_path)
-        # Align schemas - new_table may have null cols where existing has typed
+        # Align schemas - either table may have null-only columns that need the
+        # other table's concrete type.
+        schema = merged_table_schema(existing_table, new_table)
         combined = pa.concat_tables(
-            [existing_table, new_table.cast(existing_table.schema, safe=False)]
+            [
+                cast_table_to_schema(existing_table, schema),
+                cast_table_to_schema(new_table, schema),
+            ]
         )
     else:
         combined = new_table
