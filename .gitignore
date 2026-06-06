@@ -20,3 +20,8 @@ venv/
 
 # claude code local state
 .claude/
+
+# VPS live-harvest runtime
+.tentatives-live-harvest.lock
+.venv-vps/
+vps-live-harvest.log
