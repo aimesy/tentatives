@@ -22,6 +22,11 @@ git fetch origin master
 git checkout master
 git pull --ff-only origin master
 
+if [[ -d .venv-vps ]] && ! .venv-vps/bin/python -m pip --version >/dev/null 2>&1; then
+  echo "removing incomplete .venv-vps without pip"
+  rm -rf .venv-vps
+fi
+
 if [[ ! -d .venv-vps ]]; then
   python3 -m venv .venv-vps
 fi
