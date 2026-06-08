@@ -131,15 +131,18 @@ jobs:
             python -m ingest.slice_rulings --county "$COUNTY" | tee -a backfill.log
           fi
 
+      - name: Refresh LIVE table
+        run: python update-readme.py
+
       - name: Commit archive and data updates
         run: |
-          if git diff --quiet -- archive/ data/; then
-            echo "no archive or data changes"
+          if git diff --quiet -- archive/ data/ README.md LIVE.md; then
+            echo "no archive, data, or LIVE changes"
             exit 0
           fi
           git config user.name "tentatives-bot"
           git config user.email "tentatives-bot@users.noreply.github.com"
-          git add archive/ data/
+          git add archive/ data/ README.md LIVE.md
           git commit -m "archive: backfill captures and parsed data"
           for attempt in 1 2 3; do
             git pull --rebase origin "${GITHUB_REF_NAME}"
