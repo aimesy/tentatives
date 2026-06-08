@@ -71,8 +71,17 @@ const TOGGLEABLE_COLS = [
   { key: "share",   label: "Link",    default: true  },
 ];
 const COLS_STORAGE_KEY = "tentatives.colVisibility";
+const VIEW_MODE_STORAGE_KEY = "tentatives.viewMode";
 
 const $ = (id) => document.getElementById(id);
+
+function readStoredViewMode() {
+  try {
+    return localStorage.getItem(VIEW_MODE_STORAGE_KEY) === "dossier" ? "dossier" : "table";
+  } catch {
+    return "table";
+  }
+}
 
 const state = {
   rows: [],
@@ -88,6 +97,8 @@ const state = {
   sort: { col: "hearing_date", dir: "desc" },
   page: 1,
   pageSize: 100,
+  viewMode: readStoredViewMode(),
+  selectedRowId: "",
   colVisibility: {},
   pendingFocusId: null, // ?r=<id> to auto-open after load
 };
@@ -423,30 +434,10 @@ function render() {
   const start = (state.page - 1) * state.pageSize;
   const slice = state.filtered.slice(start, start + state.pageSize);
 
-  const body = $("results-body");
-  const fragment = document.createDocumentFragment();
-  if (slice.length === 0) {
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.colSpan = 11;
-    td.className = "no-data";
-    if (state.selectedCounties.size === 0) {
-      td.textContent = "Open Database Downloads to load one or more county data files.";
-    } else if (loadingSelected) {
-      td.textContent = "Loading selected county data files...";
-    } else if (state.rows.length === 0) {
-      td.textContent = "Selected county data files contain no rulings.";
-    } else {
-      td.textContent = "No rulings match the current filters.";
-    }
-    tr.appendChild(td);
-    fragment.appendChild(tr);
-  } else {
-    for (const [i, row] of slice.entries()) {
-      fragment.appendChild(renderRow(row, start + i));
-    }
+  renderTable(slice, start, loadingSelected);
+  if (state.viewMode === "dossier") {
+    renderDossier(slice, start, loadingSelected);
   }
-  body.replaceChildren(fragment);
 
   // Sort markers on the headers.
   for (const th of document.querySelectorAll("thead th.sortable")) {
@@ -474,6 +465,8 @@ function render() {
   updateCountiesSummary();
   updateActionAvailability();
   applyColVisibility();
+  updateViewStripNote(total, start, slice.length);
+  applyViewMode();
 }
 
 function updateActionAvailability() {
@@ -486,6 +479,47 @@ function updateActionAvailability() {
     : "Load county data or adjust filters before exporting CSV";
 }
 
+function emptyMessage(loadingSelected) {
+  if (state.selectedCounties.size === 0) {
+    return "Open Database Downloads to load one or more county data files.";
+  }
+  if (loadingSelected) return "Loading selected county data files...";
+  if (state.rows.length === 0) return "Selected county data files contain no rulings.";
+  return "No rulings match the current filters.";
+}
+
+function rowKey(row) {
+  return row?._shortId || row?.ruling_id || "";
+}
+
+function displayCaseTitle(row) {
+  return row?.case_title || row?.case_number || "(no case title)";
+}
+
+function previewTextForRow(row) {
+  return (row?.outcome_text || row?.body_text || row?.full_text || "").trim();
+}
+
+function renderTable(slice, start, loadingSelected) {
+  const body = $("results-body");
+  const fragment = document.createDocumentFragment();
+  if (slice.length === 0) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 11;
+    td.className = "no-data";
+    td.textContent = emptyMessage(loadingSelected);
+    tr.appendChild(td);
+    fragment.appendChild(tr);
+  } else {
+    for (const [i, row] of slice.entries()) {
+      fragment.appendChild(renderRow(row, start + i, i));
+    }
+  }
+  body.replaceChildren(fragment);
+  markSelectedTableRow();
+}
+
 function appendCell(tr, text, className = "") {
   const td = document.createElement("td");
   if (className) td.className = className;
@@ -494,10 +528,14 @@ function appendCell(tr, text, className = "") {
   return td;
 }
 
-function renderRow(r, idx) {
+function renderRow(r, idx, pageIdx = idx) {
+  const fragment = document.createDocumentFragment();
   const tr = document.createElement("tr");
+  const par = pageIdx % 2 ? "rec-odd" : "rec-even";
+  tr.className = `rec-main ${par}`;
   tr.dataset.idx = String(idx);
   tr.dataset.id  = r._shortId;
+  if (rowKey(r) && rowKey(r) === state.selectedRowId) tr.classList.add("selected-row");
 
   const countyCell = appendCell(tr, COUNTY_LABEL[r.county] || r.county || "", "col-county");
   countyCell.title = COUNTY_LABEL[r.county] || r.county || "";
@@ -506,8 +544,20 @@ function renderRow(r, idx) {
   appendCell(tr, r.hearing_date || "", "col-date");
   appendCell(tr, r.case_number || "", "col-case");
 
-  const title = appendCell(tr, r.case_title || "", "col-title");
-  title.title = r.case_title || "";
+  const title = document.createElement("td");
+  title.className = "col-title";
+  if (r.case_title) {
+    const titleLink = document.createElement("span");
+    titleLink.className = "case-title-link";
+    titleLink.dataset.cn = r.case_number || "";
+    titleLink.title = "See all loaded tentatives for this case";
+    titleLink.textContent = r.case_title;
+    title.appendChild(titleLink);
+  } else {
+    title.textContent = r.case_number || "";
+  }
+  title.title = r.case_title || r.case_number || "";
+  tr.appendChild(title);
 
   const mtypeCell = document.createElement("td");
   mtypeCell.className = "col-mtype";
@@ -573,7 +623,223 @@ function renderRow(r, idx) {
   shareCell.appendChild(shareBtn);
   tr.appendChild(shareCell);
 
-  return tr;
+  const sub = document.createElement("tr");
+  sub.className = `ruling-subrow ${par}`;
+  sub.dataset.idx = String(idx);
+  sub.dataset.id = r._shortId;
+  if (rowKey(r) && rowKey(r) === state.selectedRowId) sub.classList.add("selected-row");
+  const subCell = document.createElement("td");
+  subCell.colSpan = 11;
+  const excerptBox = document.createElement("div");
+  excerptBox.className = "ruling-excerpt";
+  const subPreviewText = previewTextForRow(r);
+  if (subPreviewText) {
+    excerptBox.textContent = subPreviewText;
+  } else {
+    const empty = document.createElement("span");
+    empty.className = "ruling-empty";
+    empty.textContent = "no ruling text";
+    excerptBox.appendChild(empty);
+  }
+  subCell.appendChild(excerptBox);
+  sub.appendChild(subCell);
+
+  fragment.append(tr, sub);
+  return fragment;
+}
+
+function currentPageRows() {
+  const total = state.filtered.length;
+  const pageCount = Math.max(1, Math.ceil(total / state.pageSize));
+  if (state.page > pageCount) state.page = pageCount;
+  const start = (state.page - 1) * state.pageSize;
+  return { start, slice: state.filtered.slice(start, start + state.pageSize) };
+}
+
+function setViewMode(mode, { persist = true } = {}) {
+  state.viewMode = mode === "dossier" ? "dossier" : "table";
+  if (persist) {
+    try { localStorage.setItem(VIEW_MODE_STORAGE_KEY, state.viewMode); } catch { /* ignore */ }
+  }
+  if (state.viewMode === "dossier") {
+    const { slice } = currentPageRows();
+    ensureDossierSelection(slice);
+  }
+  render();
+  syncUrl();
+}
+
+function applyViewMode() {
+  const showDossier = state.viewMode === "dossier";
+  const tableWrap = $("table-wrap");
+  const dossierWrap = $("dossier-wrap");
+  if (tableWrap) tableWrap.hidden = showDossier;
+  if (dossierWrap) dossierWrap.classList.toggle("open", showDossier);
+  const resultsWrap = $("results-wrap");
+  if (resultsWrap) resultsWrap.classList.toggle("dossier-mode", showDossier);
+  for (const btn of document.querySelectorAll("[data-view-mode]")) {
+    const active = btn.dataset.viewMode === state.viewMode;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  }
+  markSelectedTableRow();
+}
+
+function updateViewStripNote(total, start, shown) {
+  const note = $("view-strip-note");
+  if (!note) return;
+  if (!total) {
+    note.textContent = "";
+    return;
+  }
+  note.textContent = `${(start + 1).toLocaleString()}-${(start + shown).toLocaleString()} of ${total.toLocaleString()}`;
+}
+
+function ensureDossierSelection(slice) {
+  if (!slice.length) {
+    state.selectedRowId = "";
+    return null;
+  }
+  const selected = state.selectedRowId && slice.find((r) => rowKey(r) === state.selectedRowId);
+  if (selected) return selected;
+  state.selectedRowId = rowKey(slice[0]);
+  return slice[0];
+}
+
+function markSelectedTableRow() {
+  const selected = state.selectedRowId;
+  const body = $("results-body");
+  if (!body) return;
+  for (const row of body.querySelectorAll("tr[data-id]")) {
+    row.classList.toggle("selected-row", !!selected && row.dataset.id === selected);
+  }
+}
+
+function selectRuling(row, idx) {
+  if (!row) return;
+  if (state.viewMode !== "dossier") {
+    openModal(row);
+    return;
+  }
+  state.selectedRowId = rowKey(row);
+  const { start, slice } = currentPageRows();
+  renderDossier(slice, start, false);
+  markSelectedTableRow();
+  syncUrl();
+}
+
+function renderDossier(slice, start, loadingSelected) {
+  const rail = $("dossier-rail");
+  const railHead = $("dossier-rail-head");
+  const detail = $("dossier-detail");
+  if (!rail || !detail) return;
+  if (!slice.length) {
+    rail.replaceChildren();
+    if (railHead) railHead.textContent = "Current page";
+    const empty = document.createElement("div");
+    empty.className = "dossier-empty";
+    empty.textContent = emptyMessage(loadingSelected);
+    detail.replaceChildren(empty);
+    return;
+  }
+
+  const selected = ensureDossierSelection(slice);
+  if (railHead) {
+    const end = start + slice.length;
+    railHead.textContent = `${(start + 1).toLocaleString()}-${end.toLocaleString()} of ${state.filtered.length.toLocaleString()}`;
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (const [i, row] of slice.entries()) {
+    const div = document.createElement("div");
+    div.className = "dossier-row";
+    if (rowKey(row) === state.selectedRowId) div.classList.add("active");
+    div.dataset.idx = String(start + i);
+
+    const date = document.createElement("div");
+    date.className = "dossier-row-date";
+    date.textContent = row.hearing_date || "";
+    const dept = document.createElement("span");
+    dept.textContent = row.dept ? `D${row.dept}` : (COUNTY_CODE[row.county] || "");
+    date.append(document.createElement("br"), dept);
+
+    const body = document.createElement("div");
+    const title = document.createElement("div");
+    title.className = "dossier-row-title";
+    title.textContent = displayCaseTitle(row);
+    const motion = document.createElement("div");
+    motion.className = "dossier-row-motion";
+    motion.textContent = row.motion_type || row.outcome || "";
+    body.append(title, motion);
+
+    div.append(date, body);
+    div.addEventListener("click", () => {
+      state.selectedRowId = rowKey(row);
+      renderDossier(slice, start, loadingSelected);
+      markSelectedTableRow();
+      syncUrl();
+    });
+    fragment.appendChild(div);
+  }
+  rail.replaceChildren(fragment);
+  renderDossierDetail(selected || slice[0]);
+}
+
+function dossierSection(n, title, bodyHtml) {
+  return `<section class="dossier-section">`
+    + `<div class="dossier-section-label">${esc(n)}</div>`
+    + `<div class="dossier-section-body">`
+    + `<div class="section-label">${esc(title)}</div>`
+    + bodyHtml
+    + `</div></section>`;
+}
+
+function renderDossierDetail(row) {
+  const detail = $("dossier-detail");
+  if (!detail || !row) return;
+  const pdfHref = rulingPdfHref(row);
+  const sourceUrl = safeHttpUrl(row.source_url);
+  const outcomeLabel = row.outcome || "Unknown";
+  const outcomeText = row.outcome_text || "(empty)";
+  const fullText = row.full_text || row.body_text || "(empty)";
+  const meta = [
+    row.case_number,
+    COUNTY_LABEL[row.county] || row.county,
+    row.dept ? `Dept ${row.dept}` : "",
+    row.division || "",
+    row.hearing_date || "",
+    row._shortId || "",
+  ].filter(Boolean);
+
+  detail.innerHTML =
+    `<div class="dossier-head">`
+    + `<div class="dossier-head-line">`
+    + `<span class="dossier-kicker">${esc(COUNTY_CODE[row.county] || row.county || "CA")}</span>`
+    + `<span class="outcome-pill outcome-${esc(classToken(outcomeLabel))}">${esc(outcomeLabel)}</span>`
+    + (row.conditional ? `<span class="cond">conditional</span>` : "")
+    + `</div>`
+    + `<h2 class="dossier-title">${esc(displayCaseTitle(row))}</h2>`
+    + `<div class="dossier-meta">${meta.map((m) => `<span>${esc(m)}</span>`).join("")}</div>`
+    + `<div class="dossier-actions">`
+    + `<button type="button" class="btn" data-dossier-open-modal>Open modal</button>`
+    + `<button type="button" class="btn" data-dossier-share>Copy link</button>`
+    + (row.case_number ? `<button type="button" class="btn" data-dossier-case-history>Case history</button>` : "")
+    + (pdfHref ? `<a class="btn" href="${esc(pdfHref)}" target="_blank" rel="noopener">PDF</a>` : "")
+    + (sourceUrl ? `<a class="btn" href="${esc(sourceUrl.href)}" target="_blank" rel="noopener">Source</a>` : "")
+    + `</div></div>`
+    + dossierSection("M", "Motion", `<div class="dossier-motion">${esc(row.motion_type || "")}</div>`)
+    + dossierSection("1", "Disposition", `<div class="dossier-ruling">${esc(outcomeText)}</div>`)
+    + dossierSection("T", "Full text", `<div class="dossier-ruling">${esc(fullText)}</div>`)
+    + `<div class="dossier-foot">source: parsed ruling row &middot; derived: outcome label</div>`;
+
+  detail.querySelector("[data-dossier-open-modal]")?.addEventListener("click", () => openModal(row));
+  detail.querySelector("[data-dossier-share]")?.addEventListener("click", async (event) => {
+    const btn = event.currentTarget;
+    const ok = await copyText(modalUrlFor(row));
+    if (ok) flashCopied(btn, "Copy link");
+    else window.alert(modalUrlFor(row));
+  });
+  detail.querySelector("[data-dossier-case-history]")?.addEventListener("click", () => openCaseHistory(row.case_number, row));
 }
 
 // ============================================================ MODAL
@@ -607,6 +873,8 @@ function flashCopied(el, original) {
 function openModal(rowOrIdx) {
   const r = typeof rowOrIdx === "number" ? state.filtered[rowOrIdx] : rowOrIdx;
   if (!r) return;
+  state.selectedRowId = rowKey(r);
+  markSelectedTableRow();
   $("modal-title").textContent = r.case_title || "(no case title)";
   const meta = $("modal-meta");
   meta.replaceChildren();
@@ -651,6 +919,8 @@ function openModal(rowOrIdx) {
   $("overlay").classList.add("open");
   // Reflect open state in the URL so a refresh keeps the modal open.
   const u = new URL(window.location.href);
+  if (state.viewMode === "dossier") u.searchParams.set("view", "dossier");
+  if (state.selectedRowId) u.searchParams.set("sel", state.selectedRowId);
   u.searchParams.set("r", r._shortId);
   window.history.replaceState(null, "", u.pathname + (u.search || "") + u.hash);
 }
@@ -668,6 +938,90 @@ function findRowById(id) {
   if (!id) return null;
   for (const r of state.rows) if (r._shortId === id) return r;
   return null;
+}
+
+function closeCaseHistory() {
+  $("case-overlay")?.classList.remove("open");
+}
+
+function openCaseHistory(caseNumber, currentRow) {
+  if (!caseNumber) return;
+  const titleEl = $("case-title");
+  const metaEl = $("case-meta");
+  const listEl = $("case-history-list");
+  if (!titleEl || !metaEl || !listEl) return;
+
+  const matches = state.rows
+    .filter((row) => String(row.case_number || "") === String(caseNumber || ""))
+    .sort((a, b) => {
+      const ad = `${a.hearing_date || ""} ${a.dept || ""}`;
+      const bd = `${b.hearing_date || ""} ${b.dept || ""}`;
+      return bd.localeCompare(ad);
+    });
+
+  titleEl.textContent = currentRow ? displayCaseTitle(currentRow) : `Case ${caseNumber}`;
+  metaEl.replaceChildren();
+  for (const label of [
+    caseNumber,
+    `${matches.length} ruling${matches.length === 1 ? "" : "s"} in loaded data`,
+  ]) {
+    const span = document.createElement("span");
+    span.className = "pill";
+    span.textContent = label;
+    metaEl.appendChild(span);
+  }
+
+  const fragment = document.createDocumentFragment();
+  if (!matches.length) {
+    const empty = document.createElement("div");
+    empty.className = "ch-empty";
+    empty.textContent = "No rulings found for this case in loaded county data.";
+    fragment.appendChild(empty);
+  } else {
+    for (const [i, row] of matches.entries()) {
+      const item = document.createElement("div");
+      item.className = "ch-row";
+      if (currentRow && rowKey(row) === rowKey(currentRow)) item.classList.add("ch-current");
+      item.dataset.idx = String(i);
+      item.title = "Click to open this ruling";
+
+      const date = document.createElement("div");
+      date.className = "ch-date";
+      date.textContent = row.hearing_date || "";
+
+      const county = document.createElement("div");
+      county.className = "ch-county";
+      county.textContent = COUNTY_CODE[row.county] || row.county || "";
+
+      const dept = document.createElement("div");
+      dept.className = "ch-dept";
+      dept.textContent = row.dept ? `Dept ${row.dept}` : "";
+
+      const motion = document.createElement("div");
+      motion.className = "ch-motion";
+      motion.textContent = row.motion_type || displayCaseTitle(row);
+
+      const outcome = document.createElement("div");
+      outcome.className = "ch-outcome";
+      const pill = document.createElement("span");
+      pill.className = `outcome-pill outcome-${classToken(row.outcome)}`;
+      pill.textContent = row.outcome || "";
+      outcome.appendChild(pill);
+
+      item.append(date, county, dept, motion, outcome);
+      item.addEventListener("click", () => {
+        closeCaseHistory();
+        state.selectedRowId = rowKey(row);
+        openModal(row);
+        markSelectedTableRow();
+        syncUrl();
+      });
+      fragment.appendChild(item);
+    }
+  }
+
+  listEl.replaceChildren(fragment);
+  $("case-overlay")?.classList.add("open");
 }
 
 // ============================================================ COLUMN FILTERS
@@ -1038,7 +1392,8 @@ function exportCsv() {
 
 function csvCell(v) {
   if (v === null || v === undefined) return "";
-  const s = String(v);
+  let s = String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
   if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }
@@ -1068,12 +1423,23 @@ function syncUrl() {
   ) {
     params.set("sort", `${state.sort.col}:${state.sort.dir}`);
   }
+  if (state.page !== 1) params.set("page", String(state.page));
+  if (state.pageSize !== 100) params.set("rows", String(state.pageSize));
+  if (state.viewMode === "dossier") params.set("view", "dossier");
+  if (state.selectedRowId) params.set("sel", state.selectedRowId);
   // Preserve ?r=<id> if a modal is open.
   const current = new URLSearchParams(window.location.search);
   if (current.get("r")) params.set("r", current.get("r"));
   const qs = params.toString();
   const newUrl = qs ? `?${qs}` : window.location.pathname;
   window.history.replaceState(null, "", newUrl);
+}
+
+function addCountyFromShortId(id) {
+  if (!id || state.selectedCounties.size > 0) return;
+  const code = String(id).split("-")[0];
+  const slug = COUNTY_BY_CODE[code];
+  if (slug) state.selectedCounties.add(slug);
 }
 
 function readUrl() {
@@ -1096,6 +1462,10 @@ function readUrl() {
       state.sort = { col, dir };
     }
   }
+  const page = Number(params.get("page"));
+  if (Number.isInteger(page) && page > 0) state.page = page;
+  const rows = Number(params.get("rows"));
+  if ([50, 100, 250, 500].includes(rows)) state.pageSize = rows;
   const counties = params.get("counties");
   if (counties) {
     const known = new Set(KNOWN_COUNTIES.map((c) => c.slug));
@@ -1107,16 +1477,22 @@ function readUrl() {
       }
     }
   }
+  const view = params.get("view");
+  if (view === "dossier" || view === "table") {
+    state.viewMode = view;
+    try { localStorage.setItem(VIEW_MODE_STORAGE_KEY, state.viewMode); } catch { /* ignore */ }
+  }
+  const sel = params.get("sel");
+  if (sel) {
+    state.selectedRowId = sel;
+    addCountyFromShortId(sel);
+  }
   const r = params.get("r");
   if (r) {
     state.pendingFocusId = r;
     // If user landed on a ruling permalink without a county selection,
     // load the county encoded in the ID so the row resolves.
-    if (state.selectedCounties.size === 0) {
-      const code = r.split("-")[0];
-      const slug = COUNTY_BY_CODE[code];
-      if (slug) state.selectedCounties.add(slug);
-    }
+    addCountyFromShortId(r);
   }
 }
 
@@ -1125,6 +1501,8 @@ function pushFiltersToUI() {
     const el = $(k);
     if (el) el.value = state.filters[k];
   }
+  const pageSize = $("page-size");
+  if (pageSize) pageSize.value = String(state.pageSize);
 }
 
 // ============================================================ WIRING
@@ -1214,7 +1592,7 @@ function wire() {
   }
 
   // One delegated click handler for the table body: share button vs. PDF
-  // link vs. row to open modal.
+  // link vs. case history vs. row selection/detail.
   $("results-body").addEventListener("click", async (e) => {
     const share = e.target.closest("button[data-share]");
     if (share) {
@@ -1236,10 +1614,18 @@ function wire() {
       }
       return;
     }
+    const title = e.target.closest(".case-title-link");
+    if (title) {
+      e.stopPropagation();
+      const rowEl = e.target.closest("tr[data-idx]");
+      const row = rowEl ? state.filtered[Number(rowEl.dataset.idx)] : null;
+      openCaseHistory(title.dataset.cn, row);
+      return;
+    }
     if (e.target.closest("a")) return; // PDF link, let it through
     const row = e.target.closest("tr[data-idx]");
     if (!row) return;
-    openModal(Number(row.dataset.idx));
+    selectRuling(state.filtered[Number(row.dataset.idx)], Number(row.dataset.idx));
   });
 
   // Column filter buttons. Delegated since the table re-renders.
@@ -1262,9 +1648,14 @@ function wire() {
   $("overlay").addEventListener("click", (e) => {
     if (e.target === $("overlay")) closeModal();
   });
+  $("case-close").addEventListener("click", closeCaseHistory);
+  $("case-overlay").addEventListener("click", (e) => {
+    if (e.target === $("case-overlay")) closeCaseHistory();
+  });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       if (_openColFilter) closeColFilter();
+      else if ($("case-overlay").classList.contains("open")) closeCaseHistory();
       else closeModal();
     }
   });
@@ -1278,13 +1669,18 @@ function wire() {
   });
 
   // Pager.
-  $("prev-page").addEventListener("click", () => { state.page--; render(); });
-  $("next-page").addEventListener("click", () => { state.page++; render(); });
+  $("prev-page").addEventListener("click", () => { state.page--; render(); syncUrl(); });
+  $("next-page").addEventListener("click", () => { state.page++; render(); syncUrl(); });
   $("page-size").addEventListener("change", (e) => {
     state.pageSize = Number(e.target.value);
     state.page = 1;
     render();
+    syncUrl();
   });
+
+  for (const btn of document.querySelectorAll("[data-view-mode]")) {
+    btn.addEventListener("click", () => setViewMode(btn.dataset.viewMode));
+  }
 
   // Columns dropdown.
   $("cols-btn").addEventListener("click", (e) => {
@@ -1325,6 +1721,7 @@ function wire() {
     }
     applyFilters();
     $("loading-banner").hidden = true;
+    $("view-strip").hidden = false;
     $("toolbar").hidden = false;
     $("result-bar").hidden = false;
     $("results-wrap").hidden = false;

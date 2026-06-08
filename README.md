@@ -55,6 +55,10 @@ Parser support means archived material is converted into normalized rows in `dat
 
 See [docs/county-plans.md](docs/county-plans.md) for the broader county triage.
 
+## Data Quality Notes
+
+The 2026-06-08 parser-output audit is in [docs/parser-output-audit-2026-06-08.md](docs/parser-output-audit-2026-06-08.md). Use it for current parser sanity findings and known output defects. The LIVE block above is generated from current parquet data; some detailed county tables below may lag until the coverage section is regenerated.
+
 ## Parsed Date Coverage
 
 This section reflects normalized rows in `data/<county>/rulings.parquet`.

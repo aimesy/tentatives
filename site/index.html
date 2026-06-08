@@ -84,6 +84,14 @@
       </div>
     </header>
 
+    <section class="view-strip" id="view-strip" hidden>
+      <div class="view-tabs" role="tablist" aria-label="Tentatives view">
+        <button type="button" class="view-tab active" id="view-table" data-view-mode="table" role="tab" aria-selected="true">Table</button>
+        <button type="button" class="view-tab" id="view-dossier" data-view-mode="dossier" role="tab" aria-selected="false">Dossier</button>
+      </div>
+      <span class="view-strip-note" id="view-strip-note"></span>
+    </section>
+
     <section class="toolbar" id="toolbar" hidden>
       <span class="chip" title="Free-text search across case #, title, motion, body, full text. Wildcards: * (any sequence), ? (single char).">
         <label class="chip-lbl" for="q">Search</label>
@@ -114,7 +122,17 @@
     </section>
 
     <section class="results-wrap" id="results-wrap" hidden>
-      <div class="table-scroll">
+      <div class="dossier-wrap" id="dossier-wrap" aria-live="polite">
+        <aside class="dossier-rail" aria-label="Current result page">
+          <div class="dossier-rail-head" id="dossier-rail-head">Current page</div>
+          <div id="dossier-rail"></div>
+        </aside>
+        <section class="dossier-detail" id="dossier-detail" aria-label="Ruling dossier">
+          <div class="dossier-empty">Select a ruling from the left rail.</div>
+        </section>
+      </div>
+
+      <div class="table-scroll" id="table-wrap">
         <table id="results-table">
           <thead>
             <tr>
@@ -183,6 +201,15 @@
           <a class="btn" id="modal-pdf" target="_blank" rel="noopener" hidden>PDF</a>
           <a class="btn" id="modal-source" target="_blank" rel="noopener" hidden>Source</a>
         </div>
+      </div>
+    </div>
+
+    <div class="overlay case-overlay" id="case-overlay">
+      <div class="modal case-modal">
+        <button class="modal-close" id="case-close" aria-label="Close">x</button>
+        <h2 id="case-title"></h2>
+        <div class="meta" id="case-meta"></div>
+        <div id="case-history-list"></div>
       </div>
     </div>
 
