@@ -11,6 +11,9 @@ on:
       - "site/**"
       - "data/**/rulings.parquet"
       - ".github/workflows/site.yml"
+  workflow_run:
+    workflows: ["Backfill captures"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -24,6 +27,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
