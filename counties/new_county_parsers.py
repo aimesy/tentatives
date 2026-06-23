@@ -228,7 +228,7 @@ def parse_tulare_page(html: str, capture: dict) -> list[Ruling]:
         return []
     text = html_to_text(html)
     start = text.find("Current Tentative Rulings")
-    end = text.find("Probate Examiner Recommendations")
+    end = text.find("Probate Examiner Recommendations", start if start != -1 else 0)
     section = text[start : end if end != -1 else len(text)] if start != -1 else text
     hearing_date = find_date(section[:500])
     if not hearing_date:
