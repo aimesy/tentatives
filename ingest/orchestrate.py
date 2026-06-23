@@ -270,7 +270,8 @@ def process_county(
 ) -> int:
     """Parse any unprocessed source files for the given county. Returns count of new rulings."""
     parser = PARSERS.get(county)
-    if parser is None:
+    page_parser = PAGE_PARSERS.get(county)
+    if parser is None and page_parser is None:
         print(f"no parser registered for county={county}", file=sys.stderr)
         return 0
 
@@ -291,8 +292,8 @@ def process_county(
     captures = captures_index(county_archive)
 
     new_rulings: list[dict] = []
-    source_extensions = PARSER_EXTENSIONS.get(county, {".pdf"})
-    source_paths = iter_content_addressed_sources(county_archive, source_extensions)
+    source_extensions = PARSER_EXTENSIONS.get(county, {".pdf"}) if parser else set()
+    source_paths = iter_content_addressed_sources(county_archive, source_extensions) if parser else []
     skipped_existing = 0
     parsed_sources = 0
     for source_path in source_paths:
@@ -333,7 +334,6 @@ def process_county(
                 f" ({len(unseen)} new)"
             )
 
-    page_parser = PAGE_PARSERS.get(county)
     page_rows = page_captures(county_archive) if page_parser else []
     for cap in page_rows:
         if max_sources is not None and parsed_sources >= max_sources:
@@ -424,7 +424,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     started = utc_now()
-    counties = [args.county] if args.county else list(PARSERS)
+    counties = [args.county] if args.county else sorted(set(PARSERS) | set(PAGE_PARSERS))
     total = 0
     for c in counties:
         total += process_county(

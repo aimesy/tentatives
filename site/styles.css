@@ -1082,6 +1082,7 @@ a:focus-visible {
 table {
   width: 100%;
   max-width: 100%;
+  min-width: 1180px;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 0.69rem;
@@ -1165,7 +1166,7 @@ tbody tr.rec-main > td { border-bottom: 0; }
 .col-mtype { width: 132px; }
 .col-outcome { width: 112px; }
 .col-text { width: 24%; }
-.col-pdf,
+.col-pdf { width: 96px; text-align: center; white-space: nowrap; }
 .col-share { width: 48px; text-align: center; white-space: nowrap; }
 .col-id { width: 126px; font-family: var(--font-mono); font-size: 0.67rem; color: var(--ink-3); }
 td.col-county,
@@ -1195,10 +1196,13 @@ td.col-text {
   color: var(--ink-2);
   font-size: 0.68rem;
   line-height: 1.35;
+  white-space: normal;
+}
+.cell-clamp {
+  overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
-  white-space: normal;
 }
 tbody td a { color: var(--link); text-decoration: none; }
 tbody td a:hover { text-decoration: underline; }
@@ -1235,6 +1239,21 @@ tbody td a:hover { text-decoration: underline; }
   font-size: 0.72rem;
   color: var(--link);
   line-height: 1;
+}
+.pdf-links {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.16rem;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.pdf-links .pdf-btn {
+  padding-inline: 0.18rem;
+  white-space: nowrap;
+}
+.raw-source-btn {
+  color: var(--accent);
 }
 .share-btn:hover,
 .pdf-btn:hover {
@@ -1849,6 +1868,17 @@ tbody td a:hover { text-decoration: underline; }
   .col-id { display: none; }
   .col-title { width: 28%; }
   .col-mtype { width: 110px; }
+  .col-pdf { width: 96px; }
+  .pdf-links {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.08rem;
+  }
+  .pdf-links .pdf-btn {
+    display: block;
+    width: 100%;
+    padding-block: 0.08rem;
+  }
   .modal { padding: 1.05rem 0.9rem; }
   .modal-footer .ruling-id { flex-basis: 100%; }
   #case-history-list .ch-row {

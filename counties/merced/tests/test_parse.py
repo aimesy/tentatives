@@ -66,3 +66,23 @@ def test_parse_merced_calendar_rows_and_sections():
     assert rows[0].motion_type == "Order Show Cause re: Status of Corporation"
     assert rows[1].case_number == "23CV-02663"
     assert rows[1].outcome == "denied"
+
+
+def test_app_case_suffixes_are_anchors_but_body_related_cases_are_not():
+    pdf = _pdf([[
+        "SUPERIOR COURT OF CALIFORNIA",
+        "Monday, June 1st, 2026",
+        "Civil Law and Motion Tentative Rulings",
+        "Courtroom 8",
+        "22CV-03146-APP Mendez vs. County of Merced",
+        "Motion for Writ",
+        "The matter is continued to July 6, 2026.",
+        "21CR-06339 and #22CR-03670.",
+        "This line refers to related criminal matters in the same body.",
+    ]])
+
+    rows = parse(pdf, "https://www.merced.courts.ca.gov/system/files/tentative-rulings/tr-monday.pdf")
+
+    assert len(rows) == 1
+    assert rows[0].case_number == "22CV-03146-APP"
+    assert "21CR-06339" in rows[0].full_text

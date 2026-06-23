@@ -16,6 +16,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import io
 import json
@@ -30,7 +31,7 @@ from urllib.parse import unquote, urljoin, urlparse
 import requests
 import urllib3
 
-from counties.common import PdfRef, filename_from_url, unique_refs
+from counties.common import PageRef, PdfRef, filename_from_url, unique_refs
 from counties.registry import discovery_modules
 from schema import Capture
 
@@ -38,9 +39,10 @@ REPO = Path(__file__).parent.parent
 ARCHIVE = REPO / "archive"
 CDX_ENDPOINT = "https://web.archive.org/cdx"
 AVAILABILITY_ENDPOINT = "https://archive.org/wayback/available"
-READER_ENDPOINT_PREFIX = "https://r.jina.ai/http://"
+READER_ENDPOINT_PREFIX = "https://r.jina.ai/"
 MAX_PDF_BYTES = 50 * 1024 * 1024
 MAX_SOURCE_BYTES = MAX_PDF_BYTES
+MAX_PAGE_BYTES = 10 * 1024 * 1024
 PDF_MAGIC = b"%PDF-"
 DOCX_MAGIC_PREFIXES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 REDIRECT_LIMIT = 5
@@ -162,6 +164,20 @@ def _content_type_is_docxish(value: str) -> bool:
     }
 
 
+def _content_type_is_htmlish(value: str) -> bool:
+    ctype = value.split(";", 1)[0].strip().lower()
+    return ctype in {
+        "",
+        "text/html",
+        "application/xhtml+xml",
+    }
+
+
+def _content_type_is_jsonish(value: str) -> bool:
+    ctype = value.split(";", 1)[0].strip().lower()
+    return ctype == "application/json"
+
+
 def _source_extension(ref: PdfRef) -> str:
     for candidate in (ref.filename, unquote(urlparse(ref.url).path)):
         suffix = Path(candidate).suffix.lower()
@@ -192,6 +208,10 @@ def _capture_path(county: str) -> Path:
     return ARCHIVE / county / "captures.ndjson"
 
 
+def _page_capture_path(county: str) -> Path:
+    return ARCHIVE / county / "page-captures.ndjson"
+
+
 def _materialize_capture_path_from_head(county: str) -> None:
     """Sparse checkouts can omit capture logs; restore them before appending."""
     path = _capture_path(county)
@@ -202,7 +222,11 @@ def _materialize_capture_path_from_head(county: str) -> None:
     except ValueError:
         return
     try:
-        content = subprocess.check_output(["git", "show", f"HEAD:{rel}"], cwd=REPO)
+        content = subprocess.check_output(
+            ["git", "show", f"HEAD:{rel}"],
+            cwd=REPO,
+            stderr=subprocess.DEVNULL,
+        )
     except (FileNotFoundError, subprocess.CalledProcessError):
         return
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -229,6 +253,25 @@ def _existing_capture_keys(county: str) -> set[tuple[str, str, str | None]]:
     return keys
 
 
+def _existing_page_capture_keys(county: str) -> set[tuple[str, str]]:
+    path = _page_capture_path(county)
+    if not path.exists():
+        return set()
+    keys: set[tuple[str, str]] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        sha = row.get("source_sha256")
+        url = row.get("source_url")
+        if sha and url:
+            keys.add((url, sha))
+    return keys
+
+
 def _append_capture(county: str, ref: PdfRef, sha: str, content_length: int, dry_run: bool) -> None:
     row = Capture(
         source_sha256=sha,
@@ -248,6 +291,34 @@ def _append_capture(county: str, ref: PdfRef, sha: str, content_length: int, dry
         return
     _materialize_capture_path_from_head(county)
     path = _capture_path(county)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def _append_page_capture(
+    county: str,
+    ref: PageRef,
+    sha: str,
+    content_length: int,
+    archive_path: Path,
+    dry_run: bool,
+) -> None:
+    source_url = ref.source_url or ref.url
+    row = {
+        "archive_path": archive_path.relative_to(REPO).as_posix(),
+        "captured_at": utc_now().isoformat(),
+        "content_length": content_length,
+        "county": county,
+        "page_kind": ref.page_kind,
+        "source_sha256": sha,
+        "source_url": source_url,
+        "title": ref.title,
+    }
+    if dry_run:
+        print(f"  would log page {ref.title} sha={sha[:12]} url={source_url}")
+        return
+    path = _page_capture_path(county)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, sort_keys=True) + "\n")
@@ -353,18 +424,58 @@ def fetch_ref(
             continue
         r.raise_for_status()
         ctype = r.headers.get("Content-Type", "")
-        if not _content_type_matches_source(ctype, extension):
+        if extension == ".pdf" and _content_type_is_jsonish(ctype):
+            raw_json = _read_limited_response_bytes(r, max_bytes=max_bytes, source_url=ref.url)
+            content = _pdf_from_json_response(raw_json, ref.url)
+        elif not _content_type_matches_source(ctype, extension):
             raise ValueError(f"unexpected content type for {extension} source {ref.url}: {ctype}")
-        content = _read_limited_source(
-            r,
-            max_bytes=max_bytes,
-            source_url=ref.url,
-            extension=extension,
-        )
+        else:
+            content = _read_limited_source(
+                r,
+                max_bytes=max_bytes,
+                source_url=ref.url,
+                extension=extension,
+            )
         break
     else:
         raise ValueError(f"too many redirects for {ref.url}")
     return content, hashlib.sha256(content).hexdigest()
+
+
+def fetch_page_ref(
+    ref: PageRef,
+    session: requests.Session,
+    *,
+    allowed_hosts: set[str] | None = None,
+    verify_tls: bool = True,
+    max_bytes: int = MAX_PAGE_BYTES,
+) -> tuple[str, str]:
+    allowed = allowed_hosts or set()
+    source_url = ref.source_url or ref.url
+    _validate_source_host(ref.url, allowed)
+    _validate_source_host(source_url, allowed)
+    method = ref.method.upper()
+    if method == "POST":
+        response = session.post(ref.url, data=ref.data, timeout=90, verify=verify_tls)
+    elif method == "GET":
+        response = session.get(ref.url, timeout=90, verify=verify_tls)
+    else:
+        raise ValueError(f"unsupported page fetch method for {source_url}: {ref.method}")
+    _validate_fetch_host(response.url or ref.url, source_url, allowed)
+    response.raise_for_status()
+    ctype = response.headers.get("Content-Type", "")
+    if not _content_type_is_htmlish(ctype):
+        raise ValueError(f"unexpected content type for page {source_url}: {ctype}")
+    content_length = response.headers.get("Content-Length")
+    if content_length and content_length.isdigit() and int(content_length) > max_bytes:
+        raise ValueError(f"page too large for {source_url}: {content_length} bytes")
+    body = response.content
+    if len(body) > max_bytes:
+        raise ValueError(f"page too large for {source_url}: >{max_bytes} bytes")
+    text = body.decode(response.encoding or "utf-8", errors="replace")
+    if "<html" not in text[:2048].lower() and "<!doctype html" not in text[:2048].lower():
+        raise ValueError(f"response does not look like HTML for {source_url}")
+    return text, hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _read_limited_pdf(
@@ -414,6 +525,42 @@ def _read_limited_source(
     if not _looks_like_source(content, extension):
         raise ValueError(f"response is not a {_source_label(extension)} for {source_url}")
     return content
+
+
+def _read_limited_response_bytes(
+    response: requests.Response,
+    *,
+    max_bytes: int,
+    source_url: str,
+) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=65536):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > max_bytes:
+            raise ValueError(f"source response too large for {source_url}: >{max_bytes} bytes")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _pdf_from_json_response(raw_json: bytes, source_url: str) -> bytes:
+    try:
+        payload = json.loads(raw_json.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise ValueError(f"JSON source did not decode for {source_url}: {e}") from e
+    data = payload.get("data") if isinstance(payload, dict) else None
+    contents = data.get("contents") if isinstance(data, dict) else None
+    if not isinstance(contents, str) or not contents:
+        raise ValueError(f"JSON source did not contain base64 PDF contents for {source_url}")
+    try:
+        pdf = base64.b64decode(contents, validate=True)
+    except ValueError as e:
+        raise ValueError(f"JSON source contained invalid base64 PDF for {source_url}: {e}") from e
+    if not _looks_like_pdf(pdf):
+        raise ValueError(f"JSON source contents are not a PDF for {source_url}")
+    return pdf
 
 
 def _looks_like_pdf(content: bytes) -> bool:
@@ -499,6 +646,81 @@ def discover_live_refs(
             if not continue_on_error:
                 raise
     return unique_refs(refs)
+
+
+def _normalize_page_ref(raw: PageRef | str, *, page_kind: str = "tentative_rulings_page") -> PageRef:
+    if isinstance(raw, PageRef):
+        return raw
+    title = filename_from_url(str(raw)) or str(raw).rstrip("/").rsplit("/", 1)[-1] or "page"
+    return PageRef(url=str(raw), title=title, page_kind=page_kind)
+
+
+def discover_live_page_refs(
+    county: str,
+    session: requests.Session,
+    *,
+    continue_on_error: bool = False,
+    errors: list[str] | None = None,
+) -> list[PageRef]:
+    module = _county_module(county)
+    verify_tls = _verify_tls_for_county(county)
+    refs: list[PageRef] = []
+    default_page_kind = str(getattr(module, "DEFAULT_PAGE_KIND", "tentative_rulings_page"))
+
+    for raw in getattr(module, "PAGE_CAPTURE_URLS", []):
+        refs.append(_normalize_page_ref(raw, page_kind=default_page_kind))
+
+    discover_pages = getattr(module, "discover_live_pages", None)
+    if callable(discover_pages):
+        for url in getattr(module, "LANDING_PAGES", []):
+            try:
+                r = session.get(url, timeout=60, verify=verify_tls)
+                r.raise_for_status()
+                refs.extend(discover_pages(r.text, page_url=url))
+            except Exception as e:
+                _record_failure(errors, f"  ERROR discover page refs {url}: {e}")
+                if not continue_on_error:
+                    raise
+
+    extra_pages = getattr(module, "discover_live_page_extra", None)
+    if callable(extra_pages):
+        try:
+            refs.extend(extra_pages(session=session, errors=errors))
+        except Exception as e:
+            _record_failure(errors, f"  ERROR extra page discovery for {county}: {e}")
+            if not continue_on_error:
+                raise
+
+    seen: set[tuple[str, str, str]] = set()
+    out: list[PageRef] = []
+    for ref in refs:
+        source_url = ref.source_url or ref.url
+        key = (source_url, ref.method.upper(), json.dumps(ref.data, sort_keys=True))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(ref)
+    return out
+
+
+def discover_extra_live_refs(
+    county: str,
+    session: requests.Session,
+    *,
+    continue_on_error: bool = False,
+    errors: list[str] | None = None,
+) -> list[PdfRef]:
+    module = _county_module(county)
+    hook = getattr(module, "discover_live_extra", None)
+    if not callable(hook):
+        return []
+    try:
+        return unique_refs(list(hook(session=session, errors=errors)))
+    except Exception as e:
+        _record_failure(errors, f"  ERROR extra live discovery for {county}: {e}")
+        if not continue_on_error:
+            raise
+        return []
 
 
 def _cdx_rows(
@@ -621,9 +843,11 @@ def discover_wayback_refs(
             except ValueError as e:
                 print(f"  WARN skipping CDX row outside allowlist: {e}", file=sys.stderr)
                 continue
-            if not _url_has_supported_source_extension(original):
-                continue
             ref_from_wayback_url = getattr(module, "ref_from_wayback_url", None)
+            if not _url_has_supported_source_extension(original) and not (
+                ref_from_wayback_url and getattr(module, "WAYBACK_ALLOW_NON_EXTENSION", False)
+            ):
+                continue
             if ref_from_wayback_url:
                 refs.append(
                     ref_from_wayback_url(
@@ -688,7 +912,10 @@ def _limit(refs: list[PdfRef], limit: int | None) -> list[PdfRef]:
 
 def _wayback_needs_live_refs(county: str) -> bool:
     module = _county_module(county)
-    return not bool(getattr(module, "WAYBACK_PDF_PATTERNS", []))
+    explicit = getattr(module, "WAYBACK_NEEDS_LIVE_REFS", None)
+    if explicit is not None:
+        return bool(explicit)
+    return not bool(getattr(module, "WAYBACK_PDF_PATTERNS", ()))
 
 
 def _run_county(args: argparse.Namespace, county: str, session: requests.Session) -> int:
@@ -711,6 +938,35 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
         if not args.continue_on_error:
             raise
         live_refs = []
+    if do_live:
+        try:
+            live_refs.extend(
+                discover_extra_live_refs(
+                    county,
+                    session,
+                    continue_on_error=args.continue_on_error,
+                    errors=failures,
+                )
+            )
+            live_refs = unique_refs(live_refs)
+        except Exception as e:
+            _record_failure(failures, f"  ERROR extra live discovery for {county}: {e}")
+            if not args.continue_on_error:
+                raise
+    page_refs: list[PageRef] = []
+    if do_live:
+        try:
+            page_refs = discover_live_page_refs(
+                county,
+                session,
+                continue_on_error=args.continue_on_error,
+                errors=failures,
+            )
+        except Exception as e:
+            _record_failure(failures, f"  ERROR live page discovery for {county}: {e}")
+            if not args.continue_on_error:
+                raise
+            page_refs = []
     refs: list[PdfRef] = []
     if args.live:
         refs.extend(live_refs)
@@ -742,8 +998,11 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
         to_year=args.url_to_year,
     )
     refs = _limit(refs, args.limit)
-    print(f"{county}: {len(refs)} refs")
+    if args.limit is not None:
+        page_refs = page_refs[: args.limit]
+    print(f"{county}: {len(refs)} refs, {len(page_refs)} pages")
     existing = _existing_capture_keys(county)
+    existing_pages = _existing_page_capture_keys(county)
     wrote = 0
     for ref in refs:
         try:
@@ -766,7 +1025,32 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
             _append_capture(county, ref, sha, len(content), dry_run=False)
             existing.add(key)
         wrote += 1
+    wrote_pages = 0
+    for ref in page_refs:
+        source_url = ref.source_url or ref.url
+        try:
+            html, sha = fetch_page_ref(ref, session, allowed_hosts=allowed_hosts, verify_tls=verify_tls)
+        except Exception as e:
+            _record_failure(
+                failures,
+                f"  ERROR fetch page {source_url}: {e}",
+            )
+            continue
+        archive_path = ARCHIVE / county / "pages" / sha[:2] / f"{sha}.html"
+        key = (source_url, sha)
+        if args.dry_run:
+            print(f"  would store page {ref.title} sha={sha[:12]} from {source_url}")
+            continue
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        if not archive_path.exists():
+            archive_path.write_text(html, encoding="utf-8")
+        if key not in existing_pages:
+            _append_page_capture(county, ref, sha, len(html.encode("utf-8")), archive_path, dry_run=False)
+            existing_pages.add(key)
+        wrote_pages += 1
     print(f"{county}: archived/logged {wrote} refs")
+    if page_refs:
+        print(f"{county}: archived/logged {wrote_pages} pages")
     if failures:
         print(f"{county}: {len(failures)} failures", file=sys.stderr)
     return 1 if failures else 0

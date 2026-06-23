@@ -51,7 +51,7 @@ def discover_live(html: str, page_url: str | None = None, base_url: str = BASE):
 
 
 _CASE_NUMBER_INNER = (
-    r"\d{2}[A-Z]{2,3}-\d{4,6}"  # 22CV-03950
+    r"\d{2}[A-Z]{2,3}-\d{4,6}(?:-[A-Z]{2,5})?"  # 22CV-03950, 22CV-03146-APP
     r"|[A-Z]{1,3}\d{2}-\d{4,6}"  # PR25-00012, LC25-00114
 )
 CASE_ANCHOR_RE = re.compile(
@@ -265,7 +265,10 @@ def parse(
     if hearing_date is None:
         return []
 
-    anchors = list(CASE_ANCHOR_RE.finditer(plain))
+    anchors = [
+        anchor for anchor in CASE_ANCHOR_RE.finditer(plain)
+        if not re.match(r"^(?:and\s+#?|#)", anchor.group("title").strip(), re.IGNORECASE)
+    ]
     if not anchors:
         return []
 

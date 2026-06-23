@@ -54,13 +54,25 @@ def discover_live(html: str, page_url: str | None = None, base_url: str = BASE):
 # ============================================================ PARSE
 
 
-CASE_NUMBER_RE = re.compile(r"\b(?P<num>CIV[A-Z]{2}\d{7})\b", re.IGNORECASE)
+CASE_NUMBER_PATTERN = r"(?:CIV[A-Z]{2}\s*\d{7}|LLT(?:SB|RS)\s*\d{7})"
+CASE_NUMBER_RE = re.compile(rf"\b(?P<num>{CASE_NUMBER_PATTERN})\b", re.IGNORECASE)
 LIST_HEADER_RE = re.compile(
-    r"^\s*(?P<idx>\d{1,3})\.\s+(?P<title>.+?),?\s+Case\s+No\.?\s+"
-    r"(?P<num>CIV[A-Z]{2}\d{7})\s*$",
+    r"^\s*(?P<idx>\d{1,3})\.\s+(?P<title>.+?),?\s+"
+    rf"(?:Case\s+No\.?\s+)?(?P<num>{CASE_NUMBER_PATTERN})(?:\s*\([^)]*\))?\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
-HEADER_FOR_RE = re.compile(r"TENTATIVE\s+RULING\s+FOR\s+(?P<num>CIV[A-Z]{2}\d{7})", re.IGNORECASE)
+CASE_TABLE_ITEM_RE = re.compile(r"^\s*(?P<idx>\d{1,3})\.\s*$\s*^\s*CASE\s+NUMBER\s*$", re.IGNORECASE | re.MULTILINE)
+FORMAL_CASE_LINE_RE = re.compile(rf"^\s*(?P<num>{CASE_NUMBER_PATTERN})\s*$", re.IGNORECASE | re.MULTILINE)
+HEADER_FOR_RE = re.compile(rf"TENTATIVE\s+RULING\s+FOR\s+(?P<num>{CASE_NUMBER_PATTERN})", re.IGNORECASE)
+CASE_NUMBER_TAIL_RE = re.compile(
+    rf"^(?:&\s*)?{CASE_NUMBER_PATTERN}(?:\s*,\s*(?:&\s*)?{CASE_NUMBER_PATTERN})*\s*$",
+    re.IGNORECASE,
+)
+MOTION_FIELD_RE = re.compile(
+    r"(?is)^\s*Motion(?:s|\(s\))?\s*:\s*(?P<motion>.*?)"
+    r"(?=^\s*(?:Movants?|Respondents?|RELEVANT|PROCEDURAL|ANALYSIS|RULING)\b)",
+    re.MULTILINE,
+)
 LONG_DATE_RE = re.compile(
     r"\b(?P<month>[A-Z][a-z]+)\s+(?P<day>\d{1,2}),\s+(?P<year>\d{4})\b",
     re.IGNORECASE,
@@ -69,7 +81,10 @@ URL_DATE_RE = re.compile(r"CV[A-Z](?P<dept>\d{2})(?P<m>\d{2})(?P<d>\d{2})(?P<y>\
 DEPT_RE = re.compile(r"\bDepartment\s+(?P<dept>[RS]-?\d{2}|[RS]\d{2})\b|\bDept\.?\s+(?P<dept2>[RS]-?\d{2})\b", re.IGNORECASE)
 PAGE_NUMBER_RE = re.compile(r"^\s*(?:Page\s*\|\s*)?\d{1,3}\s*$|^\s*Page\s+\d+\s+of\s+\d+\s*$", re.IGNORECASE)
 LIST_DATE_LINE_RE = re.compile(r"^\s*\d{1,2}/\d{1,2}/\d{2,4},.*(?:Dept\.?|Department)\s+[RS]-?\d{2}\s*$", re.IGNORECASE)
-RULING_SECTION_RE = re.compile(r"^\s*RULING\s*$", re.IGNORECASE | re.MULTILINE)
+RULING_SECTION_RE = re.compile(
+    r"^\s*(?:TENTATIVE\s+)?RULING(?:\(S\))?:?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 CONTINUED_TO_RE = re.compile(
     r"(?:continued|sets?|reset)\s+(?:to|for)\s+"
     r"(?P<month>[A-Z][a-z]+)\s+(?P<day>\d{1,2}),?\s+(?P<year>\d{4})",
@@ -201,6 +216,10 @@ def _ruling_id(source_sha256: str, index: int, case_number: str) -> str:
     return hashlib.sha256(f"{source_sha256}:{index}:{case_number}".encode("utf-8")).hexdigest()[:32]
 
 
+def _normalize_case_number(value: str) -> str:
+    return re.sub(r"\s+", "", value).upper()
+
+
 def _make_ruling(
     *,
     index: int,
@@ -221,6 +240,7 @@ def _make_ruling(
     outcome, conditional, continued_to = _classify(body)
     page_start = _page_for_offset(offsets, start)
     page_end = max(page_start, _page_for_offset(offsets, max(start, end - 1)))
+    case_number = _normalize_case_number(case_number)
     return Ruling(
         ruling_id=_ruling_id(source_sha256, index, case_number),
         county=COUNTY_SLUG,
@@ -228,7 +248,7 @@ def _make_ruling(
         dept=dept,
         hearing_date=hearing_date,
         ruling_index=index,
-        case_number=case_number.upper(),
+        case_number=case_number,
         case_title=" ".join(case_title.split()),
         motion_type=" ".join(motion_type.split()),
         outcome=outcome,
@@ -301,6 +321,74 @@ def _parse_list_style(
     return rulings
 
 
+def _field_lines(lines: list[str], start_label: str, end_labels: set[str]) -> list[str]:
+    out: list[str] = []
+    active = False
+    for line in lines:
+        label = line.strip().upper()
+        if label == start_label.upper():
+            active = True
+            continue
+        if active and label in {value.upper() for value in end_labels}:
+            break
+        if active and line.strip():
+            out.append(line.strip())
+    return out
+
+
+def _parse_case_table_style(
+    plain: str,
+    offsets: list[int],
+    hearing_date: date,
+    dept: str | None,
+    source_sha256: str,
+    source_url: str,
+) -> list[Ruling]:
+    starts = list(CASE_TABLE_ITEM_RE.finditer(plain))
+    if not starts:
+        return []
+    rulings: list[Ruling] = []
+    for i, start_match in enumerate(starts):
+        start = start_match.start()
+        end = starts[i + 1].start() if i + 1 < len(starts) else len(plain)
+        section = plain[start:end]
+        case_match = CASE_NUMBER_RE.search(section)
+        if not case_match:
+            continue
+        lines = [line.strip() for line in section.splitlines() if line.strip()]
+        title = " ".join(_field_lines(lines, "CASE NAME", {"TYPE OF HEARING", "TENTATIVE RULING:"}))
+        motion = " ".join(_field_lines(lines, "TYPE OF HEARING", {"TENTATIVE RULING:"}))
+        body = ""
+        for j, line in enumerate(lines):
+            if re.match(r"^Tentative\s+Ruling:?\s*$", line, re.IGNORECASE):
+                body = "\n".join(lines[j + 1:]).strip()
+                break
+            m = re.match(r"^Tentative\s+Ruling:\s*(.+)$", line, re.IGNORECASE)
+            if m:
+                body = "\n".join([m.group(1), *lines[j + 1:]]).strip()
+                break
+        index = len(rulings) + 1
+        rulings.append(
+            _make_ruling(
+                index=index,
+                case_number=case_match.group("num"),
+                case_title=title,
+                motion_type=motion,
+                body=body,
+                full_text=section,
+                start=start,
+                end=end,
+                offsets=offsets,
+                source_sha256=source_sha256,
+                source_url=source_url,
+                hearing_date=hearing_date,
+                dept=dept,
+                style="san-bernardino-case-table",
+            )
+        )
+    return rulings
+
+
 def _title_before_case(plain: str, case_start: int) -> str:
     before = plain[:case_start]
     chunks = re.split(r"\n\s*\n", before)
@@ -341,6 +429,110 @@ def _title_before_offset(plain: str, offset: int) -> str:
     return " ".join(title_lines)
 
 
+def _title_after_case(plain: str, case_end: int) -> tuple[str, int]:
+    title_lines: list[str] = []
+    cursor = case_end
+    for raw in plain[case_end:].splitlines(keepends=True):
+        line_start = cursor
+        cursor += len(raw)
+        s = raw.strip(" ,")
+        s = re.sub(r"\s*[_*=-]{5,}\s*$", "", s).strip(" ,")
+        if not s:
+            if title_lines:
+                break
+            continue
+        if re.match(r"^[_*=-]{5,}$", s):
+            if title_lines:
+                break
+            continue
+        if re.search(r"^(?:TENTATIVE\s+)?RULING|Motion(?:s|\(s\))?:|Movants?:|Respondents?:", s, re.IGNORECASE):
+            break
+        if not title_lines and CASE_NUMBER_TAIL_RE.match(s):
+            continue
+        if re.search(r"California Rules|CourtCall|tentative ruling|request oral argument", s, re.IGNORECASE):
+            if title_lines:
+                break
+            continue
+        title_lines.append(s)
+        if len(title_lines) >= 4:
+            break
+    title = " ".join(" ".join(title_lines).split())
+    return title, cursor
+
+
+def _motion_from_body(body: str) -> str:
+    m = re.search(
+        r"\bBefore\s+the\s+Court\s+(?:is|are)\s+(?P<motion>.+?)(?:\.|\n)",
+        body,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return ""
+    motion = " ".join(m.group("motion").split())
+    return motion[:220]
+
+
+def _formal_case_anchors(plain: str) -> list[re.Match[str]]:
+    anchors: list[re.Match[str]] = []
+    for match in FORMAL_CASE_LINE_RE.finditer(plain):
+        title, _cursor = _title_after_case(plain, match.end())
+        if not title:
+            continue
+        following = plain[match.end():match.end() + 900]
+        if RULING_SECTION_RE.search(following):
+            anchors.append(match)
+    return anchors
+
+
+def _parse_formal_section(
+    *,
+    section: str,
+    absolute_start: int,
+    index: int,
+    offsets: list[int],
+    hearing_date: date,
+    dept: str | None,
+    source_sha256: str,
+    source_url: str,
+) -> Ruling | None:
+    case_match = CASE_NUMBER_RE.search(section)
+    if not case_match:
+        return None
+    case_number = case_match.group("num")
+    motion_match = MOTION_FIELD_RE.search(section)
+    motion = motion_match.group("motion").strip() if motion_match else ""
+    title, _title_cursor = _title_after_case(section, case_match.end())
+    if CASE_NUMBER_TAIL_RE.match(title):
+        title = ""
+    if not title:
+        title = _title_before_case(section, case_match.start())
+    ruling_matches = list(RULING_SECTION_RE.finditer(section))
+    if ruling_matches:
+        body = section[ruling_matches[-1].end():].strip()
+    elif motion_match:
+        body = section[motion_match.end():].strip()
+    else:
+        body = section[case_match.end():].strip()
+    if not motion:
+        motion = _motion_from_body(section[case_match.end():]) or _motion_from_body(body)
+    return _make_ruling(
+        index=index,
+        case_number=case_number,
+        case_title=title,
+        motion_type=motion,
+        body=body,
+        full_text=section,
+        start=absolute_start,
+        end=absolute_start + len(section),
+        offsets=offsets,
+        source_sha256=source_sha256,
+        source_url=source_url,
+        hearing_date=hearing_date,
+        dept=dept,
+        style="san-bernardino-formal",
+    )
+
+
 def _parse_formal_style(
     plain: str,
     offsets: list[int],
@@ -349,23 +541,44 @@ def _parse_formal_style(
     source_sha256: str,
     source_url: str,
 ) -> list[Ruling]:
+    anchors = _formal_case_anchors(plain)
+    if len(anchors) > 1:
+        rows: list[Ruling] = []
+        for i, anchor in enumerate(anchors):
+            start = anchor.start()
+            end = anchors[i + 1].start() if i + 1 < len(anchors) else len(plain)
+            row = _parse_formal_section(
+                section=plain[start:end],
+                absolute_start=start,
+                index=len(rows) + 1,
+                offsets=offsets,
+                hearing_date=hearing_date,
+                dept=dept,
+                source_sha256=source_sha256,
+                source_url=source_url,
+            )
+            if row:
+                rows.append(row)
+        if rows:
+            return rows
+
     header_case = HEADER_FOR_RE.search(plain)
     case_match = header_case or CASE_NUMBER_RE.search(plain)
     if not case_match:
         return []
     case_number = case_match.group("num")
 
-    motion_match = re.search(
-        r"(?is)^\s*Motion(?:\(s\))?\s*:\s*(?P<motion>.*?)(?=^\s*(?:Movant|Respondent|RELEVANT|PROCEDURAL|ANALYSIS|RULING)\b)",
-        plain,
-        re.MULTILINE,
-    )
+    motion_match = MOTION_FIELD_RE.search(plain)
     motion = motion_match.group("motion").strip() if motion_match else ""
 
     if header_case:
         title = _title_before_offset(plain, motion_match.start()) if motion_match else _title_before_case(plain, case_match.start())
     else:
-        title = _title_before_case(plain, case_match.start())
+        title, _title_cursor = _title_after_case(plain, case_match.end())
+        if CASE_NUMBER_TAIL_RE.match(title):
+            title = ""
+        if not title:
+            title = _title_before_case(plain, case_match.start())
 
     ruling_matches = list(RULING_SECTION_RE.finditer(plain))
     if ruling_matches:
@@ -375,6 +588,8 @@ def _parse_formal_style(
         body = plain[motion_match.end():].strip()
     else:
         body = plain[case_match.end():].strip()
+    if not motion:
+        motion = _motion_from_body(plain[case_match.end():]) or _motion_from_body(body)
 
     return [
         _make_ruling(
@@ -420,6 +635,9 @@ def parse(
         return []
     dept = _dept_from(plain[:1500], dept_hint, source_url)
 
+    table_rows = _parse_case_table_style(plain, offsets, hearing_date, dept, source_sha256, source_url)
+    if table_rows:
+        return table_rows
     list_rows = _parse_list_style(plain, offsets, hearing_date, dept, source_sha256, source_url)
     if list_rows:
         return list_rows

@@ -1,4 +1,7 @@
 from datetime import date
+from pathlib import Path
+
+import pytest
 
 from counties.riverside.scraper import parse
 
@@ -68,3 +71,15 @@ def test_parse_riverside_numbered_table():
     assert rows[0].outcome == "granted"
     assert rows[1].case_number == "CVRI2502372"
     assert rows[1].outcome == "appearance_required"
+
+
+def test_embedded_table_header_without_new_item_marker_splits_new_ruling():
+    source = Path("archive/riverside/cb/cb7944bae86be489c008a5616369ba91bb35bfcba35c9b3f7c2540e0d05c11b6.pdf")
+    if not source.exists():
+        pytest.skip("full Riverside archive source is not materialized")
+    rows = parse(source.read_bytes(), "x")
+    by_case = {r.case_number: r for r in rows}
+    assert "CVRI2504589" in by_case
+    assert "CVRI2502062" in by_case
+    assert by_case["CVRI2504589"].page_end < by_case["CVRI2502062"].page_end
+    assert by_case["CVRI2502062"].motion_type == "Demurrer to 1st Amended Complaint"

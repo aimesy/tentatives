@@ -32,7 +32,7 @@ def test_dept_word_to_number():
 
 def test_civil_uses_case_no_prefix():
     rs = parse_file(str(FIXTURE_DIR / "dept_3-2026-05-19.pdf"), "x")
-    assert all(r.case_number.startswith(("CL", "CU")) for r in rs)
+    assert all(r.case_number.startswith(("CL", "CU", "FCS")) for r in rs)
 
 
 def test_probate_uses_pregrant_order_anchor():
@@ -74,3 +74,19 @@ def test_ruling_ids_unique_and_stable():
     ids = [r.ruling_id for r in a]
     assert len(set(ids)) == len(ids)
     assert ids == [r.ruling_id for r in b]
+
+
+def test_legacy_fcs_case_number_archive_packet():
+    source = Path("archive/solano/98/98217e5b28892e55df32f368329a3b9225a6bd7b6757baa169892c0fd964ac73.pdf")
+    if not source.exists():
+        pytest.skip("full Solano archive source is not materialized")
+    rs = parse_file(
+        str(source),
+        "https://solano.courts.ca.gov/system/files/general/dept_7.pdf",
+        dept_hint="7",
+        division_hint="Civil / Probate",
+    )
+    assert len(rs) == 1
+    assert rs[0].hearing_date == date(2025, 5, 30)
+    assert rs[0].case_number == "FCS058890"
+    assert rs[0].case_title.startswith("JOHN BAEZ and LOREN HADASSAH")

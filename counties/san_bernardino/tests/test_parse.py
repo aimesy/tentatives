@@ -1,4 +1,7 @@
 from datetime import date
+from pathlib import Path
+
+import pytest
 
 from counties.san_bernardino.scraper import parse
 
@@ -89,3 +92,86 @@ def test_parse_san_bernardino_numbered_list():
     assert rows[0].outcome == "granted"
     assert rows[1].case_number == "CIVSB2513110"
     assert rows[1].motion_type.startswith("Defendant's Demurrer")
+
+
+def test_numbered_list_without_case_no_label_keeps_title_and_motion_separate():
+    source = Path("archive/san-bernardino/30/301c89b59908eb58e72b1d554e051c28618ec6a8f1122cad7b3505fb6bd4e761.pdf")
+    if not source.exists():
+        pytest.skip("full San Bernardino archive source is not materialized")
+    rows = parse(source.read_bytes(), "https://old.sb-court.org/DesktopModules/TentativeRulings/TentativeRulings/CVS17052626.pdf")
+    by_case = {row.case_number: row for row in rows}
+
+    assert "CIVSB2431410" in by_case
+    assert by_case["CIVSB2431410"].case_title == "Balouch, et al, v. Chowdhury, et al"
+    assert by_case["CIVSB2431410"].motion_type.startswith("Gomez Law")
+    assert "CIVSB2128630" in by_case
+
+
+def test_formal_packet_with_title_after_case_number():
+    source = Path("archive/san-bernardino/04/04d2cccaf97657ef095f9cace7ffba32619244725ea16df9e6bfb2ca67f06ffa.pdf")
+    if not source.exists():
+        pytest.skip("full San Bernardino archive source is not materialized")
+    rows = parse(source.read_bytes(), "https://old.sb-court.org/DesktopModules/TentativeRulings/TentativeRulings/CVS37060126.pdf")
+
+    assert len(rows) == 1
+    assert rows[0].case_number == "CIVSB2224020"
+    assert rows[0].case_title == "Ruiz vs. Tayrien"
+    assert rows[0].motion_type.startswith("Defendants Steven and Maria")
+
+
+def test_numbered_case_number_table_packet_splits_each_row():
+    source = Path("archive/san-bernardino/5b/5bd5f8e26f6eb8a8852cf863dc5c51bbbc058e6744f0ad24285d60bfebddae8f.pdf")
+    if not source.exists():
+        pytest.skip("full San Bernardino archive source is not materialized")
+    rows = parse(source.read_bytes(), "https://old.sb-court.org/DesktopModules/TentativeRulings/TentativeRulings/CVR17052926.pdf")
+    by_case = {row.case_number: row for row in rows}
+
+    assert {"CIVRS2508307", "CIVSB2510514", "CIVSB2503117"}.issubset(by_case)
+    assert by_case["CIVSB2510514"].case_title.startswith("Efren Angel Marquez")
+    assert by_case["CIVSB2503117"].motion_type.startswith("Defendant One Up")
+
+
+def test_formal_multi_packet_splits_repeated_case_blocks():
+    source = Path("archive/san-bernardino/16/1619535da3d277b0f8be74d005f45cb2c15585cc556d30bbcf66b22cf4649e43.pdf")
+    if not source.exists():
+        pytest.skip("full San Bernardino archive source is not materialized")
+    rows = parse(source.read_bytes(), "https://old.sb-court.org/DesktopModules/TentativeRulings/TentativeRulings/CVS14051526.pdf")
+    by_case = {row.case_number: row for row in rows}
+
+    assert {"CIVSB2426802", "CIVSB2508090"}.issubset(by_case)
+    assert by_case["CIVSB2426802"].case_title == "First Carrier v. IDX West et al"
+    assert by_case["CIVSB2508090"].case_title == "Conrad vs. GM"
+
+
+def test_formal_companion_caption_uses_caption_above_case_number_line():
+    source = Path("archive/san-bernardino/7e/7ebed36fb7bd867b7e150dbaa1232ba23152dfadc43d48415d7225ba9f25220b.pdf")
+    if not source.exists():
+        pytest.skip("full San Bernardino archive source is not materialized")
+    rows = parse(source.read_bytes(), "https://old.sb-court.org/DesktopModules/TentativeRulings/TentativeRulings/CVS29060226.pdf")
+
+    assert len(rows) == 1
+    assert rows[0].case_number == "CIVSB2303245"
+    assert rows[0].case_title.startswith("CALIFORNIA ARROYO FUND, INC., et al. v. CITY OF HESPERIA")
+    assert rows[0].motion_type == "Motions for Judgment on the Pleadings (x 4)"
+
+
+def test_formal_packet_accepts_spaced_case_number():
+    source = Path("archive/san-bernardino/31/31ee76b6a59460048611119361a32d222b7508fcb59cd1fe107e780ceec1f0a3.pdf")
+    if not source.exists():
+        pytest.skip("full San Bernardino archive source is not materialized")
+    rows = parse(source.read_bytes(), "https://old.sb-court.org/DesktopModules/TentativeRulings/TentativeRulings/CVS29042826.pdf")
+
+    assert len(rows) == 1
+    assert rows[0].case_number == "CIVSB2438559"
+    assert rows[0].motion_type.startswith("1. Demurrer")
+
+
+def test_formal_packet_accepts_llt_unlawful_detainer_case_number():
+    source = Path("archive/san-bernardino/88/881e5b209963dc1e0fbb8e4855b67df0e52ea83b45e38b4e797998afc581b7af.pdf")
+    if not source.exists():
+        pytest.skip("full San Bernardino archive source is not materialized")
+    rows = parse(source.read_bytes(), "https://old.sb-court.org/DesktopModules/TentativeRulings/TentativeRulings/CVS22052826.pdf")
+
+    assert len(rows) == 1
+    assert rows[0].case_number == "LLTSB2500117"
+    assert rows[0].case_title.startswith("E STREET INVESTMENTS")

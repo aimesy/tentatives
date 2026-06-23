@@ -267,6 +267,7 @@ function normalizeRow(row) {
     ...row,
     _search: searchTextForRow(row),
     _shortId: buildShortId(row),
+    _rowId: row.ruling_id || buildShortId(row),
   };
 }
 
@@ -416,6 +417,28 @@ function rulingPdfHref(r) {
   return `${ARCHIVE_BLOB_BASE}/${r.county}/rulings/${prefix}/${id}.pdf`;
 }
 
+function pageRangeLabel(row) {
+  const page = pageNumber(row?.page_start);
+  const pageEnd = pageNumber(row?.page_end);
+  if (!page) return "";
+  return pageEnd && pageEnd !== page ? `p.${page}-${pageEnd}` : `p.${page}`;
+}
+
+function rawSourceHref(row) {
+  const url = safeHttpUrl(row?.source_url);
+  if (!url) return null;
+  const page = pageNumber(row?.page_start);
+  if (page && /\.pdf$/i.test(url.pathname)) {
+    url.hash = `page=${page}`;
+  }
+  return url;
+}
+
+function rawSourceLabel(row) {
+  const range = pageRangeLabel(row);
+  return range ? `Raw ${range}` : "Source";
+}
+
 function render() {
   const total = state.filtered.length;
   const selectedLoadedCount = [...state.selectedCounties].filter((slug) => state.loadedCounties.has(slug)).length;
@@ -489,7 +512,7 @@ function emptyMessage(loadingSelected) {
 }
 
 function rowKey(row) {
-  return row?._shortId || row?.ruling_id || "";
+  return row?._rowId || row?.ruling_id || row?._shortId || "";
 }
 
 function displayCaseTitle(row) {
@@ -534,7 +557,7 @@ function renderRow(r, idx, pageIdx = idx) {
   const par = pageIdx % 2 ? "rec-odd" : "rec-even";
   tr.className = `rec-main ${par}`;
   tr.dataset.idx = String(idx);
-  tr.dataset.id  = r._shortId;
+  tr.dataset.id  = rowKey(r);
   if (rowKey(r) && rowKey(r) === state.selectedRowId) tr.classList.add("selected-row");
 
   const countyCell = appendCell(tr, COUNTY_LABEL[r.county] || r.county || "", "col-county");
@@ -586,25 +609,49 @@ function renderRow(r, idx, pageIdx = idx) {
   tr.appendChild(outcomeCell);
 
   const previewText = (r.outcome_text || r.body_text || r.full_text || "").trim();
-  const excerpt = appendCell(tr, previewText, "col-text");
-  if (previewText) excerpt.title = previewText.slice(0, 600);
+  const excerpt = appendCell(tr, "", "col-text");
+  if (previewText) {
+    const preview = document.createElement("div");
+    preview.className = "cell-clamp";
+    preview.textContent = previewText;
+    excerpt.title = previewText.slice(0, 600);
+    excerpt.appendChild(preview);
+  }
 
   // PDF cell.
   const pdfCell = document.createElement("td");
   pdfCell.className = "col-pdf";
   const pdfHref = rulingPdfHref(r);
-  if (pdfHref) {
+  const sourceHref = rawSourceHref(r);
+  if (pdfHref || sourceHref) {
+    const links = document.createElement("span");
+    links.className = "pdf-links";
+    const range = pageRangeLabel(r);
     const a = document.createElement("a");
-    a.href = pdfHref;
-    a.target = "_blank";
-    a.rel = "noopener";
-    a.className = "pdf-btn";
-    a.title = "Open archived PDF on github.com (inline viewer)";
-    const page = pageNumber(r.page_start);
-    const pageEnd = pageNumber(r.page_end);
-    const range = page && pageEnd && pageEnd !== page ? `p.${page}-${pageEnd}` : (page ? `p.${page}` : "");
-    a.textContent = range ? `PDF ${range}` : "PDF";
-    pdfCell.appendChild(a);
+    if (pdfHref) {
+      a.href = pdfHref;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.className = "pdf-btn";
+      a.title = range
+        ? `Open per-ruling archived slice; raw source range ${range}`
+        : "Open per-ruling archived slice";
+      a.textContent = "Slice";
+      links.appendChild(a);
+    }
+    if (sourceHref) {
+      const source = document.createElement("a");
+      source.href = sourceHref.href;
+      source.target = "_blank";
+      source.rel = "noopener";
+      source.className = "pdf-btn raw-source-btn";
+      source.title = range
+        ? `Open raw court PDF at ${range}`
+        : "Open raw court source";
+      source.textContent = rawSourceLabel(r);
+      links.appendChild(source);
+    }
+    pdfCell.appendChild(links);
   } else {
     pdfCell.textContent = "-";
   }
@@ -626,7 +673,7 @@ function renderRow(r, idx, pageIdx = idx) {
   const sub = document.createElement("tr");
   sub.className = `ruling-subrow ${par}`;
   sub.dataset.idx = String(idx);
-  sub.dataset.id = r._shortId;
+  sub.dataset.id = rowKey(r);
   if (rowKey(r) && rowKey(r) === state.selectedRowId) sub.classList.add("selected-row");
   const subCell = document.createElement("td");
   subCell.colSpan = 11;
@@ -798,10 +845,11 @@ function renderDossierDetail(row) {
   const detail = $("dossier-detail");
   if (!detail || !row) return;
   const pdfHref = rulingPdfHref(row);
-  const sourceUrl = safeHttpUrl(row.source_url);
+  const sourceUrl = rawSourceHref(row);
   const outcomeLabel = row.outcome || "Unknown";
   const outcomeText = row.outcome_text || "(empty)";
   const fullText = row.full_text || row.body_text || "(empty)";
+  const range = pageRangeLabel(row);
   const meta = [
     row.case_number,
     COUNTY_LABEL[row.county] || row.county,
@@ -824,13 +872,13 @@ function renderDossierDetail(row) {
     + `<button type="button" class="btn" data-dossier-open-modal>Open modal</button>`
     + `<button type="button" class="btn" data-dossier-share>Copy link</button>`
     + (row.case_number ? `<button type="button" class="btn" data-dossier-case-history>Case history</button>` : "")
-    + (pdfHref ? `<a class="btn" href="${esc(pdfHref)}" target="_blank" rel="noopener">PDF</a>` : "")
-    + (sourceUrl ? `<a class="btn" href="${esc(sourceUrl.href)}" target="_blank" rel="noopener">Source</a>` : "")
+    + (pdfHref ? `<a class="btn" href="${esc(pdfHref)}" target="_blank" rel="noopener">Slice PDF</a>` : "")
+    + (sourceUrl ? `<a class="btn" href="${esc(sourceUrl.href)}" target="_blank" rel="noopener">${esc(rawSourceLabel(row))}</a>` : "")
     + `</div></div>`
     + dossierSection("M", "Motion", `<div class="dossier-motion">${esc(row.motion_type || "")}</div>`)
     + dossierSection("1", "Disposition", `<div class="dossier-ruling">${esc(outcomeText)}</div>`)
     + dossierSection("T", "Full text", `<div class="dossier-ruling">${esc(fullText)}</div>`)
-    + `<div class="dossier-foot">source: parsed ruling row &middot; derived: outcome label</div>`;
+    + `<div class="dossier-foot">source: parsed ruling row${range ? `; raw source ${esc(range)}` : ""} &middot; derived: outcome label</div>`;
 
   detail.querySelector("[data-dossier-open-modal]")?.addEventListener("click", () => openModal(row));
   detail.querySelector("[data-dossier-share]")?.addEventListener("click", async (event) => {
@@ -844,10 +892,13 @@ function renderDossierDetail(row) {
 
 // ============================================================ MODAL
 
-function modalUrlFor(idOrRow) {
-  const id = typeof idOrRow === "string" ? idOrRow : idOrRow._shortId;
+function modalUrlFor(idOrRow, county = "") {
+  const isRow = typeof idOrRow === "object" && idOrRow !== null;
+  const id = isRow ? rowKey(idOrRow) : idOrRow;
+  const rowCounty = isRow ? idOrRow.county : county;
   const u = new URL(window.location.href);
   u.searchParams.set("r", id);
+  if (rowCounty) u.searchParams.set("counties", rowCounty);
   return u.toString();
 }
 
@@ -902,26 +953,29 @@ function openModal(rowOrIdx) {
   const pdfBtn = $("modal-pdf");
   if (pdfHref) {
     pdfBtn.href = pdfHref;
+    pdfBtn.textContent = "Slice PDF";
     pdfBtn.hidden = false;
   } else {
     pdfBtn.hidden = true;
   }
-  const sourceUrl = safeHttpUrl(r.source_url);
+  const sourceUrl = rawSourceHref(r);
   const sourceBtn = $("modal-source");
   if (sourceUrl) {
     sourceBtn.href = sourceUrl.href;
+    sourceBtn.textContent = rawSourceLabel(r);
     sourceBtn.hidden = false;
   } else {
     sourceBtn.hidden = true;
   }
 
-  $("modal-share").dataset.id = r._shortId;
+  $("modal-share").dataset.id = rowKey(r);
+  $("modal-share").dataset.county = r.county || "";
   $("overlay").classList.add("open");
   // Reflect open state in the URL so a refresh keeps the modal open.
   const u = new URL(window.location.href);
   if (state.viewMode === "dossier") u.searchParams.set("view", "dossier");
   if (state.selectedRowId) u.searchParams.set("sel", state.selectedRowId);
-  u.searchParams.set("r", r._shortId);
+  u.searchParams.set("r", rowKey(r));
   window.history.replaceState(null, "", u.pathname + (u.search || "") + u.hash);
 }
 
@@ -936,7 +990,9 @@ function closeModal() {
 
 function findRowById(id) {
   if (!id) return null;
-  for (const r of state.rows) if (r._shortId === id) return r;
+  for (const r of state.rows) {
+    if (rowKey(r) === id || r._shortId === id) return r;
+  }
   return null;
 }
 
@@ -1597,9 +1653,10 @@ function wire() {
     const share = e.target.closest("button[data-share]");
     if (share) {
       e.stopPropagation();
-      const tr = e.target.closest("tr[data-id]");
+      const tr = e.target.closest("tr[data-idx]");
       if (!tr) return;
-      const url = modalUrlFor(tr.dataset.id);
+      const row = state.filtered[Number(tr.dataset.idx)];
+      const url = modalUrlFor(row || tr.dataset.id);
       const ok = await copyText(url);
       if (ok) {
         share.classList.add("copied");
@@ -1660,9 +1717,10 @@ function wire() {
     }
   });
   $("modal-share").addEventListener("click", async () => {
-    const id = $("modal-share").dataset.id;
+    const shareBtn = $("modal-share");
+    const id = shareBtn.dataset.id;
     if (!id) return;
-    const url = modalUrlFor(id);
+    const url = modalUrlFor(id, shareBtn.dataset.county || "");
     const ok = await copyText(url);
     if (ok) flashCopied($("modal-share"), "Copy link");
     else window.alert(url);

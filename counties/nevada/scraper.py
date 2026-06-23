@@ -39,7 +39,7 @@ import re
 import zipfile
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 import xml.etree.ElementTree as ET
 
 import pypdf
@@ -127,6 +127,14 @@ DOCX_RULING_HEADER_RE = re.compile(
 # Long date "April 27, 2026" or short "4/27/2026" or "05/07/2026".
 LONG_DATE_RE = re.compile(r"\b([A-Z][a-z]+)\s+(\d{1,2}),\s+(\d{4})\b")
 SHORT_DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b")
+URL_DATE_RE = re.compile(
+    r"(?<!\d)(?P<m>\d{1,2})[-_](?P<d>\d{1,2})[-_](?P<y>\d{2,4})(?!\d)"
+)
+SINGLE_CASE_RULING_RE = re.compile(
+    rf"(?P<title>[^\n]+?)\s+Case\s+No\.?\s+(?P<num>{_CASE_NUMBER_INNER})\s+"
+    r"Tentative\s+Ruling\b",
+    re.IGNORECASE,
+)
 
 # Department from header or body ("Dept. A", "Department 3", "in Dept. A").
 INLINE_DEPT_RE = re.compile(r"\b(?:Dept\.|Department)\s+(\d+|[A-Z])\b", re.IGNORECASE)
@@ -170,6 +178,20 @@ def _parse_date(text: str) -> date | None:
         except ValueError:
             pass
     return None
+
+
+def _parse_url_date(source_url: str) -> date | None:
+    filename = unquote(urlparse(source_url).path.rsplit("/", 1)[-1])
+    m = URL_DATE_RE.search(filename)
+    if not m:
+        return None
+    year = int(m.group("y"))
+    if year < 100:
+        year += 2000
+    try:
+        return date(year, int(m.group("m")), int(m.group("d")))
+    except ValueError:
+        return None
 
 
 def _detect_division(header_text: str, hint: str | None) -> str | None:
@@ -227,15 +249,16 @@ class _DocMeta:
 
 
 def _extract_doc_meta(
-    page1_text: str, dept_hint: str | None, division_hint: str | None
+    page1_text: str, dept_hint: str | None, division_hint: str | None, source_url: str
 ) -> _DocMeta:
     head = "\n".join(page1_text.splitlines()[:10])
+    header_and_url = f"{head}\n{source_url}"
     return _DocMeta(
-        hearing_date=_parse_date(head),
-        division=_detect_division(head, division_hint),
+        hearing_date=_parse_date(head) or _parse_url_date(source_url),
+        division=_detect_division(header_and_url, division_hint),
         dept=_detect_dept(head, dept_hint),
-        style=_detect_style(head),
-        location=_detect_location(head),
+        style=_detect_style(header_and_url),
+        location=_detect_location(header_and_url),
     )
 
 
@@ -400,6 +423,63 @@ def _parse_docx(
     return rulings
 
 
+def _parse_single_case_packet(
+    plain: str,
+    meta: _DocMeta,
+    page_for_offset,
+    source_url: str,
+    source_sha256: str,
+) -> list[Ruling]:
+    match = SINGLE_CASE_RULING_RE.search(plain)
+    if not match:
+        return []
+
+    marker = re.search(r"Tentative\s+Ruling\b", plain[match.start():], re.IGNORECASE)
+    if not marker:
+        return []
+    disposition_start = match.start() + marker.end()
+    disposition_text = plain[disposition_start:].strip()
+    if not disposition_text:
+        return []
+
+    title = " ".join(match.group("title").split()).strip(" ;,")
+    case_number = match.group("num")
+    outcome, conditional, continued_to = _classify(disposition_text)
+    page_start = page_for_offset(match.start())
+    content_end = disposition_start + len(plain[disposition_start:].rstrip())
+    page_end = max(page_start, page_for_offset(max(match.start(), content_end - 1)))
+    ruling_id = hashlib.sha256(
+        f"{source_sha256}:1:{case_number}".encode("utf-8")
+    ).hexdigest()[:32]
+
+    return [
+        Ruling(
+            ruling_id=ruling_id,
+            county=COUNTY_SLUG,
+            division=meta.division,
+            dept=meta.dept,
+            hearing_date=meta.hearing_date,
+            ruling_index=1,
+            case_number=case_number,
+            case_title=title,
+            motion_type=meta.location or "",
+            outcome=outcome,
+            outcome_text=disposition_text,
+            conditional=conditional,
+            continued_to=continued_to,
+            body_text="",
+            full_text=plain[match.start():].strip(),
+            page_start=page_start,
+            page_end=page_end,
+            source_sha256=source_sha256,
+            source_url=source_url,
+            style=f"{meta.style}-single",
+            parser_version=PARSER_VERSION,
+            ingest_ts=datetime.now(UTC),
+        )
+    ]
+
+
 def parse(
     pdf_bytes: bytes,
     source_url: str,
@@ -425,7 +505,7 @@ def parse(
     if not raw_pages:
         return []
 
-    meta = _extract_doc_meta(raw_pages[0], dept_hint, division_hint)
+    meta = _extract_doc_meta(raw_pages[0], dept_hint, division_hint, source_url)
     if meta.hearing_date is None:
         return []
 
@@ -451,7 +531,13 @@ def parse(
 
     headers = list(RULING_HEADER_RE.finditer(plain))
     if not headers:
-        return []
+        return _parse_single_case_packet(
+            plain,
+            meta=meta,
+            page_for_offset=page_for_offset,
+            source_url=source_url,
+            source_sha256=source_sha256,
+        )
 
     rulings: list[Ruling] = []
     for i, hm in enumerate(headers):

@@ -51,3 +51,18 @@ def test_ruling_ids_unique_and_stable():
     ids = [r.ruling_id for r in a]
     assert len(set(ids)) == len(ids)
     assert ids == [r.ruling_id for r in b]
+
+
+def test_ruling_ids_unique_when_same_case_header_repeats():
+    source = Path("archive/placer/d5/d5aff08d5a734ce84f6daa85679d3e388555202eadc0c4f3e589326b08efe10c.pdf")
+    if not source.exists():
+        pytest.skip("full Placer archive source is not materialized")
+    rs = parse_file(str(source), "x")
+    ids = [r.ruling_id for r in rs]
+    assert len(set(ids)) == len(ids)
+    matching = [r for r in rs if r.case_number == "S-CV-0050336"]
+    assert len(matching) == 2
+    assert {r.motion_type for r in matching} == {
+        "Defendant’s Motion for Attorney’s Fees After Appeal",
+        "Ruling on Request for Judicial Notice",
+    }

@@ -74,13 +74,17 @@ HEARING_DATE_RE = re.compile(
     re.IGNORECASE,
 )
 CONTINUED_ROW_RE = re.compile(
-    r"(?ms)^\s*(?P<num>\d{2}[A-Z]{3,5}\d{5})\s+"
-    r"(?P<title>.+?)\s+is\s+continued\s+to\s+"
-    r"(?P<body>.+?)(?=^\s*\d{2}[A-Z]{3,5}\d{5}\s+|^\s*_{5,}|\Z)"
+    r"(?im)^\s*(?P<num>\d{2}[A-Z]{3,5}\d{5})\s+"
+    r"(?P<title>[^\n]*?)\s+is\s+continued\s+to\s+"
+    r"(?P<body>[^\n]+)"
 )
 PAGE_NUMBER_RE = re.compile(r"^\s*\d{1,3}\s*$")
 SIGNATURE_RE = re.compile(
     r"\n\s*Tentative\s+Ruling\s*\n\s*Issued\s+By:.*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+MOTION_BOILERPLATE_RE = re.compile(
+    r"\s*If\s+oral\s+argument\s+is\s+timely\s+requested\b.*",
     re.IGNORECASE | re.DOTALL,
 )
 CONTINUED_TO_RE = re.compile(
@@ -204,6 +208,10 @@ def _ruling_id(source_sha256: str, index: int, case_number: str) -> str:
     return hashlib.sha256(f"{source_sha256}:{index}:{case_number}".encode("utf-8")).hexdigest()[:32]
 
 
+def _clean_motion_type(text: str) -> str:
+    return " ".join(MOTION_BOILERPLATE_RE.sub("", text).split())
+
+
 def _make_ruling(
     *,
     index: int,
@@ -233,7 +241,7 @@ def _make_ruling(
         ruling_index=index,
         case_number=case_number,
         case_title=" ".join(case_title.split()),
-        motion_type=" ".join(motion_type.split()),
+        motion_type=_clean_motion_type(motion_type),
         outcome=outcome,
         outcome_text=body.strip(),
         conditional=conditional,

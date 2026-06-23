@@ -405,7 +405,7 @@ def parse(
         page_end = max(page_start, page_for_offset(max(start, content_end - 1)))
 
         ruling_id = hashlib.sha256(
-            f"{source_sha256}:{idx}:{case_number}".encode("utf-8")
+            f"{source_sha256}:{i}:{idx}:{case_number}".encode("utf-8")
         ).hexdigest()[:32]
 
         rulings.append(

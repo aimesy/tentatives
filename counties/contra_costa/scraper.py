@@ -70,6 +70,10 @@ NON_RULING_NAME_RE = re.compile(
     re.I,
 )
 DEPT_HINT_RE = re.compile(r"(?:^|/)Department\s+(\d{1,3})\b|/(\d{1,3})_\d{6}\.pdf$", re.I)
+SOURCE_FILENAME_META_RE = re.compile(
+    r"(?:^|/)(?P<dept>\d{1,3})_(?P<mm>\d{2})(?P<dd>\d{2})(?P<yy>\d{2})(?:[^/]*)\.pdf$",
+    re.I,
+)
 
 
 def _canonical_url(raw_url: str, page_url: str | None) -> str:
@@ -220,7 +224,7 @@ TENTATIVE_RULING_ANCHOR_RE = re.compile(
 
 # Case-number line: ruling block always contains "CASE NUMBER: <num>".
 CASE_NUMBER_LINE_RE = re.compile(
-    r"^\s*(?P<idx>\d{1,3}\.)?\s*"
+    r"^\s*(?:(?P<idx>\d{1,3})(?:\.\s*|\s+))?"
     r"(?P<time>\d{1,2}:\d{2}\s*[AP]M)?\s*"
     r"CASE\s+NUMBER:\s+(?P<case_number>[A-Z]{1,4}\d{2,4}-?\d{2,8})\s*$",
     re.MULTILINE | re.IGNORECASE,
@@ -338,6 +342,28 @@ class _DocMeta:
     judge: str | None
 
 
+def _extract_source_url_meta(source_url: str, dept_hint: str | None) -> _DocMeta:
+    """Extract dept/date from CCC ruling filenames such as ``57_042426 f.pdf``."""
+    if not source_url or not _is_ruling_pdf(source_url):
+        return _DocMeta(None, dept_hint, None)
+    path = unquote(urlsplit(source_url).path)
+    filename_m = SOURCE_FILENAME_META_RE.search(path)
+    dept = dept_hint or _dept_hint(source_url)
+    hearing_date = None
+    if filename_m:
+        if dept is None:
+            dept = str(int(filename_m.group("dept")))
+        try:
+            hearing_date = date(
+                2000 + int(filename_m.group("yy")),
+                int(filename_m.group("mm")),
+                int(filename_m.group("dd")),
+            )
+        except ValueError:
+            pass
+    return _DocMeta(hearing_date, dept, None)
+
+
 def _extract_doc_meta(page1_text: str, dept_hint: str | None) -> _DocMeta:
     head = "\n".join(page1_text.splitlines()[:10])
     if not HEADER_FIRST_RE.search(head):
@@ -394,6 +420,7 @@ def parse(
     source_url: str,
     source_sha256: str | None = None,
     dept_hint: str | None = None,
+    division_hint: str | None = None,
 ) -> list[Ruling]:
     """Extract all rulings from one CCC tentative-rulings PDF."""
     if source_sha256 is None:
@@ -403,7 +430,13 @@ def parse(
     if not raw_pages:
         return []
 
-    meta = _extract_doc_meta(raw_pages[0], dept_hint)
+    source_meta = _extract_source_url_meta(source_url, dept_hint)
+    meta = _extract_doc_meta(raw_pages[0], dept_hint or source_meta.dept)
+    meta = _DocMeta(
+        hearing_date=meta.hearing_date or source_meta.hearing_date,
+        dept=meta.dept or source_meta.dept,
+        judge=meta.judge or source_meta.judge,
+    )
     if meta.hearing_date is None or meta.dept is None:
         return []
 
@@ -433,7 +466,7 @@ def parse(
         return []
 
     rulings: list[Ruling] = []
-    current_section: str | None = None
+    current_section: str | None = division_hint
     for i, anchor in enumerate(anchors):
         # Region for this ruling's header: from previous anchor's end (or doc start) to anchor's start.
         region_start = anchors[i - 1].end() if i > 0 else 0
@@ -442,7 +475,7 @@ def parse(
 
         # Pick up any section header in this region (most recent wins for current).
         for sm in SECTION_HEADER_RE.finditer(region):
-            current_section = sm.group("section").strip()
+            current_section = " ".join(sm.group("section").split())
 
         case_match = None
         # Use the LAST CASE NUMBER match in the region (closest to the anchor).
@@ -453,7 +486,7 @@ def parse(
 
         case_number = case_match.group("case_number")
         idx_raw = case_match.group("idx")
-        ruling_index = int(idx_raw.rstrip(".")) if idx_raw else 0
+        ruling_index = int(idx_raw) if idx_raw else 0
 
         # Within the same region, after the CASE NUMBER line, look for CASE NAME / HEARING / FILED BY.
         post_case = region[case_match.end():]
@@ -463,6 +496,16 @@ def parse(
 
         case_title = title_m.group("title").strip() if title_m else ""
         motion_type = _motion_from_hearing(hearing_m)
+        if not motion_type:
+            for raw_line in post_case.splitlines():
+                line = raw_line.strip().strip("*").strip()
+                if not line:
+                    continue
+                if CASE_NAME_RE.match(line) or FILED_BY_RE.match(line):
+                    continue
+                if re.search(r"\b(?:HEARING|MOTION|PETITION|JUDGMENT|CASE\s+MANAGEMENT)\b", line, re.IGNORECASE):
+                    motion_type = line
+                    break
         filed_by = filed_m.group("party").strip() if filed_m else ""
 
         # Disposition runs from after this anchor's line-end to the next anchor's CASE NUMBER line.
@@ -498,7 +541,7 @@ def parse(
             Ruling(
                 ruling_id=ruling_id,
                 county=COUNTY_SLUG,
-                division=current_section,  # e.g. "Law & Motion", "Probate"
+                division=current_section or "Civil",
                 dept=meta.dept,
                 hearing_date=meta.hearing_date,
                 ruling_index=ruling_index if ruling_index > 0 else i + 1,

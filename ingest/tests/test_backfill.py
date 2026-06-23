@@ -1,4 +1,5 @@
 import argparse
+import base64
 import hashlib
 import io
 import json
@@ -6,7 +7,7 @@ import zipfile
 
 import pytest
 
-from counties.common import PdfRef, extract_links
+from counties.common import PageRef, PdfRef, extract_links
 from ingest import backfill
 from ingest.backfill import (
     MAX_PDF_BYTES,
@@ -23,6 +24,7 @@ from ingest.backfill import (
     _wayback_needs_live_refs,
     _wayback_timestamp,
     fetch_ref,
+    fetch_page_ref,
 )
 
 
@@ -94,6 +96,8 @@ class _FakeResponse:
         text="",
     ):
         self._chunks = chunks or []
+        self.content = b"".join(self._chunks)
+        self.encoding = "utf-8"
         self.headers = headers or {}
         self.status_code = status_code
         self._payload = payload
@@ -117,12 +121,23 @@ class _FakeSession:
     def __init__(self, responses):
         self.responses = list(responses)
         self.urls = []
+        self.posts = []
 
     def get(self, url, **kwargs):
         self.urls.append(url)
         if not self.responses:
             raise AssertionError(f"unexpected GET {url}")
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        response.url = url
+        return response
+
+    def post(self, url, **kwargs):
+        self.posts.append((url, kwargs))
+        if not self.responses:
+            raise AssertionError(f"unexpected POST {url}")
+        response = self.responses.pop(0)
+        response.url = url
+        return response
 
 
 def _minimal_docx_bytes() -> bytes:
@@ -359,6 +374,23 @@ def test_fetch_ref_accepts_docx_source():
     assert sha == hashlib.sha256(content).hexdigest()
 
 
+def test_fetch_ref_accepts_base64_pdf_json_source():
+    content = b"%PDF-1.4\nok\n"
+    payload = json.dumps({"data": {"contents": base64.b64encode(content).decode("ascii")}}).encode("utf-8")
+    ref = PdfRef(url="https://api.example.test/doc/123", filename="ruling.pdf")
+    session = _FakeSession([
+        _FakeResponse(
+            [payload],
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+    ])
+
+    fetched, sha = fetch_ref(ref, session, allowed_hosts={"api.example.test"})
+
+    assert fetched == content
+    assert sha == hashlib.sha256(content).hexdigest()
+
+
 def test_fetch_ref_rejects_invalid_docx_source():
     ref = PdfRef(url="https://example.test/ruling.docx", filename="ruling.docx")
     session = _FakeSession([
@@ -370,6 +402,44 @@ def test_fetch_ref_rejects_invalid_docx_source():
 
     with pytest.raises(ValueError, match="not a DOCX"):
         fetch_ref(ref, session, allowed_hosts={"example.test"})
+
+
+def test_fetch_page_ref_accepts_html_page():
+    content = b"<!DOCTYPE html><html><body>Tentative ruling</body></html>"
+    ref = PageRef(url="https://example.test/rulings", title="Rulings")
+    session = _FakeSession([
+        _FakeResponse(
+            [content],
+            headers={"Content-Type": "text/html; charset=utf-8"},
+        )
+    ])
+
+    fetched, sha = fetch_page_ref(ref, session, allowed_hosts={"example.test"})
+
+    assert "Tentative ruling" in fetched
+    assert sha == hashlib.sha256(fetched.encode("utf-8")).hexdigest()
+
+
+def test_fetch_page_ref_posts_logical_source_url():
+    content = b"<!DOCTYPE html><html><body>Result</body></html>"
+    ref = PageRef(
+        url="https://example.test/form",
+        source_url="https://example.test/form?selection=dept",
+        title="Dept result",
+        method="POST",
+        data={"dept": "1"},
+    )
+    session = _FakeSession([
+        _FakeResponse(
+            [content],
+            headers={"Content-Type": "text/html"},
+            text=content.decode("utf-8"),
+        )
+    ])
+
+    fetched, _sha = fetch_page_ref(ref, session, allowed_hosts={"example.test"})
+
+    assert fetched.endswith("</html>")
 
 
 def test_fetch_ref_rejects_wayback_redirect_to_non_allowlisted_host():
@@ -438,9 +508,10 @@ def test_existing_capture_keys_materializes_sparse_capture_log(tmp_path, monkeyp
         "wayback_ts": None,
     }
 
-    def fake_check_output(cmd, cwd=None):
+    def fake_check_output(cmd, cwd=None, stderr=None):
         assert cmd == ["git", "show", "HEAD:archive/fake/captures.ndjson"]
         assert cwd == tmp_path
+        assert stderr is backfill.subprocess.DEVNULL
         return (json.dumps(row) + "\n").encode("utf-8")
 
     monkeypatch.setattr(backfill, "REPO", tmp_path)

@@ -73,3 +73,40 @@ def test_parse_fresno_formal_and_cover_continued_rows():
     assert rows[1].dept == "403"
     assert rows[1].outcome == "granted"
     assert rows[1].motion_type.startswith("by Insource")
+
+
+def test_cover_continuance_does_not_cross_from_no_tentative_case():
+    pdf = _pdf([[
+        "Tentative Rulings for June 3, 2026",
+        "Department 502",
+        "There are no tentative rulings for the following matters.",
+        "24CECG03435 Example Plaintiff v. Example Defendant",
+        "25CECG03846 Another Plaintiff v. Another Defendant is continued to Friday, July 10, 2026 at 3:30 p.m. in Department 502",
+        "________________________________________________________________",
+    ]])
+
+    rows = parse(pdf, "https://www.fresno.courts.ca.gov/system/files/tentative-rulings/06-03-26-dept-502.pdf")
+
+    assert [r.case_number for r in rows] == ["25CECG03846"]
+    assert rows[0].outcome == "continued"
+    assert rows[0].continued_to == date(2026, 7, 10)
+
+
+def test_motion_type_strips_oral_argument_boilerplate():
+    pdf = _pdf([[
+        "Tentative Rulings for June 4, 2026",
+        "Department 403",
+        "Tentative Ruling",
+        "Re: Sample Plaintiff v. Sample Defendant",
+        "Superior Court Case No. 24CECG05010",
+        "Hearing Date: June 4, 2026 (Dept. 403)",
+        "Motion: by Defendant for Summary Judgment",
+        "If oral argument is timely requested, appearances are required.",
+        "Tentative Ruling:",
+        "To deny the motion.",
+    ]])
+
+    rows = parse(pdf, "https://www.fresno.courts.ca.gov/system/files/tentative-rulings/06-04-26-dept-403.pdf")
+
+    assert len(rows) == 1
+    assert rows[0].motion_type == "by Defendant for Summary Judgment"

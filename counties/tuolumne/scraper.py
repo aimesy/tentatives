@@ -78,9 +78,16 @@ TIMESTAMP_RE = re.compile(
     r"^\s*\d{1,2}/\d{1,2}/\d{4}\s+\d{1,2}:\d{2}\s*[ap]\.?m\.?\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
-TRACKING_RE = re.compile(r"\b(?:File\s+Tracking|High\s+Density|Complaint|Petition)\b", re.IGNORECASE)
+TRACKING_RE = re.compile(
+    r"\b(?:File\s+Tracking|High\s+Density|Complaint\s+File\s+Tracking|Petition\s+File\s+Tracking)\b",
+    re.IGNORECASE,
+)
 EVENT_RE = re.compile(
     r"\b(?:Motion|Petition|Case\s+Management|Conference|Review|Hearing|Trial|OSC|Order|FURTHER)\b",
+    re.IGNORECASE,
+)
+NARRATIVE_START_RE = re.compile(
+    r"^(?:This|The|Before|Pursuant|Plaintiff|Defendant|Petitioner|Respondent|If)\b",
     re.IGNORECASE,
 )
 CONTINUED_TO_RE = re.compile(
@@ -172,8 +179,31 @@ def _split_page(page_text: str, case_match: re.Match[str]) -> tuple[str, str, st
     timestamp_match = None
     for tm in TIMESTAMP_RE.finditer(after_case_line):
         timestamp_match = tm
-    header_tail = after_case_line[: timestamp_match.start()] if timestamp_match else after_case_line
-    body = after_case_line[timestamp_match.end():].strip() if timestamp_match else ""
+    if timestamp_match:
+        header_tail = after_case_line[: timestamp_match.start()]
+        body = after_case_line[timestamp_match.end():].strip()
+    else:
+        lines = after_case_line.splitlines()
+        split_idx = None
+        body_start_idx = None
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped and NARRATIVE_START_RE.match(stripped):
+                split_idx = idx
+                body_start_idx = idx
+                break
+            if not stripped:
+                first_body = next((later.strip() for later in lines[idx + 1:] if later.strip()), "")
+                if NARRATIVE_START_RE.match(first_body):
+                    split_idx = idx
+                    body_start_idx = idx + 1
+                    break
+        if split_idx is None:
+            header_tail = after_case_line
+            body = ""
+        else:
+            header_tail = "\n".join(lines[:split_idx])
+            body = "\n".join(lines[body_start_idx if body_start_idx is not None else split_idx + 1:]).strip()
 
     title_lines = [case_match.group("title").strip()]
     motion_lines: list[str] = []
@@ -192,6 +222,8 @@ def _split_page(page_text: str, case_match: re.Match[str]) -> tuple[str, str, st
             continue
         title_done = True
         if EVENT_RE.search(s):
+            motion_lines.append(s)
+        elif motion_lines and not NARRATIVE_START_RE.match(s):
             motion_lines.append(s)
 
     return " ".join(title_lines), " / ".join(motion_lines), body

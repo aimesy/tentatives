@@ -74,15 +74,33 @@ def discover_live(html: str, page_url: str | None = None, base_url: str = BASE) 
 
 
 CASE_NUMBER_LINE_RE = re.compile(
-    r"^\s*(?P<num>\d{2}[A-Z]{2,4}\d{4,6})\b(?:[ \t]+(?P<rest>.*?))?\s*$",
+    r"^\s*(?:Case\s+No\.?\s*)?(?P<num>\d{2}[A-Z]{2,4}\d{4,6}|[A-Z]{1,4}\d{4,6})\b(?:[ \t]+(?P<rest>.*?))?\s*$",
     re.MULTILINE,
+)
+LEGACY_TIME_CASE_RE = re.compile(
+    r"^\s*(?P<time>\d{1,2}:\d{2}(?:\s*[AP]\.?\s*M\.?)?)\s+"
+    r"(?P<num>\d{2}[A-Z]{2,4}\d{4,6}|[A-Z]{1,4}\d{4,6})\s+"
+    r"(?P<motion>.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+LEGACY_TENTATIVE_RE = re.compile(r"\bTENTATIVE\s+RULING:?", re.IGNORECASE)
+LEGACY_PARTY_RE = re.compile(
+    r"(?P<label>Ptff/Pet|Def/Res):\s*(?P<name>.*?)(?:\s+Atty:|$)",
+    re.IGNORECASE,
 )
 LONG_DATE_RE = re.compile(
     r"\b(?P<month>[A-Z][a-z]+)\s+(?P<day>\d{1,2}),\s+(?P<year>\d{4})\b",
     re.IGNORECASE,
 )
 URL_DASH_DATE_RE = re.compile(r"(?<!\d)(?P<m>\d{1,2})[-_](?P<d>\d{1,2})[-_](?P<y>\d{2,4})(?!\d)")
+URL_SINGLE_DIGIT_MDY_RE = re.compile(r"(?<!\d)(?P<m>[1-9])(?P<d>[1-9])(?P<y>20\d{2})(?!\d)")
 URL_COMPACT_DATE_RE = re.compile(r"(?<!\d)(?P<m>\d{2})(?P<d>\d{2})(?P<y>20\d{2})(?!\d)")
+URL_SHORT_COMPACT_DATE_RE = re.compile(r"(?<!\d)(?P<m>\d{1,2})(?P<d>\d{2})(?P<y>\d{2})(?!\d)")
+URL_MONTH_NAME_DATE_RE = re.compile(
+    r"(?P<month>january|february|march|april|may|june|july|august|september|october|november|december)"
+    r"[-_](?P<d>\d{1,2})[-_](?P<y>\d{2,4})",
+    re.IGNORECASE,
+)
 SECTION_RE = re.compile(
     r"^\s*(?:\d{1,2}:\d{2}\s*[AP]\.?\s*M\.?\s*)?"
     r"(?P<section>(?:Civil|Family\s+Law)\s+Case\s+Management|Civil\s+Law\s+and\s+Motion)\s*$",
@@ -138,7 +156,28 @@ def _parse_long_date(text: str) -> date | None:
 
 
 def _parse_url_date(source_url: str) -> date | None:
-    for pattern in (URL_DASH_DATE_RE, URL_COMPACT_DATE_RE):
+    month_name = URL_MONTH_NAME_DATE_RE.search(source_url)
+    if month_name:
+        month = _MONTHS.get(month_name.group("month").upper())
+        year = int(month_name.group("y"))
+        if year < 100:
+            year += 2000
+        if month:
+            try:
+                return date(year, month, int(month_name.group("d")))
+            except ValueError:
+                pass
+    single_digit = URL_SINGLE_DIGIT_MDY_RE.search(source_url)
+    if single_digit:
+        try:
+            return date(
+                int(single_digit.group("y")),
+                int(single_digit.group("m")),
+                int(single_digit.group("d")),
+            )
+        except ValueError:
+            pass
+    for pattern in (URL_DASH_DATE_RE, URL_COMPACT_DATE_RE, URL_SHORT_COMPACT_DATE_RE):
         m = pattern.search(source_url)
         if not m:
             continue
@@ -233,6 +272,12 @@ def _is_title_line(line: str) -> bool:
     letters = [c for c in s if c.isalpha()]
     if not letters:
         return False
+    if re.search(
+        r"^(?:In\s+(?:The\s+)?Matter\s+of|In\s+re|Estate\s+of|Conservatorship\s+of|Guardianship\s+of)\b",
+        s,
+        re.IGNORECASE,
+    ):
+        return True
     upper = sum(1 for c in letters if c.isupper())
     if upper / len(letters) >= 0.70:
         return True
@@ -279,7 +324,7 @@ def _split_block(anchor: re.Match[str], block: str, plain: str) -> tuple[str, st
         case_title = _title_above(plain, anchor.start())
         lines = [line.strip() for line in block.splitlines()]
         idx = 0
-        motion_lines: list[str] = []
+        leading_title_lines: list[str] = []
         while idx < len(lines):
             s = lines[idx]
             if not s:
@@ -287,9 +332,13 @@ def _split_block(anchor: re.Match[str], block: str, plain: str) -> tuple[str, st
                 continue
             if not _is_title_line(s):
                 break
-            motion_lines.append(s)
+            leading_title_lines.append(s)
             idx += 1
-        motion_type = " ".join(motion_lines)
+        if case_title:
+            motion_type = " ".join(leading_title_lines)
+        else:
+            case_title = " ".join(leading_title_lines)
+            motion_type = "Case Management Conference" if case_title else ""
         body_lines = [line for line in lines[idx:] if line]
         return case_title, motion_type, "\n".join(body_lines).strip(), "calaveras-lawmotion"
 
@@ -313,6 +362,105 @@ def _ruling_id(source_sha256: str, index: int, case_number: str) -> str:
     return hashlib.sha256(f"{source_sha256}:{index}:{case_number}".encode("utf-8")).hexdigest()[:32]
 
 
+def _legacy_party_title(block: str) -> str:
+    parties: dict[str, str] = {}
+    for match in LEGACY_PARTY_RE.finditer(block):
+        label = match.group("label").lower()
+        name = " ".join(match.group("name").replace(";", ",").split()).strip(" ,")
+        if name:
+            parties[label] = name
+    plaintiff = parties.get("ptff/pet")
+    defendant = parties.get("def/res")
+    if plaintiff and defendant:
+        return f"{plaintiff} v. {defendant}"
+    return plaintiff or defendant or ""
+
+
+def _legacy_motion_text(match: re.Match[str], block: str) -> str:
+    lines = [" ".join(match.group("motion").split())]
+    after_first_line = block.splitlines()[1:]
+    for line in after_first_line:
+        s = line.strip()
+        if not s:
+            continue
+        if re.match(r"^\d{1,2}/\d{1,2}/\d{4}\b", s):
+            break
+        if re.match(r"^(?:Ptff/Pet|Def/Res):", s, re.IGNORECASE):
+            break
+        if LEGACY_TENTATIVE_RE.search(s):
+            break
+        lines.append(s)
+    return " ".join(" ".join(lines).split())
+
+
+def _detect_legacy_division(header_text: str, hint: str | None) -> str:
+    upper = header_text.upper()
+    if "PROBATE" in upper:
+        return "Probate Law and Motion"
+    return hint or "Civil Law and Motion"
+
+
+def _parse_legacy_time_rows(
+    plain: str,
+    offsets: list[int],
+    hearing_date: date,
+    source_sha256: str,
+    source_url: str,
+    dept_hint: str | None,
+    division_hint: str | None,
+) -> list[Ruling]:
+    matches = list(LEGACY_TIME_CASE_RE.finditer(plain))
+    if not matches:
+        return []
+
+    rulings: list[Ruling] = []
+    for i, match in enumerate(matches):
+        block_end = matches[i + 1].start() if i + 1 < len(matches) else len(plain)
+        block = plain[match.start():block_end]
+        tentative = LEGACY_TENTATIVE_RE.search(block)
+        if not tentative:
+            continue
+        body = block[tentative.end():].strip()
+        if not body:
+            continue
+        case_number = match.group("num").upper()
+        motion_type = _legacy_motion_text(match, block)
+        case_title = _legacy_party_title(block)
+        outcome, conditional, continued_to = _classify(body)
+        page_start = _page_for_offset(offsets, match.start())
+        page_end = max(page_start, _page_for_offset(offsets, max(match.start(), block_end - 1)))
+        division = _detect_legacy_division(plain[:match.start()], division_hint)
+
+        rulings.append(
+            Ruling(
+                ruling_id=_ruling_id(source_sha256, len(rulings) + 1, case_number),
+                county=COUNTY_SLUG,
+                division=division,
+                dept=dept_hint,
+                hearing_date=hearing_date,
+                ruling_index=len(rulings) + 1,
+                case_number=case_number,
+                case_title=case_title,
+                motion_type=motion_type,
+                outcome=outcome,
+                outcome_text=body,
+                conditional=conditional,
+                continued_to=continued_to,
+                body_text="",
+                full_text=block.strip(),
+                page_start=page_start,
+                page_end=page_end,
+                source_sha256=source_sha256,
+                source_url=source_url,
+                style="calaveras-legacy-time-row",
+                parser_version=PARSER_VERSION,
+                ingest_ts=datetime.now(UTC),
+            )
+        )
+
+    return rulings
+
+
 def parse(
     pdf_bytes: bytes,
     source_url: str,
@@ -332,13 +480,24 @@ def parse(
 
     pages = _strip_pages(raw_pages)
     plain, offsets = _join_pages(pages)
-    hearing_date = _parse_long_date(plain[:1000]) or _parse_url_date(source_url)
+    hearing_date = _parse_url_date(source_url) or _parse_long_date(plain[:1000])
     if hearing_date is None:
         return []
 
-    anchors = list(CASE_NUMBER_LINE_RE.finditer(plain))
+    anchors = [
+        anchor for anchor in CASE_NUMBER_LINE_RE.finditer(plain)
+        if (anchor.group("rest") or "").strip().lower() not in {"and", "&"}
+    ]
     if not anchors:
-        return []
+        return _parse_legacy_time_rows(
+            plain,
+            offsets,
+            hearing_date,
+            source_sha256,
+            source_url,
+            dept_hint,
+            division_hint,
+        )
 
     rulings: list[Ruling] = []
     current_division = division_hint or "Civil Law and Motion"

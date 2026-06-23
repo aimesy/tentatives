@@ -52,7 +52,7 @@ CASE_ANCHOR_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 LONG_DATE_RE = re.compile(
-    r"\b(?P<month>[A-Z][a-z]+)\s+(?P<day>\d{1,2}),\s+(?P<year>\d{4})\b",
+    r"\b(?P<month>[A-Z][a-z]+)\s+(?P<day>\d{1,2})(?:st|nd|rd|th)?,\s+(?P<year>\d{4})\b",
     re.IGNORECASE,
 )
 DEPT_RE = re.compile(r"Department\s+(?P<dept>Two|2)\b", re.IGNORECASE)

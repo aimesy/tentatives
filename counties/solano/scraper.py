@@ -92,7 +92,7 @@ def discover_live(html: str, page_url: str | None = None, base_url: str = BASE):
 # Case-number formats: CU24-08708, CL25-11400, PR24-00307.
 # Civil depts use "Case No. <NUMBER>"; probate depts put the case number on its
 # own line without a prefix.
-_CASE_NUMBER_INNER = r"[A-Z]{1,3}\d{2}-\d{4,6}"
+_CASE_NUMBER_INNER = r"[A-Z]{1,3}\d{2}-\d{4,6}|[A-Z]{2,4}\d{5,8}"
 CASE_NUMBER_RE = re.compile(
     rf"\b(?:Case\s+No\.?\s*)?(?P<num>{_CASE_NUMBER_INNER})\b",
     re.IGNORECASE,

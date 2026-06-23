@@ -78,3 +78,25 @@ def test_parse_tuolumne_page_oriented_calendar():
     assert "Case Management Conference" in rows[0].motion_type
     assert rows[1].case_number == "CVL66996"
     assert rows[1].outcome == "denied"
+
+
+def test_missing_timestamp_uses_blank_line_before_narrative_body():
+    pdf = _pdf([[
+        "Consolidated Calendar",
+        "Department 2 June 3, 2026 8:30 am Date Filed DA Case #",
+        "CV68350 04/22/2026 4 Edward Bolitho vs. Roger Perkins",
+        "Attorney: Gary Dambacher Edward Bolitho",
+        "Petition Hearing - Other",
+        "Cancel and Release Mechanics Lien",
+        "04/22/2026 Petition File Tracking",
+        "04/24/2026 High Density",
+        "",
+        "This is a special proceeding to release a mechanics lien.",
+        "The petition cannot be summarily granted.",
+    ]])
+
+    rows = parse(pdf, "https://www.tuolumne.courts.ca.gov/system/files/tentative-rulings/tr_d2_06032026.pdf")
+
+    assert len(rows) == 1
+    assert rows[0].motion_type == "Petition Hearing - Other / Cancel and Release Mechanics Lien"
+    assert rows[0].outcome_text.startswith("This is a special proceeding")

@@ -1,4 +1,7 @@
 from datetime import date
+from pathlib import Path
+
+import pytest
 
 from counties.plumas.scraper import parse
 
@@ -63,3 +66,21 @@ def test_parse_plumas_case_no_calendar():
     assert rows[0].outcome == "appearance_required"
     assert rows[1].division == "Law and Motion"
     assert rows[1].outcome == "granted"
+
+
+def test_ordinal_date_archive_calendar_packet():
+    source = Path("archive/plumas/0f/0f386dfd5095160ef6a2ba02d9fc394498dfb315ddc7f2c03efe089ba5ba5b1a.pdf")
+    if not source.exists():
+        pytest.skip("full Plumas archive source is not materialized")
+    rows = parse(
+        source.read_bytes(),
+        "https://plumas.courts.ca.gov/system/files/tentative-ruling/tentative-rulings-march-9-2026-complete.pdf",
+        source_sha256="0f386dfd5095160ef6a2ba02d9fc394498dfb315ddc7f2c03efe089ba5ba5b1a",
+        dept_hint="2",
+        division_hint="Civil / Probate / Family Law",
+    )
+
+    assert len(rows) >= 20
+    assert rows[0].hearing_date == date(2026, 3, 9)
+    assert rows[0].case_number == "PR23-00042"
+    assert rows[0].division == "Probate"

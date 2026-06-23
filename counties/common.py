@@ -9,7 +9,7 @@ imposing a generic parser.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from urllib.parse import unquote, urljoin, urlparse
 
@@ -25,6 +25,24 @@ class PdfRef:
     division_hint: str | None = None
     link_text: str = ""
     source_page_url: str | None = None
+
+
+@dataclass(frozen=True)
+class PageRef:
+    """A ruling source page to preserve as raw HTML.
+
+    Most counties expose PDFs, but some current tentative-ruling surfaces are
+    HTML pages or form results. `source_url` is the logical URL recorded in
+    provenance; for POST-backed pages it can include the selected department or
+    date even when the fetch URL is a shared endpoint.
+    """
+
+    url: str
+    title: str
+    page_kind: str = "tentative_rulings_page"
+    source_url: str | None = None
+    method: str = "GET"
+    data: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

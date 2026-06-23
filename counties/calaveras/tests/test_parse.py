@@ -1,4 +1,7 @@
 from datetime import date
+from pathlib import Path
+
+import pytest
 
 from counties.calaveras.scraper import parse
 
@@ -71,7 +74,7 @@ def test_parse_calaveras_law_motion_uses_url_date():
         "SANCHEZ v SENDERS MARKET, INC., et al",
         "24CV47302",
         "DEFENDANT ROTH INDUSTRIES MOTION TO COMPEL RESPONSES",
-        "This is a breach of contract claim.",
+        "The body references December 6, 2023, but that is not the hearing date.",
         "Accordingly, the motion is DENIED, without prejudice.",
     ]])
 
@@ -87,3 +90,139 @@ def test_parse_calaveras_law_motion_uses_url_date():
     assert rows[0].case_title == "SANCHEZ v SENDERS MARKET, INC., et al"
     assert rows[0].motion_type == "DEFENDANT ROTH INDUSTRIES MOTION TO COMPEL RESPONSES"
     assert rows[0].outcome == "denied"
+
+
+def test_case_management_title_after_bare_case_number():
+    pdf = _pdf([[
+        "June 3, 2026",
+        "1:30 P.M. Civil Case Management",
+        "19PA44397",
+        "EVANS v ANDERSON",
+        "Appearances are required to address case management.",
+    ]])
+
+    rows = parse(pdf, "https://www.calaveras.courts.ca.gov/system/files/general/06032026-cmc.pdf")
+
+    assert len(rows) == 1
+    assert rows[0].case_number == "19PA44397"
+    assert rows[0].case_title == "EVANS v ANDERSON"
+    assert rows[0].motion_type == "Case Management Conference"
+
+
+def test_short_compact_url_date_archive_law_motion():
+    source = Path("archive/calaveras/8c/8cd0106ece690d4dbabd12b1883694ee05d7f1e325ce9e664f1f4cd783c7ff7b.pdf")
+    if not source.exists():
+        pytest.skip("full Calaveras archive source is not materialized")
+    rows = parse(
+        source.read_bytes(),
+        "https://www.calaveras.courts.ca.gov/system/files/tentative-ruling/81823-law-and-motion.pdf",
+        source_sha256="8cd0106ece690d4dbabd12b1883694ee05d7f1e325ce9e664f1f4cd783c7ff7b",
+        division_hint="Civil Law and Motion",
+    )
+
+    assert len(rows) >= 4
+    assert rows[0].hearing_date == date(2023, 8, 18)
+    assert rows[0].case_number == "22CV46287"
+    assert rows[0].motion_type.startswith("DEBTOR")
+
+
+def test_legacy_bare_case_number_archive_law_motion():
+    source = Path("archive/calaveras/e4/e456daeeee71d2e25e13febb50a55711f159e1402e7c56db03a33efdfbd0b7f7.pdf")
+    if not source.exists():
+        pytest.skip("full Calaveras archive source is not materialized")
+    rows = parse(
+        source.read_bytes(),
+        "https://www.calaveras.courts.ca.gov/system/files/2-24-23-additional-tentative-oex.pdf",
+        source_sha256="e456daeeee71d2e25e13febb50a55711f159e1402e7c56db03a33efdfbd0b7f7",
+        division_hint="Civil Law and Motion",
+    )
+
+    assert len(rows) == 1
+    assert rows[0].case_number == "CV34353"
+    assert rows[0].case_title.startswith("GOLD STRIKE")
+
+
+def test_legacy_time_row_civil_calendar_archive():
+    source = Path("archive/calaveras/03/036704a326e77c1f7dc771f664489417bfb2be16823b3b861036dedbb07fa9db.pdf")
+    if not source.exists():
+        pytest.skip("full Calaveras archive source is not materialized")
+    rows = parse(
+        source.read_bytes(),
+        "https://www.calaveras.courts.ca.gov/system/files/tentative-ruling/6-18-2021-civil-lm-tentative-rulings.pdf",
+        source_sha256="036704a326e77c1f7dc771f664489417bfb2be16823b3b861036dedbb07fa9db",
+        division_hint="Civil Law and Motion",
+    )
+
+    assert len(rows) == 1
+    assert rows[0].hearing_date == date(2021, 6, 18)
+    assert rows[0].case_number == "18CV43474"
+    assert rows[0].case_title.startswith("City of Angels Camp")
+    assert rows[0].motion_type.startswith("Motion by Petnr")
+
+
+def test_legacy_time_row_probate_calendar_archive():
+    source = Path("archive/calaveras/13/1363e2f66965aefee6906eeddd36229c777e269d49f3212621aecd77166a4398.pdf")
+    if not source.exists():
+        pytest.skip("full Calaveras archive source is not materialized")
+    rows = parse(
+        source.read_bytes(),
+        "https://www.calaveras.courts.ca.gov/system/files/tentative-ruling/7-23-2021-probate-law-motion-tentative-rulings.pdf",
+        source_sha256="1363e2f66965aefee6906eeddd36229c777e269d49f3212621aecd77166a4398",
+        division_hint="Probate Law and Motion",
+    )
+
+    assert len(rows) == 1
+    assert rows[0].hearing_date == date(2021, 7, 23)
+    assert rows[0].division == "Probate Law and Motion"
+    assert rows[0].case_number == "20PR8284"
+    assert rows[0].case_title.startswith("Griffin, Carol")
+
+
+def test_single_digit_compact_url_date_archive_law_motion():
+    source = Path("archive/calaveras/10/1095fd13155d10c04f7a8fee5a9e999bff08505c40e51f16a4983372fcd10588.pdf")
+    if not source.exists():
+        pytest.skip("full Calaveras archive source is not materialized")
+    rows = parse(
+        source.read_bytes(),
+        "https://www.calaveras.courts.ca.gov/system/files/tentative-ruling/772023-lm-tentative-rulings2.pdf",
+        source_sha256="1095fd13155d10c04f7a8fee5a9e999bff08505c40e51f16a4983372fcd10588",
+        division_hint="Civil Law and Motion",
+    )
+
+    assert len(rows) == 5
+    assert rows[0].hearing_date == date(2023, 7, 7)
+    assert rows[0].case_number == "21CF13559"
+    assert rows[0].case_title.startswith("In The Matter of $4,940.00")
+
+
+def test_case_no_label_archive_law_motion_packet():
+    source = Path("archive/calaveras/c1/c10833d06a8c43495b13d4346f120d431b9e59836423e3f2457bb55a8f56178e.pdf")
+    if not source.exists():
+        pytest.skip("full Calaveras archive source is not materialized")
+    rows = parse(
+        source.read_bytes(),
+        "https://www.calaveras.courts.ca.gov/system/files/tentative-ruling/10-6-2023-clmc_0.pdf",
+        source_sha256="c10833d06a8c43495b13d4346f120d431b9e59836423e3f2457bb55a8f56178e",
+        division_hint="Civil Law and Motion",
+    )
+
+    assert len(rows) == 4
+    assert rows[0].hearing_date == date(2023, 10, 6)
+    assert rows[0].case_number == "23CV46786"
+    assert rows[0].case_title == "MICHAEL HATFIELD v. UNION PUBLIC UTILITY DISTRICT"
+
+
+def test_legacy_time_row_without_am_pm_archive():
+    source = Path("archive/calaveras/d8/d8b13d7036c552874a5730600a06940855a90b44989563f2fb4213d2b860d50a.pdf")
+    if not source.exists():
+        pytest.skip("full Calaveras archive source is not materialized")
+    rows = parse(
+        source.read_bytes(),
+        "https://www.calaveras.courts.ca.gov/system/files/tentative-ruling/7-30-2021-civil-tentative-ruling.pdf",
+        source_sha256="d8b13d7036c552874a5730600a06940855a90b44989563f2fb4213d2b860d50a",
+        division_hint="Civil Law and Motion",
+    )
+
+    assert len(rows) == 1
+    assert rows[0].hearing_date == date(2021, 7, 30)
+    assert rows[0].case_number == "14CV40119"

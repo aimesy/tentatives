@@ -93,6 +93,7 @@ def discover_live(html: str, page_url: str | None = None, base_url: str = BASE):
 
 _CASE_NUMBER_INNER = (
     r"\d{2}[A-Z]{2,4}-\d{4,8}"        # 26CV-0210058, 25CVG-01439, 23PC-0032005
+    r"|\d{2}[A-Z]{2,4}\d{4,8}"        # 20UD0069
     r"|[A-Z]{2,5}\d{2,4}-\d{4,8}"     # CVPB19-0029935, CVCV19-0191680
     r"|\d{4,8}"                        # legacy bare digits (193585 etc.)
 )
@@ -283,7 +284,28 @@ def _classify(text: str) -> tuple[str, bool, date | None]:
     return outcome, conditional, continued_to
 
 
-def _extract_title_above(plain: str, header_start: int) -> str:
+def _looks_like_case_title_line(line: str) -> bool:
+    s = _normalize_text(line.strip())
+    if not s or len(s) > 180:
+        return False
+    if re.search(r"^(?:This|The|All|No|Proof|Petition|Amended|Appearance|Court)\b", s, re.IGNORECASE):
+        return False
+    if re.search(
+        r"\b(?:CONSERVATORSHIP|GUARDIANSHIP|ESTATE\s+OF|IN\s+RE|MATTER\s+OF|TRUST\s+OF)\b",
+        s,
+        re.IGNORECASE,
+    ):
+        return True
+    if re.search(r"(?:\bv\.|\bvs\.?|\bversus\b)", s, re.IGNORECASE):
+        return True
+    letters = [ch for ch in s if ch.isalpha()]
+    if not letters:
+        return False
+    upper_ratio = sum(1 for ch in letters if ch.isupper()) / len(letters)
+    return upper_ratio >= 0.70
+
+
+def _extract_title_above(plain: str, header_start: int) -> tuple[str, int]:
     """Walk upward from a CASE NUMBER line to capture the case-title block.
 
     The title is the contiguous non-blank lines immediately preceding the case
@@ -291,8 +313,12 @@ def _extract_title_above(plain: str, header_start: int) -> str:
     marker, or the top of the doc.
     """
     before = plain[:header_start]
+    pos = len(before)
     title_lines: list[str] = []
-    for line in reversed(before.splitlines()):
+    title_start = header_start
+    for raw in reversed(before.splitlines(keepends=True)):
+        pos -= len(raw)
+        line = raw.rstrip("\r\n")
         s = line.strip()
         if not s:
             if title_lines:
@@ -308,11 +334,16 @@ def _extract_title_above(plain: str, header_start: int) -> str:
         # Stop at a "Tentative Ruling" body marker (so we don't slurp a prior body).
         if re.match(r"^\s*Tentative Ruling", line):
             break
+        if not _looks_like_case_title_line(s):
+            if title_lines:
+                break
+            continue
         title_lines.append(s)
+        title_start = pos
         if len(title_lines) >= 4:
             break
     title_lines.reverse()
-    return _normalize_text(" ".join(" ".join(title_lines).split()))
+    return _normalize_text(" ".join(" ".join(title_lines).split())), title_start
 
 
 def _normalize_text(s: str) -> str:
@@ -411,22 +442,11 @@ def parse(
         # Disposition: from end of this anchor line to start of next anchor line.
         disposition_start = anchor.end()
         if i + 1 < len(anchors):
-            # Cut at the start of the next anchor's title block.
-            disposition_end = anchors[i + 1].start()
-            # Walk back to nearest blank line before the next title.
-            next_region = plain[disposition_start:disposition_end]
-            idx = len(next_region)
-            # Locate the first non-blank line scanning backwards from end:
-            while idx > 0:
-                prev_newline = next_region.rfind("\n", 0, idx - 1)
-                if prev_newline == -1:
-                    break
-                segment = next_region[prev_newline + 1:idx - 1]
-                if not segment.strip():
-                    break
-                idx = prev_newline + 1
-            # Use only the part up to the boundary so far.
-            disposition_end = disposition_start + idx
+            # Cut at the start of the next anchor's title block, even where
+            # the court omitted a blank line between the previous body and
+            # next all-caps probate title.
+            _next_title, next_title_start = _extract_title_above(plain, anchors[i + 1].start())
+            disposition_end = max(disposition_start, next_title_start)
         else:
             disposition_end = len(plain)
 
@@ -435,31 +455,11 @@ def parse(
         motion_type = _extract_motion_type(disposition_text)
 
         # Title: walk up from this anchor.
-        case_title = _extract_title_above(plain, anchor.start())
+        case_title, header_start = _extract_title_above(plain, anchor.start())
 
         # If we're in a probate section and the title is empty, prepend section.
         if current_section and not case_title:
             case_title = current_section
-
-        # Header offset for page calculation: start of title block.
-        header_start = anchor.start()
-        if case_title:
-            # Approximate: walk back through title lines.
-            t_idx = anchor.start()
-            blanks_to_skip = 1
-            while t_idx > 0:
-                prev_newline = plain.rfind("\n", 0, t_idx - 1)
-                if prev_newline == -1:
-                    t_idx = 0
-                    break
-                line = plain[prev_newline + 1:t_idx - 1]
-                if not line.strip():
-                    if blanks_to_skip <= 0:
-                        t_idx = prev_newline + 1
-                        break
-                    blanks_to_skip -= 1
-                t_idx = prev_newline + 1
-            header_start = t_idx
 
         page_start = page_for_offset(header_start)
         trimmed_end = disposition_start + len(plain[disposition_start:disposition_end].rstrip())

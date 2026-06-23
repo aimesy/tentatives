@@ -70,3 +70,32 @@ def test_ruling_ids_unique_and_stable():
     ids = [r.ruling_id for r in a]
     assert len(set(ids)) == len(ids)
     assert ids == [r.ruling_id for r in b]
+
+
+def test_probate_titles_do_not_slurp_prior_disposition_without_blank_line():
+    source = Path("archive/shasta/10/10ae8c28fe816510e006308e15aa3ed5909862ae02ec9b472c7c44beede3e960.pdf")
+    if not source.exists():
+        pytest.skip("full Shasta archive source is not materialized")
+    rs = parse_file(str(source), "x")
+    by_case = {r.case_number: r for r in rs}
+    assert by_case["23PC-0032165"].case_title == "CONSERVATORSHIP OF GRETA GIVLER"
+    assert by_case["24PC-0032302"].case_title == "CONSERVATORSHIP OF PETER MITCHELL"
+    assert "Proof of Service" not in by_case["23PC-0032165"].case_title
+    assert by_case["23PC-0032165"].motion_type.startswith("This matter is on calendar")
+
+
+def test_legacy_ud_case_number_and_mixed_case_title():
+    source = Path("archive/shasta/fe/fe01877157975a5b8cb3fa96d0fbfe3d8ce09967114190d342cae0a2e9222a25.pdf")
+    if not source.exists():
+        pytest.skip("full Shasta archive source is not materialized")
+    rs = parse_file(
+        str(source),
+        "https://www.shasta.courts.ca.gov/system/files/tentative/tentatived7.pdf",
+        dept_hint="44",
+        division_hint="Civil / Probate / Family Law",
+    )
+    assert len(rs) == 1
+    assert rs[0].hearing_date == date(2024, 8, 12)
+    assert rs[0].case_number == "20UD0069"
+    assert rs[0].case_title == "Aran Investments, Inc. v. Durbin, et al."
+    assert rs[0].continued_to == date(2024, 9, 16)

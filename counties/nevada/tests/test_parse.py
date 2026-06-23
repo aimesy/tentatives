@@ -115,3 +115,18 @@ def test_docx_case_management_parser():
     assert rs[1].outcome == "continued"
     assert rs[1].continued_to == date(2026, 8, 21)
     assert rs[0].style == "nevada-cmc-docx"
+
+
+def test_single_case_packet_uses_url_date():
+    source = Path("archive/nevada/a4/a45f1b8efe9e7f8724ca185d21e50e621c69e16bb9f9ceb9bbe6e0276b86ab5e.pdf")
+    if not source.exists():
+        pytest.skip("full Nevada archive source is not materialized")
+    rs = parse_file(
+        str(source),
+        "https://www.nevada.courts.ca.gov/system/files/tentative-rulings/3-9-26-truckee-tr_botwinis-v-fleming.pdf",
+    )
+    assert len(rs) == 1
+    assert rs[0].hearing_date == date(2026, 3, 9)
+    assert rs[0].case_number == "CU0000657"
+    assert rs[0].case_title == "Botwinis v. Fleming"
+    assert rs[0].motion_type == "Truckee"

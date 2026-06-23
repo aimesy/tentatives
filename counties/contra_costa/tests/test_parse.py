@@ -6,6 +6,7 @@ import pytest
 from counties.contra_costa.scraper import parse_file, parse_page_capture
 
 FIXTURE_DIR = Path(__file__).parent.parent / "fixtures"
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.mark.parametrize("fixture,expected_dept,expected_date,min_rulings", [
@@ -40,6 +41,57 @@ def test_outcomes_classified():
     outcomes = {r.outcome for r in rs}
     # We should see multiple distinct outcome classes from a typical calendar.
     assert len(outcomes) >= 3, outcomes
+
+
+@pytest.mark.parametrize("archive_rel,source_url,expected_dept,expected_date,expected_cases,min_rulings", [
+    (
+        "archive/contra-costa/e1/e1ce6a886c4acd643c5a8794dfdb635ed6ca1b663ca353d87dbccb0abc790e9d.pdf",
+        "https://retired.cc-courts.org/civil/TR/Department%2014%20-%20Judge%20Athanasiou/14_042826.pdf",
+        "14",
+        date(2026, 4, 28),
+        {"L22-01760", "L23-05788"},
+        15,
+    ),
+    (
+        "archive/contra-costa/30/30f0eda9d17b08943f844b0c75a96b90358a70a1a36da6bdbb879f7399515519.pdf",
+        "https://retired.cc-courts.org/civil/TR/Department%2057%20-%20Comm%20Yamamoto/57_031126%20f.pdf",
+        "57",
+        date(2026, 3, 11),
+        {"C23-03249"},
+        1,
+    ),
+    (
+        "archive/contra-costa/4a/4a648c7cccaf71d2be28b36e7cf07d9110b1cecb67298668d26a7c617a889b97.pdf",
+        "https://retired.cc-courts.org/civil/TR/Department%2057%20-%20Comm%20Yamamoto/57_042426%20f%20amended.pdf",
+        "57",
+        date(2026, 4, 24),
+        {"C24-02287"},
+        1,
+    ),
+    (
+        "archive/contra-costa/e3/e3c28d250265be7dae5afe150dcdb4dc9fe06bc7899bfabc63ca8673b63b7ace.pdf",
+        "https://retired.cc-courts.org/civil/TR/Department%2057%20-%20Comm%20Yamamoto/57_042926%20f.pdf",
+        "57",
+        date(2026, 4, 29),
+        {"C24-03218", "C25-00345", "C23-02085"},
+        3,
+    ),
+])
+def test_archive_backed_contra_costa_parser_misses(
+    archive_rel,
+    source_url,
+    expected_dept,
+    expected_date,
+    expected_cases,
+    min_rulings,
+):
+    path = REPO_ROOT / archive_rel
+    rs = parse_file(str(path), source_url)
+    assert len(rs) >= min_rulings
+    assert {r.source_sha256 for r in rs} == {path.stem}
+    assert {r.dept for r in rs} == {expected_dept}
+    assert {r.hearing_date for r in rs} == {expected_date}
+    assert expected_cases <= {r.case_number for r in rs}
 
 
 def test_ruling_ids_unique_and_stable():

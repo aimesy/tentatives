@@ -63,6 +63,7 @@ def discover_live(html: str, page_url: str | None = None, base_url: str = BASE):
 
 
 ITEM_RE = re.compile(r"^\s*(?P<idx>\d{1,3})\.\s*$", re.MULTILINE)
+TABLE_HEADER_RE = re.compile(r"^\s*CASE\s+#\s+CASE\s+NAME\s+HEARING\s+NAME\s*$", re.IGNORECASE | re.MULTILINE)
 CASE_NUMBER_RE = re.compile(r"\b(?P<num>CV[A-Z]{2}\d{7}|[A-Z]{2,5}\d{7})\b", re.IGNORECASE)
 HEADER_DATE_RE = re.compile(
     r"Tentative\s+Rulings\s+for\s+(?P<date>[A-Z][a-z]+\s+\d{1,2},\s+\d{4})",
@@ -70,7 +71,10 @@ HEADER_DATE_RE = re.compile(
 )
 HEADER_DEPT_RE = re.compile(r"Department\s+(?P<dept>[A-Z]{0,3}\d{1,3})\b", re.IGNORECASE)
 PAGE_NUMBER_RE = re.compile(r"^\s*Page\s+\d+\s+of\s+\d+\s*$", re.IGNORECASE)
-TENTATIVE_RE = re.compile(r"^\s*Tentative\s+Ruling\s*:\s*(?P<body>.*)$", re.IGNORECASE | re.MULTILINE)
+TENTATIVE_RE = re.compile(
+    r"^\s*(?:Tentative|Summary\s+of)\s+Ruling\s*:\s*(?P<body>.*)$",
+    re.IGNORECASE | re.MULTILINE,
+)
 MOTION_START_RE = re.compile(
     r"\b(MOTION|DEMURRER|PETITION|APPLICATION|EX\s+PARTE|ORDER\s+TO\s+SHOW|OSC|HEARING)\b",
     re.IGNORECASE,
@@ -214,6 +218,17 @@ def _ruling_id(source_sha256: str, index: int, case_number: str) -> str:
     return hashlib.sha256(f"{source_sha256}:{index}:{case_number}".encode("utf-8")).hexdigest()[:32]
 
 
+def _split_embedded_table_blocks(block: str) -> list[tuple[int, int]]:
+    headers = list(TABLE_HEADER_RE.finditer(block))
+    if len(headers) <= 1:
+        return [(0, len(block))]
+    starts = [0] + [header.start() for header in headers[1:]]
+    return [
+        (start, starts[i + 1] if i + 1 < len(starts) else len(block))
+        for i, start in enumerate(starts)
+    ]
+
+
 def parse(
     pdf_bytes: bytes,
     source_url: str,
@@ -244,57 +259,60 @@ def parse(
 
     rulings: list[Ruling] = []
     for i, item in enumerate(items):
-        block_start = item.start()
-        block_end = items[i + 1].start() if i + 1 < len(items) else len(plain)
-        block = plain[item.end():block_end]
-        cn = CASE_NUMBER_RE.search(block)
-        if not cn:
-            continue
-        case_number = cn.group("num").upper()
+        item_end = items[i + 1].start() if i + 1 < len(items) else len(plain)
+        item_block = plain[item.end():item_end]
+        for rel_start, rel_end in _split_embedded_table_blocks(item_block):
+            block_start = item.end() + rel_start
+            block_end = item.end() + rel_end
+            block = item_block[rel_start:rel_end]
+            cn = CASE_NUMBER_RE.search(block)
+            if not cn:
+                continue
+            case_number = cn.group("num").upper()
 
-        before_body = block[: cn.start()] + block[cn.end():]
-        tr = TENTATIVE_RE.search(block)
-        if tr:
-            before_body = block[:tr.start()]
-            title_motion_text = before_body[cn.end():]
-            body = block[tr.end():].strip()
-            if tr.group("body"):
-                body = f"{tr.group('body').strip()}\n{body}".strip()
-        else:
-            title_motion_text = before_body
-            body = block[cn.end():].strip()
+            before_body = block[: cn.start()] + block[cn.end():]
+            tr = TENTATIVE_RE.search(block)
+            if tr:
+                before_body = block[:tr.start()]
+                title_motion_text = before_body[cn.end():]
+                body = block[tr.end():].strip()
+                if tr.group("body"):
+                    body = f"{tr.group('body').strip()}\n{body}".strip()
+            else:
+                title_motion_text = before_body
+                body = block[cn.end():].strip()
 
-        title, motion = _split_title_motion(title_motion_text.splitlines())
-        outcome, conditional, continued_to = _classify(body)
-        page_start = _page_for_offset(offsets, block_start)
-        page_end = max(page_start, _page_for_offset(offsets, max(block_start, block_end - 1)))
-        index = len(rulings) + 1
-        rulings.append(
-            Ruling(
-                ruling_id=_ruling_id(source_sha256, index, case_number),
-                county=COUNTY_SLUG,
-                division=division_hint or "Law and Motion",
-                dept=dept,
-                hearing_date=hearing_date,
-                ruling_index=index,
-                case_number=case_number,
-                case_title=" ".join(title.split()),
-                motion_type=" ".join(motion.split()),
-                outcome=outcome,
-                outcome_text=body,
-                conditional=conditional,
-                continued_to=continued_to,
-                body_text="",
-                full_text=plain[block_start:block_end].strip(),
-                page_start=page_start,
-                page_end=page_end,
-                source_sha256=source_sha256,
-                source_url=source_url,
-                style="riverside-numbered-table",
-                parser_version=PARSER_VERSION,
-                ingest_ts=datetime.now(UTC),
+            title, motion = _split_title_motion(title_motion_text.splitlines())
+            outcome, conditional, continued_to = _classify(body)
+            page_start = _page_for_offset(offsets, block_start)
+            page_end = max(page_start, _page_for_offset(offsets, max(block_start, block_end - 1)))
+            index = len(rulings) + 1
+            rulings.append(
+                Ruling(
+                    ruling_id=_ruling_id(source_sha256, index, case_number),
+                    county=COUNTY_SLUG,
+                    division=division_hint or "Law and Motion",
+                    dept=dept,
+                    hearing_date=hearing_date,
+                    ruling_index=index,
+                    case_number=case_number,
+                    case_title=" ".join(title.split()),
+                    motion_type=" ".join(motion.split()),
+                    outcome=outcome,
+                    outcome_text=body,
+                    conditional=conditional,
+                    continued_to=continued_to,
+                    body_text="",
+                    full_text=plain[block_start:block_end].strip(),
+                    page_start=page_start,
+                    page_end=page_end,
+                    source_sha256=source_sha256,
+                    source_url=source_url,
+                    style="riverside-numbered-table",
+                    parser_version=PARSER_VERSION,
+                    ingest_ts=datetime.now(UTC),
+                )
             )
-        )
 
     return rulings
 

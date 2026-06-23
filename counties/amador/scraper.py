@@ -433,6 +433,7 @@ def parse(
     if not raw_pages:
         return []
 
+    division_hint = division_hint or _division_for(source_url, None)
     meta = _extract_doc_meta(raw_pages[0], dept_hint, division_hint)
     if meta.hearing_date is None:
         return []

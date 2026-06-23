@@ -104,17 +104,19 @@ LINE_ANCHOR_RE = re.compile(
 # Case-number formats observed in SCC PDFs.
 _CASE_NUMBER_INNER = (
     r"\d{2}[A-Z]{2,3}\d{5,8}"        # 23CV416606, 24PR198048, 24CV431273
-    r"|[A-Z]{2,5}\d{5,9}"            # legacy bare (CV12345, etc.)
 )
 CASE_NUMBER_RE = re.compile(rf"\b(?P<num>{_CASE_NUMBER_INNER})\b")
 
 # Header bits.
 HEADER_DEPT_RE = re.compile(r"^\s*Department\s+(\d+)\b", re.MULTILINE | re.IGNORECASE)
 HEADER_DATE_RE = re.compile(
-    r"DATE:\s*(?P<m1>\d{1,2}/\d{1,2}/\d{4})"
-    r"|DATE:\s*(?P<m2>[A-Z][a-z]+\s+\d{1,2},\s+\d{4})"
-    r"|^\s*(?P<m3>[A-Z][a-z]+\s+\d{1,2},\s+\d{4})\s*$",
-    re.MULTILINE,
+    r"DATE:\s*(?P<m1>\d{1,2}/\d{1,2}/\d{2,4})"
+    r"|DATE:\s*(?P<m2>[A-Z][a-z]+\.?\s+\d{1,2}\s*,\s+\d{4})"
+    r"|Hearing\s+date,\s*time,\s*and\s*department:\s*(?P<m4>[A-Z][a-z]+\.?\s+\d{1,2}\s*,\s+\d{4})"
+    r"|\bon\s+(?P<m6>[A-Z][a-z]+\.?\s+\d{1,2}\s*,\s+\d{4})\s+at\b"
+    r"|^\s*(?P<m5>[A-Z][a-z]+\.?\s+\d{1,2}\s+\d{4})\s*$"
+    r"|^\s*(?P<m3>[A-Z][a-z]+\.?\s+\d{1,2}\s*,\s+\d{4})(?:\s+at\b.*)?\s*$",
+    re.IGNORECASE | re.MULTILINE,
 )
 DIVISION_RE = re.compile(
     r"(?P<div>"
@@ -137,6 +139,7 @@ _MONTHS = {
         start=1,
     )
 }
+_MONTHS.update({name[:3].upper(): value for name, value in list(_MONTHS.items())})
 
 # Continued-to extractor.
 CONTINUED_TO_RE = re.compile(
@@ -149,17 +152,20 @@ CONTINUED_TO_RE = re.compile(
 
 def _parse_date(text: str) -> date | None:
     for m in HEADER_DATE_RE.finditer(text):
-        d_str = m.group("m1") or m.group("m2") or m.group("m3")
+        d_str = m.group("m1") or m.group("m2") or m.group("m3") or m.group("m4") or m.group("m5") or m.group("m6")
         if not d_str:
             continue
         d_str = d_str.strip()
         if "/" in d_str:
             parts = d_str.split("/")
             try:
-                return date(int(parts[2]), int(parts[0]), int(parts[1]))
+                year = int(parts[2])
+                if year < 100:
+                    year += 2000
+                return date(year, int(parts[0]), int(parts[1]))
             except ValueError:
                 continue
-        mm = re.match(r"([A-Z][a-z]+)\s+(\d{1,2}),\s+(\d{4})", d_str)
+        mm = re.match(r"([A-Z][a-z]+)\.?\s+(\d{1,2})\s*,?\s+(\d{4})", d_str, re.IGNORECASE)
         if mm:
             mo = mm.group(1).upper()
             if mo in _MONTHS:
@@ -212,7 +218,7 @@ class _DocMeta:
 def _extract_doc_meta(
     page1_text: str, dept_hint: str | None, division_hint: str | None
 ) -> _DocMeta:
-    head = "\n".join(page1_text.splitlines()[:20])
+    head = "\n".join(page1_text.splitlines()[:120])
     judge = None
     jm = re.search(
         r"Honorable\s+([A-Z][A-Za-z .\-]+?)(?:,\s+Presiding|\s*$|\n)",
@@ -319,6 +325,178 @@ def _classify(text: str) -> tuple[str, bool, date | None]:
     return outcome, conditional, continued_to
 
 
+def _select_case_matches(matches: list[re.Match[str]], plain: str) -> list[re.Match[str]]:
+    """Choose the ruling block occurrence when TOC rows repeat a case number."""
+    best: dict[str, tuple[int, re.Match[str]]] = {}
+    doc_len = max(len(plain), 1)
+    for cm in matches:
+        num = cm.group("num")
+        before = plain[max(0, cm.start() - 600):cm.start()]
+        after = plain[cm.end():cm.end() + 800]
+        line_start = plain.rfind("\n", 0, cm.start()) + 1
+        line_end = plain.find("\n", cm.end())
+        if line_end == -1:
+            line_end = len(plain)
+        current_line = plain[line_start:line_end]
+        score = 0
+        if re.search(r"Case\s+No\.?\s*$", before[-100:], re.IGNORECASE):
+            score += 12
+        if re.search(r"Case\s+Name\b", before[-400:], re.IGNORECASE):
+            score += 8
+        if re.search(r"Calendar\s+Line", before[-400:], re.IGNORECASE):
+            score += 6
+        if re.search(r"\bLINE\s+\d{1,3}\b", current_line, re.IGNORECASE):
+            score += 2
+        if re.search(
+            r"\b(?:Before\s+the\s+court|Pursuant\s+to|Parties?\s+to\s+appear|"
+            r"I\.\s+BACKGROUND|This\s+matter)\b",
+            after[:700],
+            re.IGNORECASE,
+        ):
+            score += 5
+        if re.search(r"Scroll\s+down\s+to\s+Lines?", after[:350], re.IGNORECASE):
+            score -= 12
+        # Later occurrence wins ties; TOC entries generally precede the full ruling.
+        score = score * 1_000_000 + int(cm.start() / doc_len * 999_999)
+        if num not in best or score > best[num][0]:
+            best[num] = (score, cm)
+    return sorted((cm for _score, cm in best.values()), key=lambda m: m.start())
+
+
+def _case_name_before(plain: str, case_start: int) -> str:
+    segment = plain[max(0, case_start - 700):case_start]
+    m = re.search(
+        r"Case\s+Name:?\s+(?P<title>.+?)(?:\n\s*Case\s+No\.?:?\s*)?$",
+        segment,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return ""
+    title = " ".join(line.strip() for line in m.group("title").splitlines() if line.strip())
+    return re.sub(r"\s+", " ", title).strip()
+
+
+def _looks_like_motion_line(line: str) -> bool:
+    if not line or len(line) > 220:
+        return False
+    if re.search(
+        r"\b(?:Motion|Demurrer|Petition|Order\s+of\s+Examination|OSC|"
+        r"Order\s+to\s+Show\s+Cause|Minor.?s\s+Compromise|Sanctions?)\b",
+        line,
+        re.IGNORECASE,
+    ):
+        return True
+    return bool(re.match(r"^[A-Z0-9 ,/&'.\-:()]+$", line) and len(line) >= 8 and " VS " not in line.upper())
+
+
+def _split_after_case(block_lines: list[str], title_hint: str) -> tuple[str, str, str]:
+    title_lines: list[str] = []
+    motion_type = ""
+    body_start_idx: int | None = None
+    if title_hint:
+        for j, line in enumerate(block_lines):
+            s = line.strip()
+            if not s:
+                continue
+            if _looks_like_motion_line(s):
+                motion_type = s
+                body_start_idx = j + 1
+            else:
+                body_start_idx = j
+            break
+        if body_start_idx is None:
+            body_start_idx = len(block_lines)
+        title_hint = re.split(r"\.?\s*Scroll\s+down\s+to\s+Lines?", title_hint, flags=re.IGNORECASE)[0]
+        return title_hint.strip(" ."), motion_type, "\n".join(block_lines[body_start_idx:]).strip()
+
+    for j, line in enumerate(block_lines):
+        s = line.strip()
+        if not s:
+            if title_lines or motion_type:
+                continue
+            continue
+        if title_lines and _looks_like_motion_line(s):
+            motion_type = s
+            body_start_idx = j + 1
+            break
+        if title_lines and re.match(r"^(?:On|Before|Pursuant|This matter|Parties? to appear)\b", s, re.IGNORECASE):
+            body_start_idx = j
+            break
+        title_lines.append(s)
+        if len(title_lines) >= 5:
+            body_start_idx = j + 1
+            break
+
+    if body_start_idx is None:
+        body_start_idx = len(block_lines)
+    title = re.sub(r"\s+", " ", " ".join(title_lines)).strip()
+    title = re.split(r"\.?\s*Scroll\s+down\s+to\s+Lines?", title, flags=re.IGNORECASE)[0].strip(" .")
+    body = "\n".join(block_lines[body_start_idx:]).strip()
+    return title, motion_type, body
+
+
+def _parse_formal_packet(
+    plain: str,
+    page_offsets: list[int],
+    page_for_offset,
+    meta: _DocMeta,
+    source_sha256: str,
+    source_url: str,
+) -> list[Ruling]:
+    if not re.search(r"\bCase\s+No\.?\b", plain, re.IGNORECASE):
+        return []
+    if re.search(r"\bCalendar\s+Line\b|\bLINE\s*#\s*CASE\s*#", plain, re.IGNORECASE):
+        return []
+    if not re.search(r"\babove-entitled\s+actions?\s+came\s+on\s+for\s+hearing\b", plain, re.IGNORECASE):
+        return []
+    cm = CASE_NUMBER_RE.search(plain)
+    if not cm:
+        return []
+    case_number = cm.group("num")
+    before = plain[max(0, cm.start() - 600):cm.start()]
+    title = ""
+    tm = re.search(r"In\s+the\s+Matter\s+of:\s*(?P<title>.+?)(?=\bCase\s+No\.?|\Z)", before, re.IGNORECASE | re.DOTALL)
+    if tm:
+        title = " ".join(line.strip() for line in tm.group("title").splitlines() if line.strip())
+    if not title:
+        title = _case_name_before(plain, cm.start())
+    body_match = re.search(r"\bThe\s+above-entitled\s+actions?\s+came\s+on\s+for\s+hearing\b", plain, re.IGNORECASE)
+    body_start = body_match.start() if body_match else cm.end()
+    body = plain[body_start:].strip()
+    outcome, conditional, continued_to = _classify(body)
+    page_start = page_for_offset(cm.start())
+    page_end = max(page_start, page_for_offset(max(cm.start(), len(plain) - 1)))
+    ruling_id = hashlib.sha256(
+        f"{source_sha256}:1:{case_number}".encode("utf-8")
+    ).hexdigest()[:32]
+    return [
+        Ruling(
+            ruling_id=ruling_id,
+            county=COUNTY_SLUG,
+            division=meta.division,
+            dept=meta.dept,
+            hearing_date=meta.hearing_date,
+            ruling_index=1,
+            case_number=case_number,
+            case_title=re.sub(r"\s+", " ", title).strip(" ,"),
+            motion_type="",
+            outcome=outcome,
+            outcome_text=body,
+            conditional=conditional,
+            continued_to=continued_to,
+            body_text=meta.judge or "",
+            full_text=plain[cm.start():].strip(),
+            page_start=page_start,
+            page_end=page_end,
+            source_sha256=source_sha256,
+            source_url=source_url,
+            style=f"{meta.style}-formal",
+            parser_version=PARSER_VERSION,
+            ingest_ts=datetime.now(UTC),
+        )
+    ]
+
+
 def parse(
     pdf_bytes: bytes,
     source_url: str,
@@ -360,22 +538,17 @@ def parse(
                 break
         return page
 
-    # Find case-number occurrences. Each is one ruling. The block runs from
-    # the case-number position to the next case-number (or end of doc).
+    formal_rows = _parse_formal_packet(plain, page_offsets, page_for_offset, meta, source_sha256, source_url)
+    if formal_rows:
+        return formal_rows
+
+    # Find case-number occurrences. Each selected occurrence is one ruling.
+    # TOC rows often repeat a case number before the full ruling block, so
+    # choose the best occurrence for each case number rather than the first.
     case_matches: list[re.Match[str]] = list(CASE_NUMBER_RE.finditer(plain))
     if not case_matches:
         return []
-
-    # De-dupe by case_number to avoid double-counting toc-style listings.
-    # First occurrence wins (assumed to be the actual ruling block).
-    seen_cases: set[str] = set()
-    deduped: list[re.Match[str]] = []
-    for cm in case_matches:
-        if cm.group("num") in seen_cases:
-            continue
-        seen_cases.add(cm.group("num"))
-        deduped.append(cm)
-    case_matches = deduped
+    case_matches = _select_case_matches(case_matches, plain)
 
     rulings: list[Ruling] = []
     ruling_index_counter = 0
@@ -393,64 +566,14 @@ def parse(
         ruling_index_counter += 1
         ruling_index = ruling_index_counter
 
-        # The block runs to the next case number (or end of doc).
+        # The block runs to the next selected case number (or end of doc).
         block_end = case_matches[i + 1].start() if i + 1 < len(case_matches) else len(plain)
         block = plain[case_end:block_end]
-
-        # Title = lines from after the case number up to (but not including)
-        # the motion-type marker, body, or first sentence.
-        # We treat the first non-blank line(s) as title; lines that look like
-        # all-caps MOTION descriptions become the motion type.
         block_lines = block.splitlines()
-        title_lines: list[str] = []
-        motion_type = ""
-        body_start_idx = None
-        seen_motion = False
-        for j, line in enumerate(block_lines):
-            s = line.strip()
-            if not s:
-                if title_lines or motion_type:
-                    # If we already have content and hit a blank, body starts.
-                    body_start_idx = j + 1
-                    break
-                continue
-            # All-caps line of motion-type length is the motion type.
-            # Skip "LINE N" markers and "LINES" headers.
-            if (
-                not seen_motion
-                and re.match(r"^[A-Z0-9 ,/&'.\-:()]+$", s)
-                and len(s) >= 5
-                and len(s) <= 150
-                and not s.endswith(".")
-                and not re.match(r"^LINES?\s*\d", s)
-                and not re.match(r"^LINES?\s*$", s)
-                and "vs" not in s.lower()
-                and " v. " not in s.lower()
-                and " v " not in s.lower()
-            ):
-                motion_type = (motion_type + " " + s).strip()
-                seen_motion = True
-                continue
-            if seen_motion:
-                # We're past the motion-type into body.
-                body_start_idx = j
-                break
-            title_lines.append(s)
-            if len(title_lines) >= 6:
-                body_start_idx = j + 1
-                break
-
-        if body_start_idx is None:
-            body_start_idx = len(block_lines)
-        body = "\n".join(block_lines[body_start_idx:]).strip()
-        # If body is empty but motion_type captured part of it, recover body.
-        if not body and motion_type:
-            # Re-split: maybe motion-type detection slurped the body.
-            pass
-
-        case_title = " ".join(" ".join(title_lines).split())
-        # Strip "vs" formatting quirks.
-        case_title = re.sub(r"\s+", " ", case_title)
+        case_title, motion_type, body = _split_after_case(
+            block_lines,
+            _case_name_before(plain, case_start),
+        )
 
         outcome, conditional, continued_to = _classify(body or motion_type)
 

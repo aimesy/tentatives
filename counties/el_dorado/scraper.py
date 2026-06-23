@@ -165,7 +165,7 @@ RULING_HEADER_LINE_RE = re.compile(
 
 # Date in long form: "MAY 18, 2026" or "May 18, 2026".
 LONG_DATE_RE = re.compile(
-    r"\b([A-Z][A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})\b"
+    r"\b([A-Z][A-Za-z]+)\s+(\d(?:\s*\d)?),\s+(\d(?:\s*\d){3})\b"
 )
 
 # Continuation marker — lines of just "/ / /" or "///".
@@ -214,12 +214,14 @@ def _parse_long_date(s: str) -> date | None:
     month = m.group(1).upper()
     if month not in _MONTHS:
         return None
-    return date(int(m.group(3)), _MONTHS[month], int(m.group(2)))
+    day = int(re.sub(r"\s+", "", m.group(2)))
+    year = int(re.sub(r"\s+", "", m.group(3)))
+    return date(year, _MONTHS[month], day)
 
 
 def _detect_division(header_text: str) -> str | None:
     """Look at the first few lines of page-1 to identify division."""
-    upper = header_text.upper()
+    upper = re.sub(r"\s+", " ", header_text.upper())
     if "PROBATE" in upper:
         return "Probate"
     if "LAW AND MOTION" in upper or "LAW & MOTION" in upper or "LAW AMP; MOTION" in upper:
@@ -241,7 +243,7 @@ def _detect_dept_in_header(header_text: str) -> str | None:
 
 def _detect_style(header_text: str) -> str:
     """Tag the style based on header characteristics, for debugging/audit."""
-    upper = header_text.upper()
+    upper = re.sub(r"\s+", " ", header_text.upper())
     if "PROBATE TENTATIVE RULINGS" in upper:
         return "probate-dept-header"
     if "LAW AND MOTION CALENDAR" in upper:
@@ -261,9 +263,23 @@ class _DocMeta:
     style: str
 
 
+@dataclass(frozen=True)
+class _CaseHeaderMatch:
+    start: int
+    end: int
+    rest: str
+
+
+def _normalize_date_text(s: str) -> str:
+    """Smooth PDF extractor line splits inside dates."""
+    normalized = re.sub(r"\s+", " ", s)
+    normalized = re.sub(r"\s+,", ",", normalized)
+    return normalized
+
+
 def _extract_doc_meta(page1_text: str, dept_hint: str | None) -> _DocMeta:
-    """Pull hearing date, division, dept from the first ~6 lines of page 1."""
-    head = "\n".join(page1_text.splitlines()[:8])
+    """Pull hearing date, division, dept from the first few lines of page 1."""
+    head = "\n".join(page1_text.splitlines()[:20])
     style = _detect_style(head)
     # Style B (LAW AND MOTION CALENDAR) and Style C (PROBATE CALENDAR) never
     # print the dept in the header — by court convention they're Dept 4.
@@ -272,7 +288,7 @@ def _extract_doc_meta(page1_text: str, dept_hint: str | None) -> _DocMeta:
         "probate-calendar": "4",
     }.get(style)
     return _DocMeta(
-        hearing_date=_parse_long_date(head),
+        hearing_date=_parse_long_date(_normalize_date_text(head)),
         division=_detect_division(head),
         dept=_detect_dept_in_header(head) or dept_hint or style_default_dept,
         style=style,
@@ -344,6 +360,107 @@ def _strip_continuation_marks(text: str) -> str:
         line for line in text.splitlines()
         if not CONTINUATION_LINE_RE.match(line)
     )
+
+
+def _line_offsets(text: str) -> list[tuple[int, int, str]]:
+    out: list[tuple[int, int, str]] = []
+    cursor = 0
+    for raw_line in text.splitlines(keepends=True):
+        line = raw_line.rstrip("\r\n")
+        out.append((cursor, cursor + len(line), line))
+        cursor += len(raw_line)
+    if text and not text.endswith(("\n", "\r")) and not out:
+        out.append((0, len(text), text))
+    return out
+
+
+def _looks_like_case_header_fragment(line: str) -> bool:
+    s = line.strip()
+    if not s:
+        return True
+    if CASE_NUMBER_RE.fullmatch(s.strip(", ")):
+        return True
+    if s == ",":
+        return True
+    if re.match(r"^\d{1,3}\.\d", s) or re.match(r"^\d{1,3}\.\)", s):
+        return False
+    if re.match(r"^(?:LAW AND MOTION|LAW & MOTION|PROBATE|CALENDAR|DEPARTMENT)\b", s, re.IGNORECASE):
+        return False
+    if re.search(r"\bV\.\s+\S", s, re.IGNORECASE):
+        return True
+    if s.upper() == s and re.search(r"[A-Z]", s):
+        return True
+    if _looks_like_narrative(s):
+        return False
+    return True
+
+
+def _find_case_header(region: str, anchor_idx: int) -> _CaseHeaderMatch | None:
+    """Find this anchor's source-backed case header in the preceding text.
+
+    The primary parser handles the common single-line shape. This fallback only
+    fires for PDFs whose extractor splits "N.", title fragments, and case number
+    across separate lines.
+    """
+    matches: list[_CaseHeaderMatch] = []
+    for hm in RULING_HEADER_LINE_RE.finditer(region):
+        if int(hm.group("idx")) == anchor_idx:
+            matches.append(
+                _CaseHeaderMatch(
+                    start=hm.start(),
+                    end=hm.end(),
+                    rest=hm.group("rest"),
+                )
+            )
+    if matches:
+        return matches[-1]
+
+    lines = _line_offsets(region)
+    for line_no, (start, end, line) in enumerate(lines):
+        m = re.match(r"^\s*(?P<idx>\d{1,3})\.\s*(?P<rest>.*)$", line)
+        if not m or int(m.group("idx")) != anchor_idx:
+            continue
+
+        rest = m.group("rest").strip()
+        if rest and not _looks_like_case_header_fragment(rest):
+            continue
+
+        parts: list[str] = [rest] if rest else []
+        header_end = end
+        nonblank_parts = 1 if rest else 0
+        found_case_number = bool(CASE_NUMBER_RE.search(rest))
+
+        for _next_start, next_end, next_line in lines[line_no + 1:]:
+            stripped = next_line.strip()
+            if not stripped:
+                header_end = next_end
+                continue
+            if TENTATIVE_RULING_ANCHOR_RE.search(stripped):
+                break
+            if re.match(r"^\d{1,3}\.\s*", stripped):
+                break
+            if not _looks_like_case_header_fragment(stripped):
+                break
+
+            parts.append(stripped)
+            header_end = next_end
+            nonblank_parts += 1
+            if CASE_NUMBER_RE.search(stripped):
+                found_case_number = True
+                break
+            if nonblank_parts >= 8:
+                break
+
+        if found_case_number:
+            matches.append(
+                _CaseHeaderMatch(
+                    start=start,
+                    end=header_end,
+                    rest=" ".join(p for p in parts if p).strip(),
+                )
+            )
+
+    return matches[-1] if matches else None
 
 
 def _classify(disposition_text: str) -> tuple[str, bool, date | None]:
@@ -522,30 +639,26 @@ def parse(
     if not anchors:
         return []
 
+    header_matches: list[tuple[int, _CaseHeaderMatch | None]] = []
+    for i, anchor in enumerate(anchors):
+        anchor_idx = int(anchor.group(1))
+        region_start = 0 if i == 0 else anchors[i - 1].end()
+        region = plain[region_start:anchor.start()]
+        header_matches.append((region_start, _find_case_header(region, anchor_idx)))
+
     # For each anchor, scan backward for the case-header line whose idx matches.
     rulings: list[Ruling] = []
     for i, anchor in enumerate(anchors):
         anchor_idx = int(anchor.group(1))
 
-        # Region in which to look for this anchor's case header:
-        #   from (end of previous anchor's case header, or 0) to (anchor.start)
-        region_start = 0 if i == 0 else (
-            anchors[i - 1].end()  # past the previous TENTATIVE RULING marker
-        )
-        region_end = anchor.start()
-        region = plain[region_start:region_end]
-
-        header_match: re.Match[str] | None = None
-        for hm in RULING_HEADER_LINE_RE.finditer(region):
-            if int(hm.group("idx")) == anchor_idx:
-                header_match = hm
+        region_start, header_match = header_matches[i]
         if header_match is None:
             # Couldn't find a header for this anchor — skip it (don't crash).
             continue
 
-        header_start_abs = region_start + header_match.start()
-        header_end_abs = region_start + header_match.end()
-        case_number, case_title = _split_case_header(header_match.group("rest"))
+        header_start_abs = region_start + header_match.start
+        header_end_abs = region_start + header_match.end
+        case_number, case_title = _split_case_header(header_match.rest)
 
         # Lines after the header are motion-type and then body.
         after_header = plain[header_end_abs:anchor.start()]
@@ -557,14 +670,9 @@ def parse(
         # Disposition runs from this anchor to the next ruling's case header
         # (or end of doc).
         if i + 1 < len(anchors):
-            next_header = None
-            next_region = plain[anchors[i].end():anchors[i + 1].start()]
-            for hm in RULING_HEADER_LINE_RE.finditer(next_region):
-                if int(hm.group("idx")) == int(anchors[i + 1].group(1)):
-                    next_header = hm
-                    break
+            next_region_start, next_header = header_matches[i + 1]
             if next_header is not None:
-                disposition_end_abs = anchors[i].end() + next_header.start()
+                disposition_end_abs = next_region_start + next_header.start
             else:
                 disposition_end_abs = anchors[i + 1].start()
         else:
