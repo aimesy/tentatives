@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from urllib.parse import ParseResult
 
+from counties.new_county_parsers import parse_marin as parse
 from counties.static_pdf import discover_static_pdfs
 
 BASE = "https://www.marin.courts.ca.gov/online-services/tentative-rulings"

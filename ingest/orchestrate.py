@@ -62,6 +62,34 @@ def existing_source_shas(parquet_path: Path) -> set[str]:
     return _read_existing_column(parquet_path, "source_sha256")
 
 
+def _key_text(value: object) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).split())
+
+
+def ruling_logical_key(row: dict) -> tuple[str, str, str, str, str]:
+    """Stable duplicate key for recaptured HTML pages with changed chrome."""
+    return (
+        _key_text(row.get("county")),
+        _key_text(row.get("case_number")).upper(),
+        _key_text(row.get("hearing_date")),
+        _key_text(row.get("motion_type")),
+        _key_text(row.get("body_text")),
+    )
+
+
+def existing_logical_keys(parquet_path: Path) -> set[tuple[str, str, str, str, str]]:
+    if not parquet_path.exists():
+        return set()
+    try:
+        return {ruling_logical_key(row) for row in pq.read_table(parquet_path).to_pylist()}
+    except Exception as e:
+        raise RuntimeError(
+            f"refusing to append to unreadable parquet {parquet_path}: {e}"
+        ) from e
+
+
 def parser_kwargs(parser, *, source_url: str, source_sha256: str, capture: dict) -> dict:
     kwargs = {
         "source_url": source_url,
@@ -289,6 +317,7 @@ def process_county(
     # existing-table merge below.
     seen_ids = set() if reparse_existing else existing_ruling_ids(parquet_path)
     seen_source_shas = set() if reparse_existing else existing_source_shas(parquet_path)
+    seen_logical_keys = set() if reparse_existing else existing_logical_keys(parquet_path)
     captures = captures_index(county_archive)
 
     new_rulings: list[dict] = []
@@ -325,9 +354,16 @@ def process_county(
             ),
         )
         parsed_sources += 1
-        unseen = [r.to_row() for r in rulings if r.ruling_id not in seen_ids]
+        parsed_rows = [r.to_row() for r in rulings]
+        unseen = [
+            row
+            for row in parsed_rows
+            if row["ruling_id"] not in seen_ids
+            and ruling_logical_key(row) not in seen_logical_keys
+        ]
         new_rulings.extend(unseen)
         seen_ids.update(row["ruling_id"] for row in unseen)
+        seen_logical_keys.update(ruling_logical_key(row) for row in unseen)
         if rulings:
             print(
                 f"  {source_path.name}: {len(rulings)} rulings"
@@ -356,9 +392,16 @@ def process_county(
         html = page_path.read_text(encoding="utf-8", errors="replace")
         rulings = page_parser(html, cap)
         parsed_sources += 1
-        unseen = [r.to_row() for r in rulings if r.ruling_id not in seen_ids]
+        parsed_rows = [r.to_row() for r in rulings]
+        unseen = [
+            row
+            for row in parsed_rows
+            if row["ruling_id"] not in seen_ids
+            and ruling_logical_key(row) not in seen_logical_keys
+        ]
         new_rulings.extend(unseen)
         seen_ids.update(row["ruling_id"] for row in unseen)
+        seen_logical_keys.update(ruling_logical_key(row) for row in unseen)
         if rulings:
             print(
                 f"  {page_path.name}: {len(rulings)} page rows"

@@ -5,6 +5,7 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from counties.common import PageRef, absolute_url, clean_text, extract_links
+from counties.new_county_parsers import parse_sonoma_page as parse_page_capture
 from counties.static_pdf import discover_static_pdfs
 
 BASE = "https://sonoma.courts.ca.gov"

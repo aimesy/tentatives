@@ -167,6 +167,29 @@ def test_process_county_ruling_ids_stay_stable_for_same_source(tmp_path, monkeyp
     assert seen_ids[0] == seen_ids[1]
 
 
+def test_process_county_skips_logical_duplicate_recaptures(tmp_path, monkeypatch):
+    _patch_roots(monkeypatch, tmp_path)
+    contents = [b"%PDF-1.4\nfirst capture\n", b"%PDF-1.4\nsecond capture\n"]
+    for content in contents:
+        source_sha = hashlib.sha256(content).hexdigest()
+        pdf_path = orchestrate.ARCHIVE / "fake" / source_sha[:2] / f"{source_sha}.pdf"
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        pdf_path.write_bytes(content)
+
+    def parser(_content_bytes, *, source_url, source_sha256, dept_hint=None):
+        return [_ruling(source_sha256, source_url)]
+
+    monkeypatch.setattr(orchestrate, "PARSERS", {"fake": parser})
+    monkeypatch.setattr(orchestrate, "PAGE_PARSERS", {})
+
+    assert orchestrate.process_county("fake") == 1
+    rows = pq.read_table(
+        orchestrate.DATA / "fake" / "rulings.parquet",
+        columns=["case_number", "body_text"],
+    ).to_pylist()
+    assert rows == [{"case_number": "TEST-1", "body_text": ""}]
+
+
 def test_process_county_uses_registered_source_extensions(tmp_path, monkeypatch):
     _patch_roots(monkeypatch, tmp_path)
     content = b"docx-ish source for fake parser"

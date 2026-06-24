@@ -16,22 +16,37 @@ Current registered parsers:
 | County | Parser coverage | Tests present |
 |---|---|---|
 | Amador | Legacy PDF parser for archived/Wayback dropdown PDFs. | Discovery and parse tests. |
+| Butte | Static Drupal PDF parser for civil/probate/exchange-style ruling packets. | Fixture-backed parse coverage plus full suite. |
 | Calaveras | Case-management and civil law-and-motion PDF parser. | Discovery and parse tests. |
 | Contra Costa | PDF parser plus HTML page-capture parser. CLI discovery uses the public retired.cc-courts.org iframe URL. | Discovery and parse tests. |
 | El Dorado | Probate, civil law-and-motion, probate calendar, and family-law PDF parser. | Discovery and parse tests. |
 | Fresno | Law-and-motion PDF parser, including cover-page continued matters. | Parse tests. |
+| Los Angeles | Public WebForms result-page parser for captured department/date HTML. | Fixture-backed parse coverage plus full suite. |
+| Marin | Static civil/family court-form PDF parser plus probate calendar parser. | Fixture-backed parse coverage plus full suite. |
 | Merced | Weekday civil law-and-motion PDF parser. | Parse tests. |
+| Monterey | Public API PDF parser for decoded document responses. | Fixture-backed parse coverage plus full suite. |
+| Napa | Public Google Drive PDF parser. | Fixture-backed parse coverage plus full suite. |
 | Nevada | Static-page PDF parser plus supported DOCX case-management parser. | Discovery and parse tests. |
 | Orange | Civil, family, and probate PDF parser for stable current URLs. | Discovery and parse tests. |
 | Placer | Civil law-and-motion PDF parser. | Discovery and parse tests. |
 | Plumas | Department 2 PDF parser. | Parse tests. |
 | Riverside | Regional/department numbered-table PDF parser. | Discovery and parse tests. |
+| San Benito | Homepage/news PDF parser. | Fixture-backed parse coverage plus full suite. |
 | San Bernardino | Legacy civil-table PDF parser. | Parse tests. |
 | San Francisco | Unified Family Court PDF parser for departments 403, 404, and 414. | Discovery and parse tests. |
+| San Luis Obispo | Recursive public Google Drive PDF parser. | Fixture-backed parse coverage plus full suite. |
+| San Mateo | Weekday civil/probate/family PDF parser for web.sanmateocourt.org calendars. | Fixture-backed parse coverage plus full suite. |
+| Santa Barbara | Drupal tentative-ruling detail-page HTML parser. | Fixture-backed parse coverage plus full suite. |
 | Santa Clara | Department-page PDF parser. | Parse tests. |
+| Santa Cruz | Public Google Drive weekday PDF parser. | Fixture-backed parse coverage plus full suite. |
 | Shasta | Department PDF parser. | Parse tests. |
+| Sierra | Public Google Drive category PDF parser; blank/stale small-county calendars are tolerated. | Fixture-backed parse coverage plus full suite. |
 | Solano | Civil/probate PDF parser. | Parse tests. |
+| Sonoma | Drupal civil/family/probate HTML page parser. | Fixture-backed parse coverage plus full suite. |
+| Stanislaus | Drupal civil/family/probate-note HTML page parser. | Fixture-backed parse coverage plus full suite. |
+| Tulare | Mixed civil HTML page parser plus probate PDF parser. | Fixture-backed parse coverage plus full suite. |
 | Tuolumne | Consolidated tentative-ruling PDF parser. | Parse tests. |
+| Ventura | Public date-search ViewFile PDF parser. | Fixture-backed parse coverage plus full suite. |
 
 ## Implemented Capture Sources
 
@@ -55,32 +70,32 @@ Current registered parsers:
 | Solano | `https://solano.courts.ca.gov/divisions/civil-court/tentative-rulings` | Static civil/probate page with direct department PDFs. | Capture the ruling PDFs and skip request-for-argument forms. | Parser registered. |
 | Tuolumne | `https://www.tuolumne.courts.ca.gov/online-services/tentative-rulings-and-case-notes` | Static tentative-ruling and Case Notes links. | Capture tentative-ruling PDFs and Case Notes, tagged by division hint. | Parser registered. |
 
-## Daily Capture Sources Pending Parsers
+## Daily Capture Sources Added Since The Initial Parser Pass
 
 The 2026-06-23 live-capture expansion registers these public sources with
-`ingest.backfill --county all --live`. These counties are now raw-archived
-daily, but they do not yet publish parsed rows in `data/<county>/rulings.parquet`
-until parser fixtures and county parsers are added.
+`ingest.backfill --county all --live`. Most now publish normalized rows in
+`data/<county>/rulings.parquet`; the remaining rows in this table are the real
+capture/parser gaps to keep working.
 
 | County | Raw surface now captured | Archive type | Parser status |
 |---|---|---|---|
-| Butte | Static Drupal page with direct court-hosted PDFs. | PDF source captures. | Pending. |
-| Imperial | Static tentative-ruling page/news page with direct PDFs. | PDF source captures. | Pending. |
-| Los Angeles | Public WebForms department/date result pages. | HTML page captures. | Pending HTML parser. |
-| Marin | Static Drupal page with direct PDFs. | PDF source captures. | Pending; recheck after July 2, 2026 access change. |
-| Monterey | Public JSON API with base64 PDF document contents. | PDF source captures decoded from API JSON. | Pending. |
-| Napa | Public Google Drive folder. | PDF source captures through shared Drive adapter. | Pending. |
-| San Benito | Homepage/news tentative-ruling PDF links. | PDF source captures. | Pending. |
-| San Luis Obispo | Public Google Drive department/probate folders. | Recursive PDF source captures through shared Drive adapter. | Pending. |
-| San Mateo | Static category pages with weekday PDFs on `web.sanmateocourt.org`. | PDF source captures. | Pending. |
-| Santa Barbara | Public Drupal tentative-rulings index/detail pages. | HTML page captures. | Pending HTML parser. |
-| Santa Cruz | Official page links public Google Drive weekday PDFs. | PDF source captures through shared Drive adapter. | Pending. |
-| Sierra | Official page links public Google Drive category PDFs. | PDF source captures through shared Drive adapter. | Pending. |
-| Sonoma | Public Drupal civil/family/probate tentative-ruling pages. | HTML page captures. | Pending HTML parser. |
-| Stanislaus | Public Drupal civil/family/probate-note pages. | HTML page captures. | Pending HTML parser. |
-| Tulare | Civil tentative-ruling page plus probate PDFs. | HTML page capture plus PDF source captures. | Pending mixed HTML/PDF parser. |
-| Ventura | Public date-search form with ViewFile PDFs. | PDF source captures. | Pending. |
-| Yolo | Public tentative-ruling and probate-note calendar pages. | HTML page captures. | Pending direct document-node/PDF discovery and parser. |
+| Butte | Static Drupal page with direct court-hosted PDFs. | PDF source captures. | Parser registered. |
+| Imperial | Static tentative-ruling page/news page with direct PDFs when posted. | PDF source captures. | Pending representative parsed rows; live surface appears sparse/stale. |
+| Los Angeles | Public WebForms department/date result pages. | HTML page captures. | Page parser registered. |
+| Marin | Static Drupal page with direct PDFs. | PDF source captures. | Parser registered; recheck after July 2, 2026 access change. |
+| Monterey | Public JSON API with base64 PDF document contents. | PDF source captures decoded from API JSON. | Parser registered. |
+| Napa | Public Google Drive folder. | PDF source captures through shared Drive adapter. | Parser registered. |
+| San Benito | Homepage/news tentative-ruling PDF links. | PDF source captures. | Parser registered. |
+| San Luis Obispo | Public Google Drive department/probate folders. | Recursive PDF source captures through shared Drive adapter. | Parser registered. |
+| San Mateo | Static category pages with weekday PDFs on `web.sanmateocourt.org`. | PDF source captures. | Parser registered. |
+| Santa Barbara | Public Drupal tentative-rulings index/detail pages. | HTML page captures. | Page parser registered. |
+| Santa Cruz | Official page links public Google Drive weekday PDFs. | PDF source captures through shared Drive adapter. | Parser registered. |
+| Sierra | Official page links public Google Drive category PDFs. | PDF source captures through shared Drive adapter. | Parser registered. |
+| Sonoma | Public Drupal civil/family/probate tentative-ruling pages. | HTML page captures. | Page parser registered. |
+| Stanislaus | Public Drupal civil/family/probate-note pages. | HTML page captures. | Page parser registered. |
+| Tulare | Civil tentative-ruling page plus probate PDFs. | HTML page capture plus PDF source captures. | Mixed page/PDF parsers registered. |
+| Ventura | Public date-search form with ViewFile PDFs. | PDF source captures. | Parser registered. |
+| Yolo | Public tentative-ruling and probate-note calendar pages. | HTML page captures plus document/PDF probing. | Pending parser until live pages expose ruling documents instead of shell pages only. |
 
 ## Implemented Surface Gap Notes
 
@@ -110,44 +125,29 @@ scope unless there is a lawful public access path.
 | Legacy / archived public PDFs | Amador post-02/15/2022. | Legacy PDFs/Wayback are automatic; routine daily live checks are disabled because current access appears portal/account-based rather than public static PDFs. | If a public unauthenticated portal path appears, automate it with Playwright; otherwise keep to legacy public archive/Wayback. |
 | Word calendars | Nevada `.docx` links. | PDF and supported `.docx` links are automatic. | Retain original DOCX bytes and add fixtures before expanding parser coverage for unsupported Word layouts. |
 | Browser-challenged discovery | Riverside landing page. | Landing-page discovery uses a reader fallback because basic `requests` receives Cloudflare 403; source PDFs are still fetched directly from the court host. | Keep the reader fallback scoped to discovery. If it breaks, use a headed browser scan to refresh court-hosted PDF links. |
-| Static court-hosted PDFs / HTML | Butte, Imperial, Marin, San Benito, San Mateo, Santa Barbara, Sonoma, Stanislaus, Tulare. | Daily raw capture is implemented. PDF counties archive source PDFs; HTML counties archive page snapshots. | Add parser fixtures and parsers. |
-| Google Drive files/folders | Napa, San Luis Obispo, Santa Cruz, Sierra. | Daily raw capture is implemented through a shared public Drive adapter. | Add parser fixtures and parsers; keep Drive metadata tests current. |
-| ASP.NET / token forms | Los Angeles, Ventura. | Daily raw capture is implemented for public no-login paths. Los Angeles archives result HTML pages; Ventura archives ViewFile PDFs. | Add parsers. Use Playwright only if token/form behavior changes. |
-| Public API-backed portal | Monterey. | Daily raw capture is implemented. API JSON document responses are decoded into archived PDF bytes. | Add parser fixtures and parser; keep date-window/API drift tests current. |
+| Static court-hosted PDFs / HTML | Butte, Imperial, Marin, San Benito, San Mateo, Santa Barbara, Sonoma, Stanislaus, Tulare. | Daily raw capture is implemented. Parsers are registered except Imperial, which needs representative current PDF rows. | Keep parser fixtures current and recheck Imperial for new postings. |
+| Google Drive files/folders | Napa, San Luis Obispo, Santa Cruz, Sierra. | Daily raw capture is implemented through a shared public Drive adapter, and parsers are registered. | Keep Drive metadata tests current and preserve file-ID context. |
+| ASP.NET / token forms | Los Angeles, Ventura. | Daily raw capture is implemented for public no-login paths. Los Angeles archives result HTML pages; Ventura archives ViewFile PDFs; both parse. | Use Playwright only if token/form behavior changes. |
+| Public API-backed portal | Monterey. | Daily raw capture is implemented. API JSON document responses are decoded into archived PDF bytes and parsed. | Keep date-window/API drift tests current. |
 | ROA / case-document portals | San Diego, San Joaquin. | Not implemented. San Diego appears public but lacks a simple countywide feed. San Joaquin is case-number or portal constrained. | Use only public calendar/case leads; keep terms/cookie handling explicit. Treat broad capture as higher risk than static pages. |
 | SharePoint folder | Kings. | Not implemented. The official link redirects toward Microsoft login in basic requests. | Try anonymous SharePoint sharing APIs first; if login is required, mark blocked absent a lawful public access path. |
 | Login-backed Tyler / re:Search / JournalTech | Alameda, Mendocino, Sacramento. | Blocked for unattended public capture. | Use only a user-authorized desktop session for manual research unless a public export path is confirmed. |
-| Calendar/document-node pages | Yolo. | Daily page capture is implemented for official tentative/probate calendar pages, but direct document-node/PDF discovery is still pending. | Add document-node discovery if the calendar JS exposes stable file nodes. |
+| Calendar/document-node pages | Yolo. | Daily page capture and document/PDF probing are implemented, but the current live run exposed only shell pages and no broad ruling refs. | Add a parser when live captures include actual ruling documents or stable document-node content. |
 | Adjacent probate notes only | Yuba. | Probate-note PDFs are public, but the court says they are not tentative rulings; civil tentative implementation has not gone live. | Optional probate-notes parser only if the project wants adjacent notes; do not count as civil tentative-ruling coverage. |
-| No public tentative surface | Alpine, Colusa, Del Norte, Glenn, Humboldt, Inyo, Kern, Lake, Lassen, Madera, Mariposa, Modoc, Mono, Siskiyou, Sutter, Tehama, Trinity. | No parser target as of 2026-06-23. Several courts expressly say no tentatives; others expose only calendars or case portals. | Store as monitored negatives and recheck on a schedule. Do not scrape calendars as if they were rulings. |
+| No public tentative surface | Alpine, Colusa, Del Norte, Glenn, Humboldt, Inyo, Kern, Lake, Lassen, Madera, Mariposa, Modoc, Mono, Siskiyou, Sutter, Tehama, Trinity. | No parser target as of 2026-06-24. Several courts expressly say no tentatives; others expose only calendars or case portals. | Store as monitored negatives and recheck on a schedule. Do not scrape calendars as if they were rulings. |
 
 ## Non-Implemented County Surface Audit
 
 This audit covers every California county that does not already have a
-registered parser above, current as of 2026-06-23.
+registered parser above, current as of 2026-06-24.
 
 ### Public Broad Extractable Surfaces
 
 | County | Official surface | Structure | Capture / parser plan | Risk |
 |---|---|---|---|---|
-| Butte | [Tentative Rulings](https://www.butte.courts.ca.gov/online-services/tentative-rulings) | Static Drupal page with direct court-hosted PDFs under `/system/files/tentative-rulings/`. | Scrape landing page, capture every PDF href, hash bytes, parse PDFs, and tag civil/probate/exchange from section text and filename. | Low to medium. |
-| Imperial | [Tentative Rulings](https://www.imperial.courts.ca.gov/general-information/tentative-rulings) | Static HTML listing with direct PDFs. | Crawl page, extract metadata and PDF links, parse or OCR PDFs. | Low technical risk; medium coverage risk because the live page appears sparse/stale. |
-| Los Angeles | [Civil tentative rulings](https://www.lacourt.ca.gov/tentativeRulingNet/ui/main.aspx?casetype=civil) | ASP.NET/WebForms with location/department/date or case-number search. | Sessioned GET, parse `__VIEWSTATE` / `__EVENTVALIDATION`, POST selected department/date, parse result HTML. | Medium. |
-| Marin | [Tentative Rulings](https://www.marin.courts.ca.gov/online-services/tentative-rulings) | Static Drupal page with direct PDFs. | Capture all `/system/files/tentative-rulings/*.pdf` links after 2 p.m.; parse PDFs by civil/family/probate section. | Low now; recheck after the announced July 2, 2026 access change. |
-| Monterey | [Tentative Rulings](https://www.monterey.courts.ca.gov/online-services/tentative-rulings) and [portal](https://portal.monterey.courts.ca.gov/calendars/tentative-rulings) | Angular portal backed by public JSON and base64 PDF endpoints. | Query `https://api.monterey.courts.ca.gov/api/tentativerulings/date?date=YYYY-MM-DD`, then fetch `/api/tentativerulings/{caseId}/doc/{documentId}`. | Medium because the API is observed, not documented. |
-| Napa | [Tentative Rulings](https://www.napa.courts.ca.gov/online-services/tentative-rulings) | Public Google Drive folder of PDFs. | Add Drive folder adapter, enumerate file IDs, download PDFs, hash file ID plus bytes, parse PDFs. | Medium Drive dependency. |
-| San Benito | [Court homepage](https://www.sanbenito.courts.ca.gov/) and [tentative-rulings notice](https://www.sanbenito.courts.ca.gov/news/tentative-rulings) | Static page links to direct court-hosted PDFs under `/system/files/tentative-rulings/`. | Scrape homepage tentative section first, then the notice page; normalize relative PDF URLs and parse PDFs. | Low. |
+| Imperial | [Tentative Rulings](https://www.imperial.courts.ca.gov/general-information/tentative-rulings) | Static HTML listing with direct PDFs when posted. | Continue daily capture and add a parser when representative current PDF rows appear. | Low technical risk; medium coverage risk because the live page appears sparse/stale. |
 | San Diego | [Civil tentative rulings](https://www.sdcourt.ca.gov/sdcourt/civil2/civiltentativerulings), [probate tentative rulings](https://www.sdcourt.ca.gov/sdcourt/probate2/tentativerulings), [ROA portal](https://odyroa.sdcourt.ca.gov/) | Register of Actions portal/search; tentative rulings are ROA documents. | Use public date/case leads, then ROA case pages and tentative-ruling document endpoints; parse PDFs. | Medium-high; no simple countywide list and terms/cookies must be handled carefully. |
-| San Luis Obispo | [Tentative Rulings](https://www.slo.courts.ca.gov/online-services/tentative-rulings) | Public Google Drive department/probate folders. | Add recursive Drive folder adapter and parse PDFs by source folder/department. | Medium Drive dependency. |
-| San Mateo | [Tentative Rulings](https://sanmateo.courts.ca.gov/online-services/tentative-rulings) | Static category pages with weekday direct PDFs on `web.sanmateocourt.org`. | Scrape category pages, follow weekday PDF links, hash overwritten PDFs daily, parse by category and weekday. | Low; retained five calendar days. |
-| Santa Barbara | [Tentative Rulings](https://www.santabarbara.courts.ca.gov/online-services/tentative-rulings) and [query/list endpoint](https://www.santabarbara.courts.ca.gov/tentative-rulings) | Drupal/static HTML search, judge filters, paginated lists, and detail pages. | Enumerate judge filters/pages, follow detail links, and parse fields from detail HTML. | Low. |
-| Santa Cruz | [Civil Tentative Rulings](https://www.santacruz.courts.ca.gov/online-services/civil-tentative-rulings) | Official page links public Google Drive weekday PDFs. | Convert Drive file IDs to download URLs, parse/OCR PDFs, split by weekday and case headings. | Medium Drive dependency. |
-| Sierra | [Tentative Rulings](https://www.sierra.courts.ca.gov/online-services/tentative-rulings) | Official page links public Google Drive PDFs for law and motion, probate, CMC, and guardianships. | Download stable Drive file IDs, parse/OCR PDFs by category, and tolerate blank/stale small-county calendars. | Medium-low. |
-| Sonoma | [Tentative Rulings](https://sonoma.courts.ca.gov/online-services/tentative-rulings) | Static Drupal tree for civil, family, and probate pages. | Crawl index pages, follow child calendar links, parse heading/date/case blocks, and hash page snapshots. | Medium mixed HTML/page structure. |
-| Stanislaus | [Tentative Rulings](https://www.stanislaus.courts.ca.gov/online-services/tentative-rulings) | Static Drupal pages with inline civil/family rulings and probate notes. | Fetch civil/family/probate pages and split by date, department, and case-number patterns. | Medium. |
-| Tulare | [Tentative Rulings](https://www.tulare.courts.ca.gov/general-information/tentative-rulings) | Static HTML civil blocks plus direct probate PDFs. | Snapshot HTML page, parse "Current Tentative Rulings" blocks, and hash/download Visalia and SCJC probate PDFs. | Low. |
-| Ventura | [Tentative Rulings & Probate Notes](https://www2.ventura.courts.ca.gov/CaseInquiry/TentativeRulings) | ASP.NET/session POST form with result rows linking direct PDFs. | Sessioned GET, extract anti-forgery token, POST hearing date, parse result table, download `/CaseInquiry/ViewFile/<id>` PDFs. | Medium. |
-| Yolo | [Tentative Rulings Calendar](https://www.yolo.courts.ca.gov/online-services/tentative-rulings-calendar) and [Probate Note Calendar](https://www.yolo.courts.ca.gov/online-services/probate-note-calendar) | Drupal document nodes and direct date-coded PDFs such as `ATO-TEN-YYMMDD.pdf` and `ATO-PRB-YYMMDD.pdf`. | Prefer document-node discovery plus direct filename probing for date windows. | Medium; some filenames include suffixes and lightweight HTML may omit links. |
+| Yolo | [Tentative Rulings Calendar](https://www.yolo.courts.ca.gov/online-services/tentative-rulings-calendar) and [Probate Note Calendar](https://www.yolo.courts.ca.gov/online-services/probate-note-calendar) | Drupal document nodes and direct date-coded PDFs such as `ATO-TEN-YYMMDD.pdf` and `ATO-PRB-YYMMDD.pdf`. | Keep daily page capture and document/PDF probing; add parser once current captures expose actual ruling documents rather than shell pages. | Medium; some filenames include suffixes and lightweight HTML may omit links. |
 
 ### Online But Blocked, Partial, Or Not Broadly Listable
 
@@ -184,18 +184,17 @@ registered parser above, current as of 2026-06-23.
 
 ## Implementation Order
 
-1. Keep daily direct-HTTP capture running for implemented `LANDING_PAGES`.
-2. Add parsers only after representative fixtures and parser tests exist.
-3. Add parsers for the new daily-capture counties, starting with PDF sources
-   that have stable layouts: Butte, Imperial, Marin, San Benito, San Mateo,
-   Santa Cruz, Sierra, Ventura, Monterey, Napa, and San Luis Obispo.
-4. Add HTML parsers for Los Angeles, Santa Barbara, Sonoma, Stanislaus, Tulare
-   civil, and Yolo once representative page snapshots are in fixtures.
-5. Finish Yolo direct document-node/PDF discovery if a stable public route is
-   confirmed.
-6. Triage San Diego separately because public ROA access appears possible but
+1. Keep the scheduled live capture, parse, slice, and LIVE refresh workflow
+   running for all implemented `LANDING_PAGES`.
+2. Keep the weekly bounded Wayback pass running for exact and reverse-engineered
+   URL families; widen limits only after CDX reliability is confirmed.
+3. Add an Imperial parser only after a representative current PDF with real rows
+   appears in archive.
+4. Add a Yolo parser only after the live document-node/PDF probing captures
+   actual ruling documents rather than shell pages.
+5. Triage San Diego separately because public ROA access appears possible but
    not broad-list friendly.
-7. Treat Alameda, Kings, Mendocino, Sacramento, and broad San Joaquin capture as
+6. Treat Alameda, Kings, Mendocino, Sacramento, and broad San Joaquin capture as
    blocked or case-led until a lawful public access path is confirmed.
-8. Keep no-surface counties as monitored negatives; do not scrape calendars as
+7. Keep no-surface counties as monitored negatives; do not scrape calendars as
    tentative rulings.

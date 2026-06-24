@@ -6,6 +6,7 @@ import re
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from counties.common import PageRef, absolute_url, clean_text, extract_links
+from counties.new_county_parsers import parse_santa_barbara_page as parse_page_capture
 
 BASE = "https://www.santabarbara.courts.ca.gov"
 LANDING_PAGES = [

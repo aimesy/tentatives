@@ -627,6 +627,132 @@ def parse_sierra(
     ]
 
 
+def _marin_party(text: str) -> str:
+    lines = [inline(line) for line in clean_lines(text).splitlines() if inline(line)]
+    return " ".join(lines[:2])
+
+
+def parse_marin(
+    pdf_bytes: bytes,
+    source_url: str,
+    source_sha256: str | None = None,
+    dept_hint: str | None = None,
+    division_hint: str | None = None,
+) -> list[Ruling]:
+    sha = source_sha(pdf_bytes, source_sha256)
+    pages, plain, offsets = _pdf_text(pdf_bytes)
+    if not plain:
+        return []
+    rulings: list[Ruling] = []
+    form_anchors = list(
+        re.finditer(
+            r"(?im)^DATE:\s*(?P<date>\d{1,2}/\d{1,2}/\d{2,4}).{0,80}?"
+            r"DEPT:\s*(?P<dept>[A-Z0-9]+).{0,80}?C\s*ASE\s+NO:\s*(?P<num>[A-Z ]+\d+)",
+            plain,
+        )
+    )
+    for i, anchor in enumerate(form_anchors):
+        end = form_anchors[i + 1].start() if i + 1 < len(form_anchors) else len(plain)
+        block = clean_lines(plain[anchor.start() : end])
+        ruling_match = re.search(r"(?im)^RULING\s*(?P<body>.*)", block, re.DOTALL)
+        if not ruling_match:
+            continue
+        hearing_date = parse_date_value(anchor.group("date"))
+        if not hearing_date:
+            continue
+        case_number = inline(anchor.group("num")).replace(" ", "")
+        motion_match = re.search(
+            r"NATURE OF PROCEEDINGS:\s*(?P<motion>.*?)(?=\n\s*RULING\b)",
+            block,
+            re.IGNORECASE | re.DOTALL,
+        )
+        plaintiff = re.search(
+            r"PLAINTIFFS?:\s*(?P<party>.*?)(?=\n\s*vs\.)",
+            block,
+            re.IGNORECASE | re.DOTALL,
+        )
+        defendant = re.search(
+            r"DEFENDANTS?:\s*(?P<party>.*?)(?=\n\s*NATURE OF PROCEEDINGS:)",
+            block,
+            re.IGNORECASE | re.DOTALL,
+        )
+        petitioner = re.search(
+            r"PETITIONER:\s*(?P<party>.*?)(?=\n\s*and\b)",
+            block,
+            re.IGNORECASE | re.DOTALL,
+        )
+        respondent = re.search(
+            r"RESPONDENT:\s*(?P<party>.*?)(?=\n\s*NATURE OF PROCEEDINGS:)",
+            block,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if plaintiff and defendant:
+            case_title = f"{_marin_party(plaintiff.group('party'))} v. {_marin_party(defendant.group('party'))}"
+        elif petitioner and respondent:
+            case_title = f"{_marin_party(petitioner.group('party'))} and {_marin_party(respondent.group('party'))}"
+        else:
+            case_title = case_number
+        page_start, page_end = _page_span(offsets, anchor.start(), end)
+        rulings.append(
+            make_ruling(
+                county="marin",
+                source_sha256=sha,
+                source_url=source_url,
+                parser_version="marin-v1",
+                style="marin-court-form",
+                index=len(rulings) + 1,
+                case_number=case_number,
+                case_title=case_title,
+                hearing_date=hearing_date,
+                full_text=block,
+                body_text=ruling_match.group("body"),
+                motion_type=motion_match.group("motion") if motion_match else "",
+                division=division_hint or _case_division(case_number, "Civil"),
+                dept=dept_hint or anchor.group("dept"),
+                page_start=page_start,
+                page_end=page_end,
+            )
+        )
+
+    probate_date = find_date(plain[:1200])
+    probate_anchors = list(re.finditer(r"(?m)^(?P<num>(?:PR|PRO)\d{7})\s+(?P<title>.+)$", plain))
+    if probate_date and probate_anchors:
+        dept = dept_hint
+        dept_match = re.search(r"Department\s+([A-Z0-9]+)", plain[:1200], re.IGNORECASE)
+        if dept_match:
+            dept = dept_match.group(1)
+        for i, anchor in enumerate(probate_anchors):
+            end = probate_anchors[i + 1].start() if i + 1 < len(probate_anchors) else len(plain)
+            block = clean_lines(plain[anchor.start() : end])
+            ruling_match = re.search(r"\bRuling\.\s*(?P<body>.*)", block, re.IGNORECASE | re.DOTALL)
+            if not ruling_match:
+                continue
+            before = block[: ruling_match.start()]
+            motion_lines = [inline(line) for line in before.splitlines()[1:] if inline(line)]
+            page_start, page_end = _page_span(offsets, anchor.start(), end)
+            rulings.append(
+                make_ruling(
+                    county="marin",
+                    source_sha256=sha,
+                    source_url=source_url,
+                    parser_version="marin-v1",
+                    style="marin-probate-calendar",
+                    index=len(rulings) + 1,
+                    case_number=anchor.group("num"),
+                    case_title=anchor.group("title"),
+                    hearing_date=probate_date,
+                    full_text=block,
+                    body_text=ruling_match.group("body"),
+                    motion_type=" ".join(motion_lines),
+                    division=division_hint or "Probate",
+                    dept=dept,
+                    page_start=page_start,
+                    page_end=page_end,
+                )
+            )
+    return rulings
+
+
 def parse_san_mateo(
     pdf_bytes: bytes,
     source_url: str,
@@ -648,7 +774,17 @@ def parse_san_mateo(
     dept_match = re.search(r"Department\s+(\d+)", plain[:1500], re.IGNORECASE)
     if dept_match:
         dept = dept_match.group(1)
-    anchors = list(re.finditer(r"(?m)^\s*(?P<num>\d{2}-(?:CIV|CLJ|PRO)-\d{5})\s*$", plain))
+    anchor_specs: list[tuple[int, re.Match[str], str | None]] = []
+    seen_starts: set[int] = set()
+    for anchor in re.finditer(r"(?m)^\s*(?P<num>\d{2}-(?:CIV|CLJ|PRO)-\d{5})\s*$", plain):
+        anchor_specs.append((anchor.start(), anchor, None))
+        seen_starts.add(anchor.start())
+    for anchor in re.finditer(r"(?m)^\s*(?P<num>\d{2}-(?:CIV|CLJ|PRO)-\d{5})\s+(?P<title>.+)$", plain):
+        if anchor.start() not in seen_starts:
+            anchor_specs.append((anchor.start(), anchor, anchor.group("title")))
+            seen_starts.add(anchor.start())
+    anchors = [anchor for _start, anchor, title_hint in sorted(anchor_specs, key=lambda item: item[0])]
+    title_hints = {anchor.start(): title_hint for _start, anchor, title_hint in anchor_specs}
     rulings: list[Ruling] = []
     for i, anchor in enumerate(anchors):
         end = anchors[i + 1].start() if i + 1 < len(anchors) else len(plain)
@@ -656,14 +792,46 @@ def parse_san_mateo(
         ruling_match = re.search(r"TENTATIVE RULING:\s*(?P<body>.*)", block, re.IGNORECASE | re.DOTALL)
         if not ruling_match:
             continue
-        before = [inline(line) for line in block[: ruling_match.start()].splitlines() if inline(line)]
+        before_raw = block[: ruling_match.start()].splitlines()
+        before = [inline(line) for line in before_raw if inline(line)]
         title = ""
-        for line in before[1:]:
-            if re.match(r"^(LINE \d+|\d{1,2}:\d{2}\s*[AP]M?)$", line, re.IGNORECASE):
-                continue
-            title = line
-            break
-        motion = " ".join(before[-3:]) if len(before) > 3 else ""
+        title_hint = title_hints.get(anchor.start())
+        if title_hint:
+            first_title = inline(title_hint)
+            if "-PRO-" in anchor.group("num"):
+                first_title = re.split(
+                    r"\s+(?:NOTICE|FIRST|PETITION|MOTION|ORDER|ACCOUNT|REPORT)\b",
+                    first_title,
+                    maxsplit=1,
+                )[0]
+            title_parts = [first_title] if first_title else []
+            case_line_seen = False
+            for raw_line in before_raw:
+                line = inline(raw_line)
+                if not line:
+                    if case_line_seen:
+                        break
+                    continue
+                if not case_line_seen:
+                    case_line_seen = anchor.group("num") in line
+                    continue
+                if "-PRO-" in anchor.group("num"):
+                    break
+                title_parts.append(line)
+            title = " ".join(title_parts)
+        if not title:
+            for line in before[1:]:
+                if re.match(r"^(LINE \d+|\d{1,2}:\d{2}\s*[AP]M?)$", line, re.IGNORECASE):
+                    continue
+                title = line
+                break
+        motion = ""
+        before_text = block[: ruling_match.start()].rstrip()
+        paragraphs = [inline(part) for part in re.split(r"\n\s*\n", before_text) if inline(part)]
+        if paragraphs:
+            motion = paragraphs[-1]
+            if anchor.group("num") in motion and len(paragraphs) > 1:
+                motion = paragraphs[-2]
         page_start, page_end = _page_span(offsets, anchor.start(), end)
         rulings.append(
             make_ruling(
@@ -786,3 +954,163 @@ def parse_stanislaus_page(html: str, capture: dict) -> list[Ruling]:
             )
         )
     return rulings
+
+
+def parse_sonoma_page(html: str, capture: dict) -> list[Ruling]:
+    sha = capture.get("source_sha256")
+    source_url = capture.get("source_url") or capture.get("url") or ""
+    if not sha:
+        return []
+    text = html_to_text(html)
+    stop = text.find("Was this helpful?")
+    if stop != -1:
+        text = text[:stop]
+    hearing_date = find_date(text)
+    if not hearing_date:
+        return []
+    case_num = r"(?:SCV|SPR|PR|FL|[0-9]{2}[A-Z]{2,3})[ -]?\d{4,}"
+    anchor_specs: list[dict] = []
+    seen: set[int] = set()
+    for match in re.finditer(rf"(?m)^(?P<num>{case_num}),?[ \t]+(?P<title>.+)$", text):
+        if match.start() in seen:
+            continue
+        seen.add(match.start())
+        anchor_specs.append(
+            {
+                "start": match.start(),
+                "match": match,
+                "num": match.group("num"),
+                "title": match.group("title"),
+            }
+        )
+    for match in re.finditer(rf"(?m)^(?P<num>{case_num})\s*$", text):
+        if match.start() in seen:
+            continue
+        prefix = text[: match.start()]
+        prev_lines = [line for line in prefix.splitlines() if inline(line)]
+        title = prev_lines[-1] if prev_lines else match.group("num")
+        title_start = prefix.rfind(title) if title else match.start()
+        start = title_start if title_start != -1 else match.start()
+        seen.add(match.start())
+        anchor_specs.append(
+            {
+                "start": start,
+                "match": match,
+                "num": match.group("num"),
+                "title": title,
+            }
+        )
+    anchors = sorted(anchor_specs, key=lambda item: item["start"])
+    rulings: list[Ruling] = []
+    for i, anchor in enumerate(anchors):
+        end = anchors[i + 1]["start"] if i + 1 < len(anchors) else len(text)
+        block = clean_lines(text[anchor["start"] : end])
+        if not block:
+            continue
+        ruling_match = re.search(r"TENTATIVE RULING:\s*(?P<body>.*)", block, re.IGNORECASE | re.DOTALL)
+        if ruling_match:
+            body = ruling_match.group("body")
+            before = block[: ruling_match.start()]
+            before_lines = [inline(line) for line in before.splitlines() if inline(line)]
+            motion = ""
+            for line in reversed(before_lines):
+                if anchor["num"] in line or line == inline(anchor["title"]):
+                    continue
+                motion = line
+                break
+            style = "sonoma-html-ruling"
+        else:
+            body = block
+            motion = ""
+            style = "sonoma-html-list"
+        division = "Civil"
+        low_url = source_url.lower()
+        if "probate" in low_url or anchor["num"].upper().startswith(("PR", "SPR")):
+            division = "Probate"
+        elif "family" in low_url or anchor["num"].upper().startswith("FL"):
+            division = "Family Law"
+        rulings.append(
+            make_ruling(
+                county="sonoma",
+                source_sha256=sha,
+                source_url=source_url,
+                parser_version="sonoma-html-v1",
+                style=style,
+                index=len(rulings) + 1,
+                case_number=anchor["num"].replace(" ", ""),
+                case_title=anchor["title"],
+                hearing_date=hearing_date,
+                full_text=block,
+                body_text=body,
+                motion_type=motion,
+                division=division,
+            )
+        )
+    return rulings
+
+
+def parse_santa_barbara_page(html: str, capture: dict) -> list[Ruling]:
+    sha = capture.get("source_sha256")
+    source_url = capture.get("source_url") or capture.get("url") or ""
+    if not sha or "/tentative-ruling/" not in source_url:
+        return []
+    text = html_to_text(html)
+    start = text.rfind("Tentative Ruling:")
+    if start == -1:
+        return []
+    stop = text.find("Was this helpful?", start)
+    section = clean_lines(text[start : stop if stop != -1 else len(text)])
+    lines = [inline(line) for line in section.splitlines() if inline(line)]
+    if not lines or not lines[0].startswith("Tentative Ruling:"):
+        return []
+    title = inline(lines[0].split(":", 1)[1])
+    labels = {
+        "Case Number",
+        "Case Type",
+        "Hearing Date / Time",
+        "Nature of Proceedings",
+        "Tentative Ruling",
+        "Judges",
+    }
+
+    def field(label: str) -> str:
+        try:
+            idx = lines.index(label)
+        except ValueError:
+            return ""
+        values: list[str] = []
+        for line in lines[idx + 1 :]:
+            if line in labels:
+                break
+            values.append(line)
+        return "\n".join(values)
+
+    case_number = field("Case Number")
+    hearing_date = parse_date_value(field("Hearing Date / Time"))
+    ruling_body = field("Tentative Ruling")
+    if not case_number or not hearing_date or not ruling_body:
+        return []
+    case_type = field("Case Type")
+    judges = field("Judges")
+    dept = None
+    dept_match = re.search(r"Dept\.\s*([^\n]+)", judges, re.IGNORECASE)
+    if dept_match:
+        dept = inline(dept_match.group(1))
+    return [
+        make_ruling(
+            county="santa-barbara",
+            source_sha256=sha,
+            source_url=source_url,
+            parser_version="santa-barbara-html-v1",
+            style="santa-barbara-detail-page",
+            index=1,
+            case_number=case_number,
+            case_title=title,
+            hearing_date=hearing_date,
+            full_text=section,
+            body_text=ruling_body,
+            motion_type=field("Nature of Proceedings"),
+            division=case_type or None,
+            dept=dept,
+        )
+    ]
