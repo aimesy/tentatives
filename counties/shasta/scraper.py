@@ -104,8 +104,8 @@ CASE_NUMBER_ANCHOR_RE = re.compile(
 )
 # Legacy anchor for dept-11/12 PDFs: "(Case No. NNNNNN)" on its own line.
 LEGACY_CASE_NUMBER_ANCHOR_RE = re.compile(
-    rf"\(Case\s+No\.?\s+(?P<num>{_CASE_NUMBER_INNER})\)",
-    re.IGNORECASE,
+    rf"^\s*\(Case\s+No\.?\s+(?P<num>{_CASE_NUMBER_INNER})\)\s*$",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 # Page-1 header bits.
@@ -346,6 +346,38 @@ def _extract_title_above(plain: str, header_start: int) -> tuple[str, int]:
     return _normalize_text(" ".join(" ".join(title_lines).split())), title_start
 
 
+def _extract_legacy_vertical_title(plain: str, header_start: int) -> tuple[str, int]:
+    entries: list[tuple[str, int]] = []
+    pos = len(plain[:header_start])
+    for raw in reversed(plain[:header_start].splitlines(keepends=True)):
+        pos -= len(raw)
+        s = raw.strip()
+        if not s:
+            if entries:
+                break
+            continue
+        if PAGE_NUMBER_RE.match(s) or HEADER_DEPT_RE.match(s) or SECTION_TIME_RE.match(s):
+            if entries:
+                break
+            continue
+        if re.search(r"Law and Motion Calendar|ALL MATTERS|Department\s+\d+|^\w+ \d{1,2}, \d{4}", s, re.IGNORECASE):
+            if entries:
+                break
+            continue
+        entries.append((_normalize_text(s), pos))
+        if len(entries) >= 6:
+            break
+
+    entries.reverse()
+    for idx in range(len(entries) - 2):
+        left, left_pos = entries[idx]
+        middle, _middle_pos = entries[idx + 1]
+        right, _right_pos = entries[idx + 2]
+        if re.fullmatch(r"v\.?", middle, re.IGNORECASE):
+            return f"{left} v. {right}", left_pos
+    return "", header_start
+
+
 def _normalize_text(s: str) -> str:
     """Repair pypdf's habit of inserting a space mid-word (e.g. 'CONSERV ATORSHIP')."""
     # Collapse split words like "CONSERV ATORSHIP" -> "CONSERVATORSHIP".
@@ -414,14 +446,28 @@ def parse(
                 break
         return page
 
-    # Modern anchors plus legacy "(Case No. NNN)" anchors.
+    # Prefer modern "CASE NUMBER:" anchors when present. The legacy bare
+    # "(Case No. NNN)" form is otherwise too easy to confuse with body
+    # citations in modern packets.
+    modern_anchors = list(CASE_NUMBER_ANCHOR_RE.finditer(plain))
+    legacy_doc = not modern_anchors
     anchors = sorted(
-        list(CASE_NUMBER_ANCHOR_RE.finditer(plain))
-        + list(LEGACY_CASE_NUMBER_ANCHOR_RE.finditer(plain)),
+        modern_anchors
+        + (list(LEGACY_CASE_NUMBER_ANCHOR_RE.finditer(plain)) if legacy_doc else []),
         key=lambda m: m.start(),
     )
     if not anchors:
         return []
+
+    anchor_titles: list[tuple[str, int]] = []
+    for anchor in anchors:
+        case_title, header_start = _extract_title_above(plain, anchor.start())
+        if legacy_doc and (not case_title or re.fullmatch(r"v\.?", case_title, re.IGNORECASE)):
+            legacy_title, legacy_start = _extract_legacy_vertical_title(plain, anchor.start())
+            if legacy_title:
+                case_title = legacy_title
+                header_start = legacy_start
+        anchor_titles.append((case_title, header_start))
 
     rulings: list[Ruling] = []
     current_section: str | None = None
@@ -445,7 +491,7 @@ def parse(
             # Cut at the start of the next anchor's title block, even where
             # the court omitted a blank line between the previous body and
             # next all-caps probate title.
-            _next_title, next_title_start = _extract_title_above(plain, anchors[i + 1].start())
+            _next_title, next_title_start = anchor_titles[i + 1]
             disposition_end = max(disposition_start, next_title_start)
         else:
             disposition_end = len(plain)
@@ -455,7 +501,7 @@ def parse(
         motion_type = _extract_motion_type(disposition_text)
 
         # Title: walk up from this anchor.
-        case_title, header_start = _extract_title_above(plain, anchor.start())
+        case_title, header_start = anchor_titles[i]
 
         # If we're in a probate section and the title is empty, prepend section.
         if current_section and not case_title:

@@ -99,3 +99,27 @@ def test_legacy_ud_case_number_and_mixed_case_title():
     assert rs[0].case_number == "20UD0069"
     assert rs[0].case_title == "Aran Investments, Inc. v. Durbin, et al."
     assert rs[0].continued_to == date(2024, 9, 16)
+
+
+def test_legacy_vertical_family_captions_are_reconstructed():
+    source = Path("archive/shasta/21/21ab36591be69e20bda245a86fd6108547da629342b25babfe931bcdd226488a.pdf")
+    if not source.exists():
+        pytest.skip("full Shasta archive source is not materialized")
+    rs = parse_file(str(source), "x")
+    by_case = {r.case_number: r for r in rs}
+
+    assert by_case["193585"].case_title == "Crandell v. Crandell"
+    assert by_case["0189131"].case_title == "Davis v. Nuss"
+    assert all(row.case_title != "v." for row in rs)
+
+
+def test_body_case_no_citations_do_not_create_resolution_rows():
+    source = Path("archive/shasta/ea/eafa97820386588bb5a4aa4142ec8de8f40fd8bab3cc403673e557c61af9c714.pdf")
+    if not source.exists():
+        pytest.skip("full Shasta archive source is not materialized")
+    rs = parse_file(str(source), "x")
+    case_numbers = [r.case_number for r in rs]
+
+    assert "208112" not in case_numbers
+    assert "0208573" not in case_numbers
+    assert case_numbers.count("25CV-0208112") == 1

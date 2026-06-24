@@ -74,9 +74,10 @@ HEARING_DATE_RE = re.compile(
     re.IGNORECASE,
 )
 CONTINUED_ROW_RE = re.compile(
-    r"(?im)^\s*(?P<num>\d{2}[A-Z]{3,5}\d{5})\s+"
+    r"(?ims)^\s*(?P<num>\d{2}[A-Z]{3,5}\d{5})\s+"
     r"(?P<title>[^\n]*?)\s+is\s+continued\s+to\s+"
-    r"(?P<body>[^\n]+)"
+    r"(?P<body>.+?)(?=\n\s*(?:\d{2}[A-Z]{3,5}\d{5}\b|_{3,}|-{3,}|"
+    r"\(\d{1,3}\)\s*$|Tentative\s+Ruling\b)|\Z)"
 )
 PAGE_NUMBER_RE = re.compile(r"^\s*\d{1,3}\s*$")
 SIGNATURE_RE = re.compile(

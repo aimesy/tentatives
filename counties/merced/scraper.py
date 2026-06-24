@@ -242,6 +242,32 @@ def _ruling_id(source_sha256: str, index: int, case_number: str) -> str:
     return hashlib.sha256(f"{source_sha256}:{index}:{case_number}".encode("utf-8")).hexdigest()[:32]
 
 
+def _split_embedded_disposition(title: str, motion: str, body: str) -> tuple[str, str, str]:
+    if body:
+        return title, motion, body
+    disp = re.search(
+        r"\b(?:DROPPED\s+from\s+calendar|CONTINUED\s+(?:to|on)|GRANTED|DENIED|"
+        r"Appearance\s+required|No\s+Appearance\s+Required)\b",
+        title,
+        re.IGNORECASE,
+    )
+    if not disp:
+        return title, motion, body
+    before = title[: disp.start()].strip(" -–")
+    motion_match = re.search(
+        r"\b(?:OSC\s+re:[^,]+|Status\s+Conference|Petition\s+for[^,]+|"
+        r"Case\s+Management\s+Conference|Motion\s+(?:to|for|re|in|by|of)\b.+)$",
+        before,
+        re.IGNORECASE,
+    )
+    if not motion_match:
+        return title, motion, body
+    body = title[disp.start():].strip()
+    motion = motion or motion_match.group(0).strip()
+    title = before[: motion_match.start()].strip(" -–")
+    return title, motion, body
+
+
 def parse(
     pdf_bytes: bytes,
     source_url: str,
@@ -268,6 +294,11 @@ def parse(
     anchors = [
         anchor for anchor in CASE_ANCHOR_RE.finditer(plain)
         if not re.match(r"^(?:and\s+#?|#)", anchor.group("title").strip(), re.IGNORECASE)
+        and not re.match(
+            r"^(?:is|are|was|were|should|shall|to)\b.*\b(?:consolidat|related|transfer)",
+            anchor.group("title").strip(),
+            re.IGNORECASE,
+        )
     ]
     if not anchors:
         return []
@@ -286,6 +317,7 @@ def parse(
         block_start = anchor.end()
         block_end = anchors[i + 1].start() if i + 1 < len(anchors) else len(plain)
         title, motion, body = _split_block(plain[block_start:block_end], anchor.group("title"))
+        title, motion, body = _split_embedded_disposition(title, motion, body)
         if not body and motion:
             body = motion
             motion = ""

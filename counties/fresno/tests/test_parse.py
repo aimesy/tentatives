@@ -92,6 +92,22 @@ def test_cover_continuance_does_not_cross_from_no_tentative_case():
     assert rows[0].continued_to == date(2026, 7, 10)
 
 
+def test_cover_continuance_keeps_wrapped_date_line():
+    pdf = _pdf([[
+        "Tentative Rulings for June 24, 2026",
+        "Department 403",
+        "25CECG01234 Example Plaintiff v. Example Defendant is continued to Wednesday,",
+        "August 5, 2026, at 3:30 p.m. in Department 403",
+        "________________________________________________________________",
+    ]])
+
+    rows = parse(pdf, "https://www.fresno.courts.ca.gov/system/files/tentative-rulings/06-24-26-dept-403-rde.pdf")
+
+    assert len(rows) == 1
+    assert "August 5, 2026" in rows[0].outcome_text
+    assert rows[0].continued_to == date(2026, 8, 5)
+
+
 def test_motion_type_strips_oral_argument_boilerplate():
     pdf = _pdf([[
         "Tentative Rulings for June 4, 2026",

@@ -670,17 +670,29 @@ def parse(
         # Disposition runs from this anchor to the next ruling's case header
         # (or end of doc).
         if i + 1 < len(anchors):
-            next_region_start, next_header = header_matches[i + 1]
+            next_i = i + 1
+            while (
+                next_i < len(anchors)
+                and header_matches[next_i][1] is None
+                and int(anchors[next_i].group(1)) == anchor_idx
+            ):
+                next_i += 1
+            next_region_start, next_header = header_matches[next_i] if next_i < len(anchors) else (len(plain), None)
             if next_header is not None:
                 disposition_end_abs = next_region_start + next_header.start
             else:
-                disposition_end_abs = anchors[i + 1].start()
+                disposition_end_abs = len(plain)
         else:
             disposition_end_abs = len(plain)
 
         disposition_text = plain[anchor.start():disposition_end_abs]
         # Drop the "TENTATIVE RULING #N:" marker itself from the captured text.
         disposition_text = disposition_text[anchor.end() - anchor.start():].strip()
+        while True:
+            duplicate_anchor = TENTATIVE_RULING_ANCHOR_RE.match(disposition_text)
+            if duplicate_anchor is None:
+                break
+            disposition_text = disposition_text[duplicate_anchor.end():].strip()
         outcome_text = _strip_boilerplate(disposition_text)
         outcome, conditional, continued_to = _classify(disposition_text)
 

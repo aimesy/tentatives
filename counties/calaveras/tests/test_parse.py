@@ -109,6 +109,100 @@ def test_case_management_title_after_bare_case_number():
     assert rows[0].motion_type == "Case Management Conference"
 
 
+def test_case_management_embedded_body_is_not_title():
+    pdf = _pdf([[
+        "June 3, 2026",
+        "1:30 P.M. Civil Case Management",
+        "17PA42615 MARKS V MILLS This matter will be dropped from calendar because of non-activity.",
+    ]])
+
+    rows = parse(pdf, "https://www.calaveras.courts.ca.gov/system/files/general/06032026-cmc.pdf")
+
+    assert len(rows) == 1
+    assert rows[0].case_title == "MARKS V MILLS"
+    assert rows[0].body_text.startswith("This matter will be dropped")
+    assert rows[0].outcome == "off_calendar"
+
+
+def test_case_management_body_start_words_do_not_split_caption():
+    pdf = _pdf([[
+        "June 3, 2026",
+        "1:30 P.M. Civil Case Management",
+        "22CV46468",
+        "THE NEXT DOOR COMPANY v. PARTIES IN INTEREST",
+        "The matter is continued to July 1, 2026.",
+    ]])
+
+    rows = parse(pdf, "https://www.calaveras.courts.ca.gov/system/files/general/06032026-cmc.pdf")
+
+    assert len(rows) == 1
+    assert rows[0].case_title == "THE NEXT DOOR COMPANY v. PARTIES IN INTEREST"
+    assert rows[0].body_text.startswith("The matter is continued")
+    assert rows[0].outcome == "continued"
+
+
+def test_companion_case_number_does_not_create_stub_row():
+    pdf = _pdf([[
+        "November 15, 2023",
+        "2:00 P.M. Family Law Case Management",
+        "23FL46809",
+        "and",
+        "23FL46812",
+        "ELLIS v. ELLIS The next Case Management Conference (CMC) is set for March 27, 2024 at 2:00 p.m. in Dept. 4.",
+        "23FL46810 FISHER v. OLWELL",
+        "The next Case Management Conference (CMC) is set for March 27, 2024 at 2:00 p.m. in Dept. 4.",
+    ]])
+
+    rows = parse(pdf, "https://www.calaveras.courts.ca.gov/system/files/tentative-ruling/11-15-2023-cmc-tentative-ruling.pdf")
+
+    assert len(rows) == 2
+    assert rows[0].case_number == "23FL46809 / 23FL46812"
+    assert rows[0].case_title == "ELLIS v. ELLIS"
+    assert "next Case Management Conference" in rows[0].body_text
+
+
+def test_policy_number_lookalike_stays_inside_case_row():
+    pdf = _pdf([[
+        "August 13, 2025",
+        "1:30 P.M. Civil Case Management",
+        "16CV41630 POLICY NUMBER",
+        "LMHO1044 v. TEST DEFENDANT",
+        "Appearances are required to address case status.",
+        "22CV46467 DAVID ZAMORA v. EXAMPLE",
+        "The case has settled. The matter is ordered dismissed.",
+    ]])
+
+    rows = parse(pdf, "https://www.calaveras.courts.ca.gov/system/files/general/08132025-cmc.pdf")
+
+    assert [row.case_number for row in rows] == ["16CV41630", "22CV46467"]
+    assert "LMHO1044" in rows[0].full_text
+    assert rows[0].outcome == "appearance_required"
+
+
+def test_trailing_next_calendar_header_is_not_swallowed():
+    pdf = _pdf([
+        [
+            "July 18, 2025",
+            "HUGHES VS. FCA US, LLC, ET AL",
+            "24CV47640",
+            "On the Court's Motion this matter is continued to August 1, 2025, at 9:00 a.m. in Dept. 2.",
+        ],
+        [
+            "7/18/25 10:00 a.m. Department 2",
+            "MATTER OF SILVEIRA",
+            "21PR8357 (lead case)",
+            "This matter includes four consolidated probate petitions.",
+        ],
+    ])
+
+    rows = parse(pdf, "https://www.calaveras.courts.ca.gov/system/files/tentative-ruling/7-18-25-lm-tentatives_1.pdf")
+
+    assert len(rows) == 2
+    assert "MATTER OF SILVEIRA" not in rows[0].full_text
+    assert rows[0].page_end == 1
+    assert rows[1].case_title == "MATTER OF SILVEIRA"
+
+
 def test_short_compact_url_date_archive_law_motion():
     source = Path("archive/calaveras/8c/8cd0106ece690d4dbabd12b1883694ee05d7f1e325ce9e664f1f4cd783c7ff7b.pdf")
     if not source.exists():

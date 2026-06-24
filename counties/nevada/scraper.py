@@ -144,11 +144,15 @@ PAGE_NUMBER_RE = re.compile(r"^\s*(?:Page\s+\d+\s+of\s+\d+|\d{1,3})\s*$", re.IGN
 
 # Continued-to extractor.
 CONTINUED_TO_RE = re.compile(
-    r"(?:continued\s+(?:on[^.,]*?to|to)"
+    r"(?:continued\s+(?:on[^.,]*?(?:to|until)|to|until)"
     r"|continues\s+(?:the\s+)?(?:case\s+management\s+conference|matter|hearing|cmc)\s+to"
     r"|matter\s+is\s+continued\s+to)\s+"
     r"(?:[\w:.]+\s+(?:a\.m\.|p\.m\.|AM|PM)\s+(?:on\s+)?)?"
     r"(?P<month>[A-Z][a-z]+)\s+(?P<day>\d{1,2}),?\s+(?P<year>\d{4})",
+    re.IGNORECASE,
+)
+SHARED_THESE_MATTERS_RE = re.compile(
+    r"On\s+the\s+Court.?s\s+motion,?\s+the\s+hearing\s+for\s+these\s+matters\b",
     re.IGNORECASE,
 )
 
@@ -300,7 +304,7 @@ def _classify(text: str) -> tuple[str, bool, date | None]:
     has_denied = bool(re.search(r"\bDEN(?:IED|IES)\b|\bDISMISS(?:ED|ES)?\b", upper))
     has_granted = bool(re.search(r"\bGRANTED?\b|\bSUSTAINED\b|\bAPPROVED\b", upper))
     has_continued = bool(re.search(
-        r"\b(?:IS\s+|HEREBY\s+)?CONTINUED\s+(?:ON|TO)\b"
+        r"\b(?:IS\s+|HEREBY\s+)?CONTINUED\s+(?:ON|TO|UNTIL)\b"
         r"|\bCONTINUES\s+(?:THE\s+(?:MATTER|CASE\s+MANAGEMENT|HEARING)|(?:THIS\s+|THE\s+)?CMC)\b"
         r"|\bMATTER\s+IS\s+CONTINUED\b",
         upper,
@@ -549,12 +553,39 @@ def parse(
         end = headers[i + 1].start() if i + 1 < len(headers) else len(plain)
         section_text = plain[start:end]
         body = section_text[hm.end() - hm.start():].strip()
+        content_end_offset = end
+        if not body and i + 1 < len(headers):
+            run_ok = True
+            shared_body = ""
+            shared_end = end
+            for j in range(i + 1, len(headers)):
+                prev_idx = int(headers[j - 1].group("idx"))
+                next_idx = int(headers[j].group("idx"))
+                if next_idx != prev_idx + 1:
+                    run_ok = False
+                    break
+                next_hm = headers[j]
+                next_end = headers[j + 1].start() if j + 1 < len(headers) else len(plain)
+                next_section_text = plain[next_hm.start():next_end]
+                next_body = next_section_text[next_hm.end() - next_hm.start():].strip()
+                if not next_body:
+                    continue
+                if SHARED_THESE_MATTERS_RE.match(next_body):
+                    shared_body = next_body
+                    shared_end = next_end
+                else:
+                    run_ok = False
+                break
+            if run_ok and shared_body:
+                body = shared_body
+                content_end_offset = shared_end
+                section_text = f"{section_text.rstrip()}\n\n{shared_body}".strip()
         outcome, conditional, continued_to = _classify(body)
 
         local_dept = meta.dept or _detect_dept(section_text, dept_hint)
 
         page_start = page_for_offset(start)
-        content_end = start + len(section_text.rstrip())
+        content_end = content_end_offset
         page_end = max(page_start, page_for_offset(max(start, content_end - 1)))
 
         ruling_id = hashlib.sha256(

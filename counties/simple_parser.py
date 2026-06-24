@@ -209,8 +209,8 @@ def classify(text: str) -> tuple[str, bool, date | None]:
         or "parties are ordered to appear" in low
     ):
         return "appearance_required", conditional, continued_to
-    has_granted = bool(re.search(r"\bgranted\b|\bgrant\b", low))
-    has_denied = bool(re.search(r"\bdenied\b|\bdeny\b", low))
+    has_granted = bool(re.search(r"\bgrant(?:ed|s|ing)?\b|\bsustain(?:ed|s)?\b|\brecommended\s+for\s+approval\b", low))
+    has_denied = bool(re.search(r"\bden(?:y|ied|ies)\b|\boverrule(?:d|s)?\b", low))
     if has_granted and not has_denied:
         return "granted", conditional, continued_to
     if has_denied and not has_granted:

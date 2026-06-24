@@ -77,6 +77,10 @@ CASE_NUMBER_LINE_RE = re.compile(
     r"^\s*(?:Case\s+No\.?\s*)?(?P<num>\d{2}[A-Z]{2,4}\d{4,6}|[A-Z]{1,4}\d{4,6})\b(?:[ \t]+(?P<rest>.*?))?\s*$",
     re.MULTILINE,
 )
+CASE_NUMBER_TOKEN_RE = re.compile(
+    r"(?:\d{2}[A-Z]{2,4}\d{4,6}|[A-Z]{1,4}\d{4,6})\b",
+    re.IGNORECASE,
+)
 LEGACY_TIME_CASE_RE = re.compile(
     r"^\s*(?P<time>\d{1,2}:\d{2}(?:\s*[AP]\.?\s*M\.?)?)\s+"
     r"(?P<num>\d{2}[A-Z]{2,4}\d{4,6}|[A-Z]{1,4}\d{4,6})\s+"
@@ -136,9 +140,20 @@ _MONTHS = {
 }
 
 _BODY_START_RE = re.compile(
-    r"\b(?:There\s+is|The\s+case|The\s+matter|All\s+Defendants|Plaintiff\s+|Defendant\s+|"
-    r"Petitioner\s+|Respondent\s+|Appearances?\s+|Judgment\s+|This\s+is|Now\s+before)\b",
+    r"\b(?:There\s+is|The\s+case|The\s+matter|All\s+Defendants|Plaintiff\s+|"
+    r"Defendant\s+|Petitioner\s+|Respondent\s+|Appearances?\s+|Judgment\s+|"
+    r"This\s+is|Now\s+before)\b",
     re.IGNORECASE,
+)
+_CMC_BODY_START_RE = re.compile(
+    r"\b(?:The\s+next\s+Case\s+Management|This\s+matter|Filings\s+from|"
+    r"Parties\s+(?:are|shall|must|have|request)|DROPPED\s+from|CONTINUED\s+to)\b",
+    re.IGNORECASE,
+)
+
+TRAILING_CALENDAR_HEADER_RE = re.compile(
+    r"(?im)^\s*\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2}\s*"
+    r"(?:a\.?m\.?|p\.?m\.?)\s+Department\s+\d+\s*$"
 )
 
 
@@ -286,13 +301,29 @@ def _is_title_line(line: str) -> bool:
     return bool(re.search(r"\bv(?:\.|s\.?)?\b", s, re.IGNORECASE))
 
 
-def _split_inline_title(rest: str) -> tuple[str, str]:
+def _plausible_inline_caption(title: str) -> bool:
+    s = title.strip()
+    if not s or len(s) > 220:
+        return False
+    return _is_title_line(s)
+
+
+def _split_inline_title(rest: str, *, is_case_management: bool = False) -> tuple[str, str]:
     if not rest:
         return "", ""
     m = _BODY_START_RE.search(rest)
+    if is_case_management:
+        cmc_match = _CMC_BODY_START_RE.search(rest)
+        if cmc_match and (m is None or cmc_match.start() < m.start()):
+            m = cmc_match
     if not m:
         return rest.strip(), ""
-    return rest[: m.start()].strip(), rest[m.start():].strip()
+    title = rest[: m.start()].strip()
+    if not title:
+        return "", rest[m.start():].strip()
+    if not _plausible_inline_caption(title):
+        return rest.strip(), ""
+    return title, rest[m.start():].strip()
 
 
 def _title_above(plain: str, anchor_start: int) -> str:
@@ -314,7 +345,13 @@ def _title_above(plain: str, anchor_start: int) -> str:
     return " ".join(" ".join(lines).split())
 
 
-def _split_block(anchor: re.Match[str], block: str, plain: str) -> tuple[str, str, str, str]:
+def _split_block(
+    anchor: re.Match[str],
+    block: str,
+    plain: str,
+    *,
+    is_case_management: bool = False,
+) -> tuple[str, str, str, str]:
     rest = (anchor.group("rest") or "").strip()
     case_title = ""
     motion_type = ""
@@ -330,6 +367,16 @@ def _split_block(anchor: re.Match[str], block: str, plain: str) -> tuple[str, st
             if not s:
                 idx += 1
                 continue
+            title_start, body_start = _split_inline_title(s, is_case_management=is_case_management)
+            if is_case_management and title_start and body_start and _is_title_line(title_start):
+                leading_title_lines.append(title_start)
+                body_lines = [body_start, *[line for line in lines[idx + 1:] if line]]
+                if case_title:
+                    motion_type = " ".join(leading_title_lines)
+                else:
+                    case_title = " ".join(leading_title_lines)
+                    motion_type = "Case Management Conference" if case_title else ""
+                return case_title, motion_type, "\n".join(body_lines).strip(), "calaveras-lawmotion"
             if not _is_title_line(s):
                 break
             leading_title_lines.append(s)
@@ -342,8 +389,12 @@ def _split_block(anchor: re.Match[str], block: str, plain: str) -> tuple[str, st
         body_lines = [line for line in lines[idx:] if line]
         return case_title, motion_type, "\n".join(body_lines).strip(), "calaveras-lawmotion"
 
-    title_start, body_start = _split_inline_title(rest)
+    title_start, body_start = _split_inline_title(rest, is_case_management=is_case_management)
     title_lines = [title_start] if title_start else []
+    title_above = _title_above(plain, anchor.start())
+    if title_above and re.fullmatch(r"\([^)]{1,60}\)", title_start or ""):
+        title_lines = [title_above]
+        body_start = body_start or ""
     if body_start:
         body_lines.append(body_start)
     for line in block.splitlines():
@@ -355,7 +406,49 @@ def _split_block(anchor: re.Match[str], block: str, plain: str) -> tuple[str, st
             continue
         body_lines.append(s)
     case_title = " ".join(" ".join(title_lines).split())
-    return case_title, "Case Management Conference", "\n".join(body_lines).strip(), "calaveras-cmc"
+    body = "\n".join(body_lines).strip()
+    if is_case_management and not body:
+        title_start, body_start = _split_inline_title(case_title, is_case_management=True)
+        if body_start and title_start:
+            case_title = title_start
+            body = body_start
+    return case_title, "Case Management Conference", body, "calaveras-cmc"
+
+
+def _is_bare_companion_prefix(anchor: re.Match[str], plain: str) -> bool:
+    """Skip the first number in a bare 'CASE and CASE' consolidated caption."""
+    if (anchor.group("rest") or "").strip():
+        return False
+    after = plain[anchor.end(): anchor.end() + 120]
+    return bool(re.match(rf"\s*(?:and|&)\s*\n\s*(?:Case\s+No\.?\s*)?{CASE_NUMBER_TOKEN_RE.pattern}", after, re.IGNORECASE))
+
+
+def _companion_case_number(plain: str, anchor_start: int) -> str | None:
+    prefix = plain[max(0, anchor_start - 160):anchor_start]
+    m = re.search(
+        rf"(?im)(?P<num>{CASE_NUMBER_TOKEN_RE.pattern})\s*\n\s*(?:and|&)\s*$",
+        prefix,
+    )
+    return m.group("num").upper() if m else None
+
+
+def _is_policy_number_anchor(anchor: re.Match[str], plain: str) -> bool:
+    """Insurance policy IDs can look like legacy case numbers in CMC captions."""
+    num = anchor.group("num").upper()
+    if re.match(r"^(?:LMHO|LSI|ATRD)\d", num):
+        return True
+    prefix = plain[max(0, anchor.start() - 80):anchor.start()].upper()
+    return "POLICY NUMBER" in prefix and "\n\n" not in prefix.split("POLICY NUMBER", 1)[-1]
+
+
+def _trim_trailing_next_calendar_header(plain: str, start: int, end: int) -> int:
+    """Remove a next page's date/dept caption that precedes the next case number."""
+    segment = plain[start:end]
+    trimmed = end
+    for match in TRAILING_CALENDAR_HEADER_RE.finditer(segment):
+        if match.start() > 40:
+            trimmed = start + match.start()
+    return trimmed
 
 
 def _ruling_id(source_sha256: str, index: int, case_number: str) -> str:
@@ -487,6 +580,8 @@ def parse(
     anchors = [
         anchor for anchor in CASE_NUMBER_LINE_RE.finditer(plain)
         if (anchor.group("rest") or "").strip().lower() not in {"and", "&"}
+        and not _is_bare_companion_prefix(anchor, plain)
+        and not _is_policy_number_anchor(anchor, plain)
     ]
     if not anchors:
         return _parse_legacy_time_rows(
@@ -507,14 +602,27 @@ def parse(
         for sm in SECTION_RE.finditer(region):
             current_division = _section_name(sm.group("section"))
 
-        block_end = anchors[i + 1].start() if i + 1 < len(anchors) else len(plain)
-        case_title, motion_type, body, style = _split_block(anchor, plain[anchor.end():block_end], plain)
+        raw_block_end = anchors[i + 1].start() if i + 1 < len(anchors) else len(plain)
+        block_end = _trim_trailing_next_calendar_header(plain, anchor.start(), raw_block_end)
+        is_case_management = (
+            "case management" in (current_division or "").lower()
+            or "cmc" in source_url.lower()
+        )
+        case_title, motion_type, body, style = _split_block(
+            anchor,
+            plain[anchor.end():block_end],
+            plain,
+            is_case_management=is_case_management,
+        )
         if not body and not motion_type:
             continue
         outcome, conditional, continued_to = _classify(body or motion_type)
         page_start = _page_for_offset(offsets, anchor.start())
         page_end = max(page_start, _page_for_offset(offsets, max(anchor.start(), block_end - 1)))
         case_number = anchor.group("num").upper()
+        companion_number = _companion_case_number(plain, anchor.start())
+        if companion_number:
+            case_number = f"{companion_number} / {case_number}"
 
         rulings.append(
             Ruling(
@@ -531,7 +639,7 @@ def parse(
                 outcome_text=body,
                 conditional=conditional,
                 continued_to=continued_to,
-                body_text="",
+                body_text=body,
                 full_text=plain[anchor.start():block_end].strip(),
                 page_start=page_start,
                 page_end=page_end,

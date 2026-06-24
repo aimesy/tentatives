@@ -130,3 +130,16 @@ def test_single_case_packet_uses_url_date():
     assert rs[0].case_number == "CU0000657"
     assert rs[0].case_title == "Botwinis v. Fleming"
     assert rs[0].motion_type == "Truckee"
+
+
+def test_shared_these_matters_ruling_backfills_blank_header():
+    source = Path("archive/nevada/60/6066cf1efd5087b387de5b02fc9836ea07f19cb127db4343b5c043b474181329.pdf")
+    if not source.exists():
+        pytest.skip("full Nevada archive source is not materialized")
+    rs = parse_file(str(source), "x")
+    by_case = {r.case_number: r for r in rs}
+
+    row = by_case["CU0002305"]
+    assert row.case_title == "Christ, Jason v. Hannah, Jordan"
+    assert row.outcome == "continued"
+    assert "these matters are continued" in row.outcome_text

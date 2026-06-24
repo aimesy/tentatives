@@ -86,3 +86,56 @@ def test_app_case_suffixes_are_anchors_but_body_related_cases_are_not():
     assert len(rows) == 1
     assert rows[0].case_number == "22CV-03146-APP"
     assert "21CR-06339" in rows[0].full_text
+
+
+def test_case_no_consolidation_sentence_is_not_new_anchor():
+    pdf = _pdf([[
+        "SUPERIOR COURT OF CALIFORNIA",
+        "Tuesday, June 2nd, 2026",
+        "Civil Law and Motion Tentative Rulings",
+        "Courtroom 8",
+        "25CV-07278 Example Plaintiff vs Example Defendant",
+        "Motion to Consolidate",
+        "The motion is granted. Case No. 26CV-00933 is to be consolidated with 25CV-07278.",
+        "The lead case remains 25CV-07278.",
+    ]])
+
+    rows = parse(pdf, "https://www.merced.courts.ca.gov/system/files/tentative-rulings/tr-tuesday.pdf")
+
+    assert len(rows) == 1
+    assert rows[0].case_number == "25CV-07278"
+    assert "26CV-00933" in rows[0].full_text
+
+
+def test_embedded_disposition_in_anchor_title_is_split_to_body():
+    pdf = _pdf([[
+        "SUPERIOR COURT OF CALIFORNIA",
+        "Tuesday, June 2nd, 2026",
+        "Civil Law and Motion Tentative Rulings",
+        "Courtroom 8",
+        "25CV-01538 Cinthya Villasenor Martinez vs. Luis Villasenor Martinez OSC re: Dismissal - Notice of Settlement DROPPED from calendar. Plaintiff's request for dismissal was filed.",
+    ]])
+
+    rows = parse(pdf, "https://www.merced.courts.ca.gov/system/files/tentative-rulings/tr-tuesday.pdf")
+
+    assert len(rows) == 1
+    assert rows[0].case_title == "Cinthya Villasenor Martinez vs. Luis Villasenor Martinez"
+    assert rows[0].motion_type == "OSC re: Dismissal - Notice of Settlement"
+    assert rows[0].outcome == "off_calendar"
+    assert rows[0].outcome_text.startswith("DROPPED from calendar")
+
+
+def test_embedded_disposition_guard_does_not_split_party_name_motion():
+    pdf = _pdf([[
+        "SUPERIOR COURT OF CALIFORNIA",
+        "Tuesday, June 2nd, 2026",
+        "Civil Law and Motion Tentative Rulings",
+        "Courtroom 8",
+        "25CV-01539 Motion Picture Company vs. Granted Holdings Appearance required by the court.",
+    ]])
+
+    rows = parse(pdf, "https://www.merced.courts.ca.gov/system/files/tentative-rulings/tr-tuesday.pdf")
+
+    assert len(rows) == 1
+    assert rows[0].case_title.startswith("Motion Picture Company")
+    assert rows[0].motion_type == ""

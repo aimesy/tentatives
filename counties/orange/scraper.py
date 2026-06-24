@@ -260,10 +260,14 @@ def _is_header_or_boilerplate_line(line: str) -> bool:
     ))
 
 
-def _title_before_case(plain: str, case_start: int) -> str:
+def _title_before_case_span(plain: str, case_start: int) -> tuple[str, int]:
     """Extract Orange table case names that appear before the case number."""
     title_lines: list[str] = []
-    for line in reversed(plain[:case_start].splitlines()):
+    title_start = case_start
+    pos = len(plain[:case_start])
+    for raw in reversed(plain[:case_start].splitlines(keepends=True)):
+        pos -= len(raw)
+        line = raw.rstrip("\r\n")
         s = line.strip()
         if not s:
             if title_lines:
@@ -288,12 +292,56 @@ def _title_before_case(plain: str, case_start: int) -> str:
         if not s or re.fullmatch(r"[\W_]+", s):
             continue
         title_lines.append(s)
+        title_start = pos
         if has_row_prefix:
             break
         if len(title_lines) >= 4:
             break
     title_lines.reverse()
-    return " ".join(" ".join(title_lines).split())
+    return " ".join(" ".join(title_lines).split()), title_start
+
+
+def _title_before_case(plain: str, case_start: int) -> str:
+    return _title_before_case_span(plain, case_start)[0]
+
+
+def _is_useful_before_case_title(title: str) -> bool:
+    """Reject row indexes/body fragments that sit before a table case number."""
+    s = " ".join(title.split()).strip(" ;,")
+    if not s:
+        return False
+    if re.fullmatch(r"\d{1,3}\.?", s):
+        return False
+    if len(s) > 220:
+        return False
+    if _is_header_or_boilerplate_line(s):
+        return False
+    if TITLE_ONLY_DISPOSITION_RE.search(s):
+        return False
+    if re.match(
+        r"^(?:Accordingly|All|As|Based|Code|For|Here|If|On|Thus)\b"
+        r"|^(?:The\s+Court|This\s+(?:matter|case|action))\b"
+        r"|^(?:Plaintiff|Defendant|Petitioner|Respondent)\s+"
+        r"(?:moves?|contends?|argues?|requests?|seeks?|filed|is|are|shall|must)\b",
+        s,
+        re.IGNORECASE,
+    ):
+        return False
+    if re.search(r"\b(?:Probate|Elder\s+Abuse)\b", s, re.IGNORECASE):
+        return True
+    return bool(re.search(r"[A-Za-z]", s))
+
+
+def _row_start_for_case_match(plain: str, match: re.Match[str]) -> int:
+    """Include a same-line row index in the next row, not the prior body."""
+    line_start = plain.rfind("\n", 0, match.start()) + 1
+    prefix = plain[line_start:match.start()]
+    if re.fullmatch(r"\s*\d{1,3}\.?\s*", prefix):
+        return line_start
+    before_title, before_title_start = _title_before_case_span(plain, match.start())
+    if before_title and _is_useful_before_case_title(before_title):
+        return before_title_start
+    return match.start()
 
 
 def _clean_block_lines(block: str) -> list[str]:
@@ -704,10 +752,15 @@ def parse(
         case_end = cm.end()
 
         # Block runs to the next case-number.
-        block_end = deduped[i + 1].start() if i + 1 < len(deduped) else len(plain)
+        block_end = _row_start_for_case_match(plain, deduped[i + 1]) if i + 1 < len(deduped) else len(plain)
         block = plain[case_end:block_end].strip()
         block_lines = _clean_block_lines(block)
-        before_title = _title_before_case(plain, case_start)
+        before_title, before_title_start = _title_before_case_span(plain, case_start)
+        if not _is_useful_before_case_title(before_title):
+            before_title = ""
+            row_start = case_start
+        else:
+            row_start = before_title_start
 
         title_lines: list[str] = []
         body_idx = 0
@@ -740,9 +793,9 @@ def parse(
         if hearing_date is None:
             continue
 
-        page_start = page_for_offset(case_start)
+        page_start = page_for_offset(row_start)
         content_end = case_end + len(plain[case_end:block_end].rstrip())
-        page_end = max(page_start, page_for_offset(max(case_start, content_end - 1)))
+        page_end = max(page_start, page_for_offset(max(row_start, content_end - 1)))
 
         ruling_id = hashlib.sha256(
             f"{source_sha256}:{i + 1}:{case_number}".encode("utf-8")
@@ -764,7 +817,7 @@ def parse(
                 conditional=conditional,
                 continued_to=continued_to,
                 body_text=meta.judge or "",
-                full_text=plain[case_start:block_end].strip(),
+                full_text=plain[row_start:block_end].strip(),
                 page_start=page_start,
                 page_end=page_end,
                 source_sha256=source_sha256,

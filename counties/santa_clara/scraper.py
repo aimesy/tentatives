@@ -338,15 +338,52 @@ def _select_case_matches(matches: list[re.Match[str]], plain: str) -> list[re.Ma
         if line_end == -1:
             line_end = len(plain)
         current_line = plain[line_start:line_end]
+        prefix_on_line = plain[line_start:cm.start()]
+        suffix_on_line = plain[cm.end():line_end]
+        line_without_case = f"{prefix_on_line}{suffix_on_line}".strip()
+        if re.fullmatch(r"[,;]", line_without_case):
+            continue
+        if re.fullmatch(r"(?:and|&)\s*[,;]?", line_without_case, re.IGNORECASE):
+            continue
+        if re.search(r"\bCase\s+Nos\.?", current_line, re.IGNORECASE):
+            continue
+        if CASE_NUMBER_RE.search(prefix_on_line) and CASE_NUMBER_RE.search(suffix_on_line):
+            continue
+        if re.search(r"\b(?:with|and|consolidated|related)\s+Case\s+No\.?\b", current_line, re.IGNORECASE):
+            continue
+        if re.search(r"\bRelated\s+Case\s+No\.?\s*$", prefix_on_line, re.IGNORECASE):
+            continue
+        if re.search(r"\bCase\s+No\.?", prefix_on_line, re.IGNORECASE) and not re.fullmatch(
+            r"\s*Case\s+No\.?\s*:?\s*", prefix_on_line, re.IGNORECASE
+        ):
+            continue
+        if re.search(r"\bCase\s+No\.?\s*$", prefix_on_line, re.IGNORECASE):
+            if re.match(r"\s*\.\s+[A-Z][a-z]", suffix_on_line):
+                continue
+        if re.search(r"\bwith\s+Case\s+No\.?\s*$", before[-100:], re.IGNORECASE):
+            continue
+        if not prefix_on_line.strip() and not suffix_on_line.strip():
+            context = before[-500:]
+            if (
+                re.search(r"\bCase\s+No\.?\s*$", before[-120:], re.IGNORECASE)
+                and not re.search(r"\b(?:Case\s+Name|Calendar\s+Line|LINE\s+\d{1,3})\b", context, re.IGNORECASE)
+            ):
+                continue
+            if after.lstrip().startswith(("(", "\"")):
+                continue
+        if not prefix_on_line.strip() and re.match(r"\s+[a-z]", suffix_on_line):
+            context = before[-500:]
+            if not re.search(r"\b(?:Case\s+Name|Calendar\s+Line|LINE\s+\d{1,3})\b", context, re.IGNORECASE):
+                continue
         score = 0
-        if re.search(r"Case\s+No\.?\s*$", before[-100:], re.IGNORECASE):
-            score += 12
+        if re.search(r"^\s*(?:Case\s+No\.?|Case\s+#)\s*:?\s*$", prefix_on_line, re.IGNORECASE):
+            score += 10
         if re.search(r"Case\s+Name\b", before[-400:], re.IGNORECASE):
             score += 8
         if re.search(r"Calendar\s+Line", before[-400:], re.IGNORECASE):
             score += 6
         if re.search(r"\bLINE\s+\d{1,3}\b", current_line, re.IGNORECASE):
-            score += 2
+            score += 10
         if re.search(
             r"\b(?:Before\s+the\s+court|Pursuant\s+to|Parties?\s+to\s+appear|"
             r"I\.\s+BACKGROUND|This\s+matter)\b",
@@ -373,6 +410,8 @@ def _case_name_before(plain: str, case_start: int) -> str:
     if not m:
         return ""
     title = " ".join(line.strip() for line in m.group("title").splitlines() if line.strip())
+    title = re.split(r"\b(?:Click\s+or\s+scroll\s+to|See)\s+Line\s+\d+\b", title, flags=re.IGNORECASE)[0]
+    title = re.split(r"\bLINE\s+\d+\b", title, flags=re.IGNORECASE)[0]
     return re.sub(r"\s+", " ", title).strip()
 
 
@@ -406,7 +445,11 @@ def _split_after_case(block_lines: list[str], title_hint: str) -> tuple[str, str
             break
         if body_start_idx is None:
             body_start_idx = len(block_lines)
-        title_hint = re.split(r"\.?\s*Scroll\s+down\s+to\s+Lines?", title_hint, flags=re.IGNORECASE)[0]
+        title_hint = re.split(
+            r"\.?\s*(?:Scroll\s+down\s+to\s+Lines?|(?:Click\s+or\s+scroll\s+to|See)\s+Line\s+\d+)",
+            title_hint,
+            flags=re.IGNORECASE,
+        )[0]
         return title_hint.strip(" ."), motion_type, "\n".join(block_lines[body_start_idx:]).strip()
 
     for j, line in enumerate(block_lines):
@@ -430,7 +473,11 @@ def _split_after_case(block_lines: list[str], title_hint: str) -> tuple[str, str
     if body_start_idx is None:
         body_start_idx = len(block_lines)
     title = re.sub(r"\s+", " ", " ".join(title_lines)).strip()
-    title = re.split(r"\.?\s*Scroll\s+down\s+to\s+Lines?", title, flags=re.IGNORECASE)[0].strip(" .")
+    title = re.split(
+        r"\.?\s*(?:Scroll\s+down\s+to\s+Lines?|(?:Click\s+or\s+scroll\s+to|See)\s+Line\s+\d+)",
+        title,
+        flags=re.IGNORECASE,
+    )[0].strip(" .")
     body = "\n".join(block_lines[body_start_idx:]).strip()
     return title, motion_type, body
 
@@ -497,6 +544,62 @@ def _parse_formal_packet(
     ]
 
 
+def _parse_case_names_packet(
+    plain: str,
+    page_for_offset,
+    meta: _DocMeta,
+    source_sha256: str,
+    source_url: str,
+) -> list[Ruling]:
+    match = re.search(
+        r"(?is)\bCalendar\s+lines?\s+[^\n]+\s+"
+        r"Case\s+Names?:\s*(?P<title>.*?)\n\s*"
+        r"Case\s+Nos?\.?:\s*(?P<nums>.*?)\n\s*\n\s*"
+        r"(?P<body>(?:INTRODUCTION|BACKGROUND|DISCUSSION)\b.*)",
+        plain,
+    )
+    if not match:
+        return []
+    nums = [m.group("num") for m in CASE_NUMBER_RE.finditer(match.group("nums"))]
+    if not nums:
+        return []
+    case_number = " / ".join(dict.fromkeys(nums))
+    title = re.sub(r"\s+", " ", match.group("title")).strip(" ,")
+    body = match.group("body").strip()
+    outcome, conditional, continued_to = _classify(body)
+    page_start = page_for_offset(match.start())
+    page_end = max(page_start, page_for_offset(max(match.start(), len(plain.rstrip()) - 1)))
+    ruling_id = hashlib.sha256(
+        f"{source_sha256}:1:{case_number}".encode("utf-8")
+    ).hexdigest()[:32]
+    return [
+        Ruling(
+            ruling_id=ruling_id,
+            county=COUNTY_SLUG,
+            division=meta.division,
+            dept=meta.dept,
+            hearing_date=meta.hearing_date,
+            ruling_index=1,
+            case_number=case_number,
+            case_title=title,
+            motion_type="",
+            outcome=outcome,
+            outcome_text=body,
+            conditional=conditional,
+            continued_to=continued_to,
+            body_text=meta.judge or "",
+            full_text=plain[match.start():].strip(),
+            page_start=page_start,
+            page_end=page_end,
+            source_sha256=source_sha256,
+            source_url=source_url,
+            style=f"{meta.style}-consolidated",
+            parser_version=PARSER_VERSION,
+            ingest_ts=datetime.now(UTC),
+        )
+    ]
+
+
 def parse(
     pdf_bytes: bytes,
     source_url: str,
@@ -538,6 +641,10 @@ def parse(
                 break
         return page
 
+    case_names_rows = _parse_case_names_packet(plain, page_for_offset, meta, source_sha256, source_url)
+    if case_names_rows:
+        return case_names_rows
+
     formal_rows = _parse_formal_packet(plain, page_offsets, page_for_offset, meta, source_sha256, source_url)
     if formal_rows:
         return formal_rows
@@ -568,6 +675,13 @@ def parse(
 
         # The block runs to the next selected case number (or end of doc).
         block_end = case_matches[i + 1].start() if i + 1 < len(case_matches) else len(plain)
+        calendar_row = re.search(
+            r"(?m)\n\s*\d{1,2}:\d{2}\s*\n\s*\d{1,3}(?:-\d{1,3})?\s*\n\s*"
+            rf"{_CASE_NUMBER_INNER}\b",
+            plain[case_end:block_end],
+        )
+        if calendar_row:
+            block_end = case_end + calendar_row.start()
         block = plain[case_end:block_end]
         block_lines = block.splitlines()
         case_title, motion_type, body = _split_after_case(

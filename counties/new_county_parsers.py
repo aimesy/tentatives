@@ -33,6 +33,24 @@ def _page_span(offsets: list[int], start: int, end: int) -> tuple[int, int]:
     return page_start, page_end
 
 
+def _normalize_butte_probate_page(text: str) -> str:
+    text = re.sub(r"(\d{2}PR)\s+(\d{5})", r"\1\2", text)
+    text = re.sub(r"(?m)^9:\s*\n\s*00\s+", "9:00 ", text)
+    return re.sub(
+        r"(?m)^(\s*\d{1,2}:\d{2})\s*\n\s+(?=(?:\d{2}(?:PR|MH)\d{5}|PR-\d{5})\b)",
+        r"\1 ",
+        text,
+    )
+
+
+def _normalize_slo_probate_page(text: str) -> str:
+    return re.sub(
+        r"(?m)^(\s*\d+)\s*\n\s+(?=\d{2}(?:PR|CVP|LCP)-\d{4}\b)",
+        r"\1 ",
+        text,
+    )
+
+
 def _case_division(case_number: str, default: str | None = None) -> str | None:
     upper = case_number.upper()
     if "PR" in upper:
@@ -59,6 +77,151 @@ def _first_body_line(lines: list[str]) -> int:
 
 def _line_window(lines: list[str], start: int, end: int | None = None) -> str:
     return clean_lines("\n".join(lines[start:end]))
+
+
+SLO_PROBATE_BOILERPLATE_RE = re.compile(
+    r"(?is)\n\s*(?:The\s+Probate\s+notes?\s+for\s+the\s+above|"
+    r"Please\s+email\s+the\s+Probate\s+Department|"
+    r"Probate\s+Department\s+Email|"
+    r"Probate\s+Research\s+Department|"
+    r"Probate\s+Research\s+Attorney|"
+    r"If\s+you\s+wish\s+to\s+appear\s+remotely).*$"
+)
+SLO_PROBATE_TABLE_HEADER_RE = re.compile(
+    r"(?im)^\s*(?:No\.\s+)?Case Number Case Name Type of Matter Probate Notes\s*$"
+)
+SLO_PROBATE_EMAIL_RULES_RE = re.compile(
+    r"(?is)\n\s*Subject\s+to\s+the\s+rules\s+below,\s+attorneys\s+and\s+parties\s+to\s+a\s+case\s+may\s+now\s+contact\s+the\s+Probate\s+Research\s+Department\s+using\s+the\s+following\s+email:.*?"
+    r"The\s+Probate\s+Research\s+Department\s+will\s+make\s+every\s+effort\s+to\s+respond\s+within\s+two\s+Court\s+days\s+of\s+receipt\s+of\s+the\s+email\.?",
+)
+SAN_BENITO_END_RE = re.compile(r"(?im)^\s*END\s+OF\s+TENTATIVE\s+DECISIONS\s*$")
+SONOMA_END_RE = re.compile(r"(?im)^\s*\*+\s*END\s+OF\s+TENTATIVE\s+RULINGS\s*\*+\s*$")
+SIERRA_MULTI_SECTION_SOURCE_SHAS = {
+    # Nightingale v. Durrett, a one-page packet with two separately headed rulings.
+    "e32d1d6945d3cd8af284aae36c331ad1377e94ef0357c4dd329f77942224977c",
+}
+SIERRA_MULTI_SECTION_URL_MARKERS = {
+    "17RJ4PEhce-1OvPpZY8yRs01k-wAULiTN",
+}
+
+
+TULARE_PROBATE_TYPES = (
+    "Final Distribution Hearing",
+    "Letters of Administration",
+    "Appoint Temporary Conservator",
+    "Appoint Conservator",
+    "Determine Succession to Primary Residence",
+    "Probate Will/Issue Letters",
+    "Spousal Property Hearing",
+    "OSC Hearing",
+)
+TULARE_PROBATE_STATUS_RE = re.compile(
+    r"\b(?:Appearance\s+Required|Recommended\s+for\s+Approval|Approval\s+Conditional(?:\s+Upon)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _split_tulare_probate_row(case_number: str, block: str) -> tuple[str, str, str]:
+    row = inline(block)
+    row = re.sub(rf"^{re.escape(case_number)}\s*", "", row).strip()
+    status_match = TULARE_PROBATE_STATUS_RE.search(row)
+    before_status = row[: status_match.start()].strip() if status_match else row
+    body = row[status_match.start():].strip() if status_match else ""
+
+    motion = ""
+    case_title = before_status
+    for type_name in sorted(TULARE_PROBATE_TYPES, key=len, reverse=True):
+        m = re.search(rf"\b{re.escape(type_name)}\s*$", before_status, re.IGNORECASE)
+        if m:
+            case_title = before_status[: m.start()].strip()
+            motion = type_name
+            break
+    return case_title or case_number, motion, body
+
+
+def _trim_or_drop_table_header(block_text: str, header_match: re.Match[str] | None) -> tuple[str, int | None]:
+    if not header_match:
+        return block_text, None
+    tail = inline(block_text[header_match.end():])
+    if not tail:
+        return block_text[: header_match.start()], header_match.start()
+    return f"{block_text[:header_match.start()]}\n{block_text[header_match.end():]}", None
+
+
+def _remove_spans(text: str, spans: list[tuple[int, int]]) -> tuple[str, int]:
+    if not spans:
+        return text, len(text.rstrip())
+    spans = sorted(spans)
+    pieces: list[str] = []
+    cursor = 0
+    kept_end = 0
+    for start, end in spans:
+        if start > cursor:
+            piece = text[cursor:start]
+            pieces.append(piece)
+            if piece.strip():
+                kept_end = start
+        cursor = max(cursor, end)
+    if cursor < len(text):
+        piece = text[cursor:]
+        pieces.append(piece)
+        if piece.strip():
+            kept_end = len(text.rstrip())
+    return "\n".join(piece.strip("\n") for piece in pieces if piece.strip()), kept_end
+
+
+def _clean_slo_probate_block_text(block_text: str) -> tuple[str, int]:
+    email_matches = list(SLO_PROBATE_EMAIL_RULES_RE.finditer(block_text))
+    email_spans = [(m.start(), m.end()) for m in email_matches]
+    spans: list[tuple[int, int]] = list(email_spans)
+    insertions: dict[int, tuple[str, int]] = {}
+
+    for match in email_matches:
+        segment = block_text[match.start():match.end()]
+        embedded = re.search(
+            r"(?is)No\.\s*Case\s*Number\s*Case\s*Name\s*Type\s*of\s*Matter\s*Probate\s*Notes\s*"
+            r"(?P<tail>.*?)(?=^\s*d\.\s+Emails\s+may|^\s*4\.\s+This\s+email\s+procedure|\Z)",
+            segment,
+            re.MULTILINE,
+        )
+        if embedded:
+            tail_lines = [
+                line
+                for line in clean_lines(embedded.group("tail")).splitlines()
+                if line.strip() and not re.fullmatch(r"\d{1,3}", line.strip())
+            ]
+            tail = "\n".join(tail_lines).strip()
+            if tail:
+                insertions[match.start()] = (tail, match.start() + embedded.end("tail"))
+
+    for header in SLO_PROBATE_TABLE_HEADER_RE.finditer(block_text):
+        if not any(start <= header.start() < end for start, end in email_spans):
+            spans.append((header.start(), header.end()))
+
+    if not spans:
+        return block_text, len(block_text.rstrip())
+
+    pieces: list[str] = []
+    cursor = 0
+    kept_end = 0
+    for start, end in sorted(spans):
+        if start < cursor:
+            continue
+        piece = block_text[cursor:start]
+        if piece.strip():
+            pieces.append(piece.strip("\n"))
+            kept_end = max(kept_end, start)
+        if start in insertions:
+            tail, tail_end = insertions[start]
+            pieces.append(tail)
+            kept_end = max(kept_end, tail_end)
+        cursor = end
+    if cursor < len(block_text):
+        piece = block_text[cursor:]
+        if piece.strip():
+            pieces.append(piece.strip("\n"))
+            kept_end = max(kept_end, len(block_text.rstrip()))
+    return "\n".join(pieces).strip(), kept_end
 
 
 def parse_ventura(
@@ -183,20 +346,19 @@ def parse_tulare_pdf(
     anchors = list(re.finditer(r"(?m)^\s*(?P<num>[VP]PR\d{6})\s+", plain))
     rulings: list[Ruling] = []
     for i, anchor in enumerate(anchors):
-        end = anchors[i + 1].start() if i + 1 < len(anchors) else len(plain)
-        block = clean_lines(plain[anchor.start() : end])
+        raw_end = anchors[i + 1].start() if i + 1 < len(anchors) else len(plain)
+        header_match = re.search(
+            r"(?m)^\s*Case Number Case Name Type Status Comments\s*$",
+            plain[anchor.start():raw_end],
+        )
+        raw_block = plain[anchor.start():raw_end]
+        block_text, trim_at = _trim_or_drop_table_header(raw_block, header_match)
+        end = anchor.start() + trim_at if trim_at is not None else raw_end
+        block = clean_lines(block_text)
         lines = [inline(line) for line in block.splitlines() if inline(line)]
         if not lines:
             continue
-        first = re.sub(rf"^{re.escape(anchor.group('num'))}\s*", "", lines[0]).strip()
-        tail_lines = ([first] if first else []) + lines[1:]
-        body_idx = _first_body_line(tail_lines)
-        case_title = " ".join(tail_lines[:body_idx]) or anchor.group("num")
-        body = _line_window(tail_lines, body_idx)
-        motion = ""
-        status_match = re.search(r"(Appearance Required|Recommended for Approval|Approval Conditional[^.\n]*)", block, re.IGNORECASE)
-        if status_match:
-            motion = inline(block[: status_match.start()].replace(anchor.group("num"), ""))
+        case_title, motion, body = _split_tulare_probate_row(anchor.group("num"), block)
         page_start, page_end = _page_span(offsets, anchor.start(), end)
         rulings.append(
             make_ruling(
@@ -212,6 +374,7 @@ def parse_tulare_pdf(
                 full_text=block,
                 body_text=body,
                 motion_type=motion,
+                outcome_text=body,
                 division=division_hint or "Probate",
                 dept=dept,
                 page_start=page_start,
@@ -339,7 +502,9 @@ def parse_san_benito(
     anchors = list(re.finditer(r"(?m)^(?P<num>(?:FL|CU|PR)-\d{2}-\d{5})\s+(?P<title>.+)$", plain))
     rulings: list[Ruling] = []
     for i, anchor in enumerate(anchors):
-        end = anchors[i + 1].start() if i + 1 < len(anchors) else len(plain)
+        raw_end = anchors[i + 1].start() if i + 1 < len(anchors) else len(plain)
+        marker = SAN_BENITO_END_RE.search(plain[anchor.start():raw_end])
+        end = anchor.start() + marker.start() if marker else raw_end
         block = clean_lines(plain[anchor.start() : end])
         body = block[block.find(anchor.group("title")) + len(anchor.group("title")) :]
         page_start, page_end = _page_span(offsets, anchor.start(), end)
@@ -378,17 +543,19 @@ def parse_butte(
     if not hearing_date:
         return []
     if "Current Probate Tentative Rulings" in plain:
-        normalized = re.sub(r"(\d{2}PR)\s+(\d{5})", r"\1\2", plain)
-        normalized = re.sub(r"(?m)^9:\s*\n\s*00\s+", "9:00 ", normalized)
-        anchors = list(re.finditer(r"(?m)^\s*\d{1,2}:\d{2}\s+(?P<num>\d{2}PR\d{5})\s+", normalized))
+        normalized_pages = [_normalize_butte_probate_page(page) for page in pages]
+        normalized, normalized_offsets = join_pages(normalized_pages)
+        butte_probate_num = r"(?:\d{2}(?:PR|MH)\d{5}|PR-\d{5})"
+        anchors = list(re.finditer(rf"(?m)^\s*\d{{1,2}}:\d{{2}}[ \t]+(?P<num>{butte_probate_num})\b", normalized))
         rulings: list[Ruling] = []
         for i, anchor in enumerate(anchors):
             end = anchors[i + 1].start() if i + 1 < len(anchors) else len(normalized)
             block = clean_lines(normalized[anchor.start() : end])
             lines = [inline(line) for line in block.splitlines() if inline(line)]
-            tail = re.sub(r"^\d{1,2}:\d{2}\s+\d{2}PR\d{5}\s*", "", lines[0]).strip() if lines else ""
+            tail = re.sub(rf"^\d{{1,2}}:\d{{2}}[ \t]+{butte_probate_num}\b[ \t]*", "", lines[0]).strip() if lines else ""
             tail_lines = ([tail] if tail else []) + lines[1:]
             body_idx = _first_body_line(tail_lines)
+            page_start, page_end = _page_span(normalized_offsets, anchor.start(), end)
             rulings.append(
                 make_ruling(
                     county="butte",
@@ -404,8 +571,8 @@ def parse_butte(
                     body_text=_line_window(tail_lines, body_idx),
                     division=division_hint or "Probate",
                     dept=dept_hint,
-                    page_start=1,
-                    page_end=max(1, len(pages)),
+                    page_start=page_start,
+                    page_end=page_end,
                 )
             )
         return rulings
@@ -548,13 +715,24 @@ def parse_san_luis_obispo(
     dept_match = re.search(r"in\s+Department\s+([A-Za-z0-9 ]+),", plain[:800], re.IGNORECASE)
     if dept_match:
         dept = inline(dept_match.group(1))
-    anchors = list(re.finditer(r"(?m)^\s*(?:\d+\s+)?(?P<num>\d{2}PR-\d{4})\s+", plain))
+    normalized_pages = [_normalize_slo_probate_page(page) for page in pages]
+    plain, offsets = join_pages(normalized_pages)
+    slo_probate_num = r"\d{2}(?:PR|CVP|LCP)-\d{4}"
+    anchors = list(re.finditer(rf"(?m)^\s*(?:\d+[ \t]+)?(?P<num>{slo_probate_num})\b", plain))
     rulings: list[Ruling] = []
     for i, anchor in enumerate(anchors):
-        end = anchors[i + 1].start() if i + 1 < len(anchors) else len(plain)
-        block = clean_lines(plain[anchor.start() : end])
+        raw_end = anchors[i + 1].start() if i + 1 < len(anchors) else len(plain)
+        block_text = plain[anchor.start():raw_end]
+        block_text, kept_end = _clean_slo_probate_block_text(block_text)
+        boilerplate = SLO_PROBATE_BOILERPLATE_RE.search(block_text)
+        trim_points = [point for point in [boilerplate.start() if boilerplate else None] if point is not None]
+        if trim_points:
+            kept_end = min(kept_end, min(trim_points))
+            block_text = block_text[: min(trim_points)]
+        end = anchor.start() + kept_end if kept_end else raw_end
+        block = clean_lines(block_text)
         lines = [inline(line) for line in block.splitlines() if inline(line)]
-        tail = re.sub(r"^(?:\d+\s+)?\d{2}PR-\d{4}\s*", "", lines[0]).strip() if lines else ""
+        tail = re.sub(rf"^(?:\d+[ \t]+)?{slo_probate_num}\b[ \t]*", "", lines[0]).strip() if lines else ""
         tail_lines = ([tail] if tail else []) + lines[1:]
         body_idx = _first_body_line(tail_lines)
         page_start, page_end = _page_span(offsets, anchor.start(), end)
@@ -603,28 +781,78 @@ def parse_sierra(
         return []
     rest = plain[match.end() :]
     lines = [line for line in rest.splitlines() if inline(line)]
-    motion = inline(lines[0]) if lines else ""
-    body = "\n".join(lines[1:]) if len(lines) > 1 else rest
-    return [
-        make_ruling(
-            county="sierra",
-            source_sha256=sha,
-            source_url=source_url,
-            parser_version="sierra-v1",
-            style="sierra-law-motion",
-            index=1,
-            case_number=match.group("num"),
-            case_title=match.group("title"),
-            hearing_date=hearing_date,
-            full_text=plain,
-            body_text=body,
-            motion_type=motion,
-            division=division_hint or "Law and Motion",
-            dept=dept_hint,
-            page_start=1,
-            page_end=max(1, len(pages)),
+    if not lines:
+        return []
+
+    allow_multi_section = (
+        sha in SIERRA_MULTI_SECTION_SOURCE_SHAS
+        or any(marker in source_url for marker in SIERRA_MULTI_SECTION_URL_MARKERS)
+    )
+    starts = []
+    heading_re = re.compile(r"\b(?:Motion|Demurrer|Petition|Application|Order\s+to\s+Show\s+Cause)\b")
+    disposition_re = re.compile(
+        r"\b(?:is|are)\s+(?:granted|denied|sustained|overruled|off[- ]calendar|continued)\b",
+        re.IGNORECASE,
+    )
+    if allow_multi_section:
+        for idx, raw_line in enumerate(lines):
+            line = inline(lines[idx])
+            if len(line) > 220:
+                continue
+            if not re.match(r"^(?:Plaintiff|Defendant|Petitioner|Respondent|Applicant)\b", line):
+                continue
+            if heading_re.search(raw_line) and not disposition_re.search(line):
+                starts.append(idx)
+        if len(starts) < 2:
+            starts = []
+        else:
+            validated_starts: list[int] = []
+            for pos, start_idx in enumerate(starts):
+                end_idx = starts[pos + 1] if pos + 1 < len(starts) else len(lines)
+                section_lines = lines[start_idx:end_idx]
+                early_body = inline(" ".join(section_lines[1:4]))
+                if disposition_re.search(early_body):
+                    validated_starts.append(start_idx)
+            starts = validated_starts if len(validated_starts) == len(starts) else []
+    if not starts:
+        starts = [0]
+
+    rulings: list[Ruling] = []
+    for pos, start_idx in enumerate(starts):
+        end_idx = starts[pos + 1] if pos + 1 < len(starts) else len(lines)
+        section_lines = lines[start_idx:end_idx]
+        if not section_lines:
+            continue
+        body_start = 1
+        for rel_idx in range(1, len(section_lines)):
+            probe = inline(" ".join(section_lines[rel_idx : rel_idx + 2]))
+            if disposition_re.search(probe):
+                body_start = rel_idx
+                break
+        motion = inline(" ".join(section_lines[:body_start]))
+        body = "\n".join(section_lines[body_start:]) if body_start < len(section_lines) else ""
+        rulings.append(
+            make_ruling(
+                county="sierra",
+                source_sha256=sha,
+                source_url=source_url,
+                parser_version="sierra-v1",
+                style="sierra-law-motion",
+                index=len(rulings) + 1,
+                case_number=match.group("num"),
+                case_title=match.group("title"),
+                hearing_date=hearing_date,
+                full_text="\n".join(section_lines),
+                body_text=body,
+                motion_type=motion,
+                division=division_hint or "Law and Motion",
+                dept=dept_hint,
+                page_start=1,
+                page_end=max(1, len(pages)),
+                outcome_text=inline(" ".join(section_lines[body_start : body_start + 2])),
+            )
         )
-    ]
+    return rulings
 
 
 def _marin_party(text: str) -> str:
@@ -862,9 +1090,20 @@ def parse_los_angeles_page(html: str, capture: dict) -> list[Ruling]:
     if not sha:
         return []
     text = html_to_text(html)
-    parts = re.split(r"Case Number:\s*", text)
+    raw_parts = re.split(r"Case Number:\s*", text)
+    parts: list[str] = []
+    for part in raw_parts[1:]:
+        header = re.match(
+            r"(?P<num>[A-Z0-9]+)\s+Hearing Date:\s*(?P<date>[A-Za-z]+ \d{1,2},? \d{4})\s+Dept:\s*(?P<dept>[A-Z0-9]+)",
+            inline(part[:250]),
+            re.IGNORECASE,
+        )
+        if header:
+            parts.append(part)
+        elif parts:
+            parts[-1] += "\nCase Number: " + part
     rulings: list[Ruling] = []
-    for part in parts[1:]:
+    for part in parts:
         header = re.match(
             r"(?P<num>[A-Z0-9]+)\s+Hearing Date:\s*(?P<date>[A-Za-z]+ \d{1,2},? \d{4})\s+Dept:\s*(?P<dept>[A-Z0-9]+)",
             inline(part[:250]),
@@ -918,7 +1157,11 @@ def parse_stanislaus_page(html: str, capture: dict) -> list[Ruling]:
     if not sha:
         return []
     text = html_to_text(html)
-    hearing_date = find_date(text)
+    date_match = re.search(
+        r"(?im)^\s*Date:\s*([A-Za-z]+ \d{1,2},? \d{4}|\d{1,2}/\d{1,2}/\d{2,4})\s*$",
+        text,
+    )
+    hearing_date = parse_date_value(date_match.group(1)) if date_match else find_date(text)
     if not hearing_date:
         return []
     anchors = list(re.finditer(r"(?m)^(?P<num>(?:CV|FL|PR|UD)-\d{2}-\d{6})\s+[-–]\s+(?P<title>.+)$", text))
@@ -1003,7 +1246,9 @@ def parse_sonoma_page(html: str, capture: dict) -> list[Ruling]:
     anchors = sorted(anchor_specs, key=lambda item: item["start"])
     rulings: list[Ruling] = []
     for i, anchor in enumerate(anchors):
-        end = anchors[i + 1]["start"] if i + 1 < len(anchors) else len(text)
+        raw_end = anchors[i + 1]["start"] if i + 1 < len(anchors) else len(text)
+        marker = SONOMA_END_RE.search(text[anchor["start"] : raw_end])
+        end = anchor["start"] + marker.start() if marker else raw_end
         block = clean_lines(text[anchor["start"] : end])
         if not block:
             continue

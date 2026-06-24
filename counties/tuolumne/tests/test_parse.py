@@ -76,6 +76,7 @@ def test_parse_tuolumne_page_oriented_calendar():
     assert rows[0].case_number == "CV68039"
     assert rows[0].page_start == 1
     assert "Case Management Conference" in rows[0].motion_type
+    assert rows[0].body_text.startswith("This is a petition")
     assert rows[1].case_number == "CVL66996"
     assert rows[1].outcome == "denied"
 
@@ -100,3 +101,4 @@ def test_missing_timestamp_uses_blank_line_before_narrative_body():
     assert len(rows) == 1
     assert rows[0].motion_type == "Petition Hearing - Other / Cancel and Release Mechanics Lien"
     assert rows[0].outcome_text.startswith("This is a special proceeding")
+    assert rows[0].body_text.startswith("This is a special proceeding")

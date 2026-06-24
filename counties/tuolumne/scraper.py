@@ -277,7 +277,7 @@ def parse(
                 outcome_text=body,
                 conditional=conditional,
                 continued_to=continued_to,
-                body_text="",
+                body_text=body,
                 full_text=page_text.strip(),
                 page_start=page_index,
                 page_end=page_index,
