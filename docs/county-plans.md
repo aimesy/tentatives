@@ -184,8 +184,8 @@ registered parser above, current as of 2026-06-24.
 
 ## Implementation Order
 
-1. Keep the scheduled live capture, parse, slice, and LIVE refresh workflow
-   running for all implemented `LANDING_PAGES`.
+1. Keep the scheduled live capture, OCR sidecar, parse, slice, and LIVE refresh
+   workflow running for all implemented `LANDING_PAGES`.
 2. Keep the weekly bounded Wayback pass running for exact and reverse-engineered
    URL families; widen limits only after CDX reliability is confirmed.
 3. Add an Imperial parser only after a representative current PDF with real rows

@@ -786,7 +786,7 @@ python -m ingest.backfill --county orange --live --wayback --limit 25
 
 `--county all` means the configured CLI-backed counties. Contra Costa PDFs are included through a direct adapter for the public retired.cc-courts.org iframe URL. Browser-only work is limited to extension page snapshots or future public sites that still need active page execution after direct HTTP fails.
 
-The GitHub workflow runs live capture daily at 5 PM America/Los_Angeles, with an offset-based DST guard because GitHub cron is UTC-only and scheduled starts can be delayed. It also runs a bounded Wayback check weekly because current URLs may acquire archived versions later. For a VPS-based second live-capture path, see [docs/vps-daily-harvest.md](docs/vps-daily-harvest.md).
+The GitHub workflow runs live capture daily at 5 PM America/Los_Angeles, with an offset-based DST guard because GitHub cron is UTC-only and scheduled starts can be delayed. It also runs a bounded Wayback check weekly because current URLs may acquire archived versions later. The maintainer loop is documented in [docs/maintainer-routine.md](docs/maintainer-routine.md). For a temporary VPS fallback, see [docs/vps-daily-harvest.md](docs/vps-daily-harvest.md).
 
 Wayback has not been exhaustively backfilled yet. The local archive currently has 518 capture-manifest rows with `wayback_ts` across Amador, Calaveras, El Dorado, Fresno, Merced, Nevada, Orange, Placer, Plumas, San Bernardino, Santa Clara, Shasta, and Solano. Start bounded, then widen.
 

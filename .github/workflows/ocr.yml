@@ -21,6 +21,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: ocr-data-${{ github.ref }}
@@ -100,3 +101,15 @@ jobs:
             sleep $((attempt * 5))
           done
           exit 1
+
+      - name: File failure bug report
+        if: failure()
+        env:
+          WORKFLOW_LABEL: "OCR textless PDFs"
+          LOG_PATH: ocr.log
+          EXTRA_CONTEXT: |
+            Manual OCR/reparse lane. It creates non-destructive OCR sidecars
+            under archive/<county>/ocr/, reparses requested sources when asked,
+            slices rulings, refreshes LIVE, and commits archive/data/README/LIVE.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/scripts/file_failure_report.sh

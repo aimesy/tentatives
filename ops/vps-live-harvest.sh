@@ -53,15 +53,26 @@ if ! grep -Eq '^[-[:alnum:]]+: archived/logged [1-9][0-9]* refs$' vps-live-harve
   exit 1
 fi
 
-if git diff --quiet -- archive/; then
-  echo "no archive changes"
+printf '\n== OCR textless PDFs ==\n' >> vps-live-harvest.log
+.venv-vps/bin/python -m ingest.ocr_missing_text --county all | tee -a vps-live-harvest.log
+
+printf '\n== parse archived sources ==\n' >> vps-live-harvest.log
+.venv-vps/bin/python -m ingest.orchestrate | tee -a vps-live-harvest.log
+
+printf '\n== slice parsed PDF rulings ==\n' >> vps-live-harvest.log
+.venv-vps/bin/python -m ingest.slice_rulings | tee -a vps-live-harvest.log
+
+.venv-vps/bin/python update-readme.py
+
+if git diff --quiet -- archive/ data/ README.md LIVE.md; then
+  echo "no archive, OCR, data, or LIVE changes"
   exit 0
 fi
 
 git config user.name "tentatives-bot"
 git config user.email "tentatives-bot@users.noreply.github.com"
-git add archive/
-git commit -m "archive: backfill captures"
+git add archive/ data/ README.md LIVE.md
+git commit -m "archive: backfill captures and parsed data"
 
 for attempt in 1 2 3; do
   git pull --rebase origin master
