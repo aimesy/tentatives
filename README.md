@@ -41,7 +41,7 @@ Parser support means archived material is converted into normalized rows in `dat
 | Contra Costa | yes | yes | PDFs, archive pages, and changed HTML page captures for ruling pages and probate calendar notes. |
 | El Dorado | yes | yes | Probate, civil law and motion, probate calendar, and family law PDF styles. |
 | Fresno | yes | yes | Law and Motion department PDFs. |
-| Imperial | yes | no | Static public PDF surface is captured when live links exist; no representative parsed rows yet. |
+| Imperial | yes | yes | Static public PDF surface is captured when live links exist; initial section parser handles the current multi-ruling PDF shape. |
 | Los Angeles | yes | yes | Public WebForms department/date result pages parsed from captured HTML. |
 | Marin | yes | yes | Static civil, family, and probate PDFs. Recheck after the court's announced July 2, 2026 access change. |
 | Merced | yes | yes | Weekday civil law-and-motion PDFs. |
