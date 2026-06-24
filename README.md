@@ -812,7 +812,7 @@ python -m ingest.orchestrate --max-sources-per-county 50
 
 By default, `ingest.orchestrate` skips source hashes already represented in Parquet. Use `--reparse-existing` for parser migrations, or `--max-sources-per-county` for bounded local smoke runs. The Actions workflow parses all new archived sources after capture, slices parsed PDF rulings, and files a failure report if a new source shape breaks parsing. The parser registry is derived from county modules with a callable `parse`; counties without a parser stay in the archive until representative fixtures and tests exist.
 
-For image-only PDFs, use the manual `OCR textless PDFs` workflow or run `python -m ingest.ocr_missing_text --county <slug>` locally. OCR output is non-destructive: raw court PDFs stay in `archive/<county>/<sha[:2]>/<sha>.pdf`, while searchable sidecars are written under `archive/<county>/ocr/<sha[:2]>/<sha>.pdf`. `ingest.orchestrate` uses the sidecar for parsing when present but keeps the original source hash and URL.
+Daily backfill runs an OCR sidecar pass before parsing. For manual re-runs, use the `OCR textless PDFs` workflow or run `python -m ingest.ocr_missing_text --county <slug>` locally. OCR output is non-destructive: raw court PDFs stay in `archive/<county>/<sha[:2]>/<sha>.pdf`, while searchable sidecars are written under `archive/<county>/ocr/<sha[:2]>/<sha>.pdf`. `ingest.orchestrate` uses the sidecar for parsing when present but keeps the original source hash and URL.
 
 ## Layout
 

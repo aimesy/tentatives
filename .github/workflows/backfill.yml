@@ -63,7 +63,10 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ghostscript ocrmypdf poppler-utils qpdf tesseract-ocr
+          pip install -r requirements.txt
 
       - name: Run backfill
         env:
@@ -112,6 +115,8 @@ jobs:
           COUNTY: ${{ github.event.inputs.county || 'all' }}
         run: |
           set -o pipefail
+          printf '\n== OCR textless PDFs ==\n' >> backfill.log
+          python -m ingest.ocr_missing_text --county "$COUNTY" | tee -a backfill.log
           printf '\n== parse archived sources ==\n' >> backfill.log
           if [ "$COUNTY" = "all" ]; then
             python -m ingest.orchestrate | tee -a backfill.log
