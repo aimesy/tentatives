@@ -95,7 +95,7 @@ capture/parser gaps to keep working.
 | Stanislaus | Public Drupal civil/family/probate-note pages. | HTML page captures. | Page parser registered. |
 | Tulare | Civil tentative-ruling page plus probate PDFs. | HTML page capture plus PDF source captures. | Mixed page/PDF parsers registered. |
 | Ventura | Public date-search form with ViewFile PDFs. | PDF source captures. | Parser registered. |
-| Yolo | Public tentative-ruling and probate-note calendar pages. | HTML page captures plus document/PDF probing. | Pending parser until live pages expose ruling documents instead of shell pages only. |
+| Yolo | Public tentative-ruling and probate-note calendar pages. | HTML page captures plus document/PDF probing and PDF parsing. | FullCalendar embeds escaped Drupal document-node URLs; those now resolve to law-and-motion tentative PDFs and probate-note PDFs. |
 
 ## Implemented Surface Gap Notes
 
@@ -109,7 +109,7 @@ covered.
 | Fresno | Law-and-motion PDFs are implemented. Probate Examiner Notes are a separate case-number search, not a broad public list. | Leave probate notes out of daily broad capture unless a date/list surface is found; document any case-number-only support separately. |
 | Placer | The official home advertises Law and Motion Tentative Rulings, CMC Notes, OSC Calendar, and Calendar Notes. Current docs mention law-and-motion and calendar-note PDFs. | Verify whether CMC/OSC are already covered by calendar-note capture; add source labels if they are. |
 | San Bernardino | Legacy civil-table PDFs are implemented. Probate notes are separately available through CAP. | Triage the CAP probate-notes surface before treating it as extractable. |
-| San Francisco | This project implements only UFC Departments 403, 404, and 414. The official SF page also lists asbestos, law-and-motion/discovery, probate, real property/housing, and family-law surfaces, with some owned by the sibling `aimesy/sfsc-tentatives` project. | Mirror the SFSC split here and specifically verify Department 210 / housing coverage. |
+| San Francisco | This project implements only UFC Departments 403, 404, and 414. The official SF page also lists asbestos, law-and-motion/discovery, probate, real property/housing, and family-law surfaces, with some owned by the sibling `aimesy/sfsc` project. | Mirror the SFSC split here and specifically verify Department 210 / housing coverage. |
 
 ## Automation Constraints and Fallbacks
 
@@ -132,7 +132,7 @@ scope unless there is a lawful public access path.
 | ROA / case-document portals | San Diego, San Joaquin. | Not implemented. San Diego appears public but lacks a simple countywide feed. San Joaquin is case-number or portal constrained. | Use only public calendar/case leads; keep terms/cookie handling explicit. Treat broad capture as higher risk than static pages. |
 | SharePoint folder | Kings. | Not implemented. The official link redirects toward Microsoft login in basic requests. | Try anonymous SharePoint sharing APIs first; if login is required, mark blocked absent a lawful public access path. |
 | Login-backed Tyler / re:Search / JournalTech | Alameda, Mendocino, Sacramento. | Blocked for unattended public capture. | Use only a user-authorized desktop session for manual research unless a public export path is confirmed. |
-| Calendar/document-node pages | Yolo. | Daily page capture and document/PDF probing are implemented, but the current live run exposed only shell pages and no broad ruling refs. | Add a parser when live captures include actual ruling documents or stable document-node content. |
+| Calendar/document-node pages | Yolo. | Daily page capture and document/PDF probing are implemented; escaped FullCalendar document URLs now resolve to PDFs. | Keep monitoring for layout drift and password-protected confidential probate PDFs, which are archived but not parsed. |
 | Adjacent probate notes only | Yuba. | Probate-note PDFs are public, but the court says they are not tentative rulings; civil tentative implementation has not gone live. | Optional probate-notes parser only if the project wants adjacent notes; do not count as civil tentative-ruling coverage. |
 | No public tentative surface | Alpine, Colusa, Del Norte, Glenn, Humboldt, Inyo, Kern, Lake, Lassen, Madera, Mariposa, Modoc, Mono, Siskiyou, Sutter, Tehama, Trinity. | No parser target as of 2026-06-24. Several courts expressly say no tentatives; others expose only calendars or case portals. | Store as monitored negatives and recheck on a schedule. Do not scrape calendars as if they were rulings. |
 
@@ -147,7 +147,7 @@ registered parser above, current as of 2026-06-24.
 |---|---|---|---|---|
 | Imperial | [Tentative Rulings](https://www.imperial.courts.ca.gov/general-information/tentative-rulings) | Static HTML listing with direct PDFs when posted. | Continue daily capture and add a parser when representative current PDF rows appear. | Low technical risk; medium coverage risk because the live page appears sparse/stale. |
 | San Diego | [Civil tentative rulings](https://www.sdcourt.ca.gov/sdcourt/civil2/civiltentativerulings), [probate tentative rulings](https://www.sdcourt.ca.gov/sdcourt/probate2/tentativerulings), [ROA portal](https://odyroa.sdcourt.ca.gov/) | Register of Actions portal/search; tentative rulings are ROA documents. | Use public date/case leads, then ROA case pages and tentative-ruling document endpoints; parse PDFs. | Medium-high; no simple countywide list and terms/cookies must be handled carefully. |
-| Yolo | [Tentative Rulings Calendar](https://www.yolo.courts.ca.gov/online-services/tentative-rulings-calendar) and [Probate Note Calendar](https://www.yolo.courts.ca.gov/online-services/probate-note-calendar) | Drupal document nodes and direct date-coded PDFs such as `ATO-TEN-YYMMDD.pdf` and `ATO-PRB-YYMMDD.pdf`. | Keep daily page capture and document/PDF probing; add parser once current captures expose actual ruling documents rather than shell pages. | Medium; some filenames include suffixes and lightweight HTML may omit links. |
+| Yolo | [Tentative Rulings Calendar](https://www.yolo.courts.ca.gov/online-services/tentative-rulings-calendar) and [Probate Note Calendar](https://www.yolo.courts.ca.gov/online-services/probate-note-calendar) | Drupal document nodes and direct date-coded PDFs such as `ATO-TEN-YYMMDD.pdf` and `ATO-PRB-YYMMDD.pdf`. | Keep daily page capture, document/PDF probing, and parser coverage for law-and-motion tentative rulings and probate notes. | Medium; some filenames include suffixes, and password-protected confidential probate PDFs are captured but not parsed. |
 
 ### Online But Blocked, Partial, Or Not Broadly Listable
 
@@ -190,8 +190,8 @@ registered parser above, current as of 2026-06-24.
    URL families; widen limits only after CDX reliability is confirmed.
 3. Add an Imperial parser only after a representative current PDF with real rows
    appears in archive.
-4. Add a Yolo parser only after the live document-node/PDF probing captures
-   actual ruling documents rather than shell pages.
+4. Monitor Yolo's FullCalendar/document-node shape and password-protected
+   confidential probate PDFs; ordinary law-and-motion/probate-note PDFs now parse.
 5. Triage San Diego separately because public ROA access appears possible but
    not broad-list friendly.
 6. Treat Alameda, Kings, Mendocino, Sacramento, and broad San Joaquin capture as

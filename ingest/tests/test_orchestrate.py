@@ -210,3 +210,29 @@ def test_process_county_uses_registered_source_extensions(tmp_path, monkeypatch)
 
     assert orchestrate.process_county("fake", dry_run=True) == 1
     assert seen == [(content, f"archive://fake/{source_sha}.docx", source_sha)]
+
+
+def test_process_county_prefers_ocr_pdf_sidecar_without_changing_source_identity(tmp_path, monkeypatch):
+    _patch_roots(monkeypatch, tmp_path)
+    content = b"%PDF-1.4\nimage-only source\n"
+    ocr_content = b"%PDF-1.4\nocr text layer source\n"
+    source_sha = hashlib.sha256(content).hexdigest()
+    pdf_path = orchestrate.ARCHIVE / "fake" / source_sha[:2] / f"{source_sha}.pdf"
+    ocr_path = orchestrate.ocr_sidecar_path("fake", source_sha)
+    pdf_path.parent.mkdir(parents=True)
+    ocr_path.parent.mkdir(parents=True)
+    pdf_path.write_bytes(content)
+    ocr_path.write_bytes(ocr_content)
+
+    seen = []
+
+    def parser(content_bytes, *, source_url, source_sha256, dept_hint=None):
+        seen.append((content_bytes, source_url, source_sha256))
+        return [_ruling(source_sha256, source_url)]
+
+    monkeypatch.setattr(orchestrate, "PARSERS", {"fake": parser})
+    monkeypatch.setattr(orchestrate, "PARSER_EXTENSIONS", {"fake": {".pdf"}})
+    monkeypatch.setattr(orchestrate, "PAGE_PARSERS", {})
+
+    assert orchestrate.process_county("fake", dry_run=True) == 1
+    assert seen == [(ocr_content, f"archive://fake/{source_sha}.pdf", source_sha)]

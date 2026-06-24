@@ -6,7 +6,7 @@
 // linked into archive/<county>/rulings/<two-hex>/<ruling_id>.pdf on the
 // github.com blob view (which renders inline).
 //
-// The interface is patterned on aimesy/sfsc-tentatives: chip toolbar,
+// The interface is patterned on aimesy/sfsc: chip toolbar,
 // Excel-style per-column filter popups + a modal overlay for the detail
 // view + URL-driven state so a permalink reproduces the view.
 

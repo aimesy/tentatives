@@ -13,6 +13,7 @@ from counties.stanislaus import scraper as stanislaus
 from counties.sonoma import scraper as sonoma
 from counties.tulare import scraper as tulare
 from counties.ventura import scraper as ventura
+from counties.yolo import scraper as yolo
 
 
 def test_butte_discovers_system_tentative_pdf():
@@ -227,3 +228,56 @@ def test_ventura_extracts_token_and_viewfile_refs():
     assert ventura._token('<input name="__RequestVerificationToken" type="hidden" value="tok" />') == "tok"
     matches = list(ventura.VIEW_FILE_RE.finditer('<a href="/CaseInquiry/ViewFile/123">PDF</a>'))
     assert matches[0].group("id") == "123"
+
+
+def test_yolo_discovers_escaped_fullcalendar_document_paths():
+    html = r'''"url\u0022:\u0022\\\/document\\\/tentative-rulings-769\u0022'''
+
+    refs = yolo.discover_live_pages(
+        html,
+        page_url="https://www.yolo.courts.ca.gov/online-services/tentative-rulings-calendar",
+    )
+
+    assert len(refs) == 1
+    assert refs[0].url == "https://www.yolo.courts.ca.gov/document/tentative-rulings-769"
+    assert refs[0].page_kind == "document_page"
+
+
+def test_yolo_parses_law_motion_pdf():
+    sha = "006afd6e58ab56e0b0fddaa16d27afca89ad3226732a2d3428dcfd3f595d0176"
+    path = Path("archive/yolo") / sha[:2] / f"{sha}.pdf"
+    if not path.exists():
+        pytest.skip("Yolo archive fixture not present in this checkout")
+
+    rows = yolo.parse(
+        path.read_bytes(),
+        "https://www.yolo.courts.ca.gov/sites/default/files/yolo/default/2026-06/ATO-TEN-260612.pdf",
+        source_sha256=sha,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].case_number == "CV2026-1435"
+    assert rows[0].case_title == "Chang v. Ferrian"
+    assert rows[0].division == "Law and Motion"
+    assert rows[0].page_start == 2
+
+
+def test_yolo_parses_probate_notes_pdf():
+    sha = "00a1442d916e1aff3b59841f36358d21f209d07ea378dfc47852b44dd229a7cd"
+    path = Path("archive/yolo") / sha[:2] / f"{sha}.pdf"
+    if not path.exists():
+        pytest.skip("Yolo archive fixture not present in this checkout")
+
+    rows = yolo.parse(
+        path.read_bytes(),
+        "https://www.yolo.courts.ca.gov/sites/default/files/yolo/default/2026-05/ATO-PRB-260519.pdf",
+        source_sha256=sha,
+    )
+
+    assert len(rows) == 2
+    assert rows[0].case_number == "PR2026-0097"
+    assert rows[0].case_title == "Estate of Brienes"
+    assert rows[0].division == "Probate Notes"
+    assert rows[0].dept == "11"
+    assert rows[1].case_number == "PR2025-0310"
+    assert rows[1].dept == "14"

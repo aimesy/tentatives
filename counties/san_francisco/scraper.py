@@ -5,7 +5,7 @@ Discovery
 The attached UFC page at webapps.sftc.org lists current and previous family
 law tentative-ruling PDFs for departments 403, 404, and 414. This module
 discovers those PDFs for capture. The main San Francisco civil archive remains
-in `aimesy/sfsc-tentatives`.
+in `aimesy/sfsc`.
 
 Parsing
 -------

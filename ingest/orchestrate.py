@@ -156,6 +156,18 @@ def iter_content_addressed_pdfs(county_archive: Path) -> list[Path]:
     return iter_content_addressed_sources(county_archive, {".pdf"})
 
 
+def ocr_sidecar_path(county: str, source_sha256: str) -> Path:
+    return ARCHIVE / county / "ocr" / source_sha256[:2] / f"{source_sha256}.pdf"
+
+
+def parser_content_bytes(county: str, source_path: Path, source_sha256: str) -> bytes:
+    if source_path.suffix.lower() == ".pdf":
+        ocr_path = ocr_sidecar_path(county, source_sha256)
+        if ocr_path.exists():
+            return ocr_path.read_bytes()
+    return source_path.read_bytes()
+
+
 def re_fullmatch_hex2(value: str) -> bool:
     return len(value) == 2 and all(c in "0123456789abcdef" for c in value.lower())
 
@@ -344,8 +356,9 @@ def process_county(
         cap = captures.get(actual_sha, {})
         source_url = cap.get("source_url") or f"archive://{county}/{actual_sha}{source_path.suffix.lower()}"
 
+        parse_content = parser_content_bytes(county, source_path, actual_sha)
         rulings = parser(
-            content,
+            parse_content,
             **parser_kwargs(
                 parser,
                 source_url=source_url,
