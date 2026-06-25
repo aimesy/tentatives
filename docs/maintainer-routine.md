@@ -14,8 +14,10 @@ Daily live run:
 3. Run `ingest.ocr_missing_text` so image-only PDFs get searchable sidecars.
 4. Run `ingest.orchestrate` so new sources become normalized Parquet rows.
 5. Run `ingest.slice_rulings` so viewer links target the right raw PDF pages.
-6. Run `update-readme.py` to refresh README/LIVE metrics.
-7. Commit `archive/`, `data/`, `README.md`, and `LIVE.md`.
+6. Run `update-readme.py` to refresh README/LIVE metrics and
+   `site/counties.json`.
+7. Commit `archive/`, `data/`, `site/counties.json`, `README.md`, and
+   `LIVE.md`.
 8. Rebase before pushing if `master` moved.
 9. File or update a GitHub issue on failure.
 
@@ -31,6 +33,8 @@ Weekly Wayback run:
 `.github/workflows/parse.yml` runs when archive/parser changes land outside the
 scheduled backfill. It now follows the same derived-data loop: OCR sidecars,
 parse, slice, LIVE refresh, commit.
+`site/counties.json` is generated from `data/*/rulings.parquet`; do not hand
+list only a subset of county databases in the viewer.
 
 `.github/workflows/ocr.yml` is manual. Use it for bounded OCR/reparse work when
 a county has image-only PDFs or a parser migration needs a deliberate reparse.

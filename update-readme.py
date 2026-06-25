@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -16,6 +17,16 @@ ARCHIVE_DIR = HERE / "archive"
 
 LIVE_START = "<!-- tentatives-live:start -->"
 LIVE_END = "<!-- tentatives-live:end -->"
+
+
+def refresh_site_counties() -> None:
+    script = HERE / "update-site-counties.py"
+    spec = importlib.util.spec_from_file_location("update_site_counties", script)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {script}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.main()
 
 
 def fmt_int(value: int) -> str:
@@ -118,6 +129,7 @@ def with_live_block(content: str, block: str) -> str:
 
 
 def main() -> None:
+    refresh_site_counties()
     stats = live_stats()
     block = render_live_table(stats)
     LIVE.write_text(block, encoding="utf-8")

@@ -15,8 +15,8 @@ commits `archive/` plus parsed `data/` updates directly to the repository.
   America/Los_Angeles and the weekly Wayback check.
 - The same workflow runs the full maintainer loop: capture, OCR textless PDFs
   into non-destructive sidecars, parse archived sources, slice PDF rulings,
-  refresh LIVE/README metrics, then commit `archive/`, `data/`, `README.md`,
-  and `LIVE.md`.
+  refresh LIVE/README metrics and `site/counties.json`, then commit `archive/`,
+  `data/`, `site/counties.json`, `README.md`, and `LIVE.md`.
 - `.github/workflows/parse.yml` is the catch-up lane when an extension,
   manual fallback, or code change pushes archive/parser changes outside the
   scheduled backfill. It runs the same OCR, parse, slice, and LIVE refresh
@@ -117,9 +117,10 @@ find / -xdev -type f -iname '*.pdf' 2>/dev/null
 5. Runs OCR sidecar generation for textless PDFs.
 6. Parses archived sources into Parquet.
 7. Slices PDF rulings to `archive/<county>/rulings/`.
-8. Refreshes `README.md` and `LIVE.md`.
-9. Commits `archive/`, `data/`, `README.md`, and `LIVE.md`, then rebases before
-   pushing, preserving bot/archive commits if `master` moved.
+8. Refreshes `README.md`, `LIVE.md`, and `site/counties.json`.
+9. Commits `archive/`, `data/`, `site/counties.json`, `README.md`, and
+   `LIVE.md`, then rebases before pushing, preserving bot/archive commits if
+   `master` moved.
 
 The fallback should therefore produce a complete repo state by itself. It should
 not depend on the separate `Parse new PDFs` workflow to finish the maintainer

@@ -86,18 +86,21 @@ for slug, module in discovery_modules().items():
       echo "python -m ingest.orchestrate"
       echo "python -m ingest.slice_rulings"
       echo "python update-readme.py"
+      echo "python update-site-counties.py"
       ;;
     *Parse*)
       echo "python -m ingest.ocr_missing_text --county all"
       echo "python -m ingest.orchestrate"
       echo "python -m ingest.slice_rulings"
       echo "python update-readme.py"
+      echo "python update-site-counties.py"
       ;;
     *OCR*)
       echo "python -m ingest.ocr_missing_text --county all"
       echo "python -m ingest.orchestrate"
       echo "python -m ingest.slice_rulings"
       echo "python update-readme.py"
+      echo "python update-site-counties.py"
       ;;
     *)
       echo "# see .github/workflows for the exact commands the runner used"
@@ -113,6 +116,7 @@ for slug, module in discovery_modules().items():
   echo "- Parse driver: \`ingest/orchestrate.py\`"
   echo "- Per-county discovery / parsing: \`counties/<slug>/scraper.py\`"
   echo "- Slice pipeline: \`ingest/slice_rulings.py\`"
+  echo "- Viewer county manifest: \`update-site-counties.py\` -> \`site/counties.json\`"
   echo "- Maintainer runbook: \`docs/maintainer-routine.md\`"
   echo "- County registry: \`counties/registry.py\` (which counties are picked up by \`--county all\`)"
   echo

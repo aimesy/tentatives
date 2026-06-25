@@ -64,14 +64,14 @@ printf '\n== slice parsed PDF rulings ==\n' >> vps-live-harvest.log
 
 .venv-vps/bin/python update-readme.py
 
-if git diff --quiet -- archive/ data/ README.md LIVE.md; then
+if git diff --quiet -- archive/ data/ site/counties.json README.md LIVE.md; then
   echo "no archive, OCR, data, or LIVE changes"
   exit 0
 fi
 
 git config user.name "tentatives-bot"
 git config user.email "tentatives-bot@users.noreply.github.com"
-git add archive/ data/ README.md LIVE.md
+git add archive/ data/ site/counties.json README.md LIVE.md
 git commit -m "archive: backfill captures and parsed data"
 
 for attempt in 1 2 3; do

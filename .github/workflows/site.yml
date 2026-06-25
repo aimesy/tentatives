@@ -10,6 +10,7 @@ on:
     paths:
       - "site/**"
       - "data/**/rulings.parquet"
+      - "update-site-counties.py"
       - ".github/workflows/site.yml"
   workflow_run:
     workflows: ["Backfill captures"]
@@ -43,6 +44,7 @@ jobs:
 
       - name: Assemble Pages payload
         run: |
+          python3 update-site-counties.py
           mkdir -p _site
           cp -R site/* _site/
           touch _site/.nojekyll

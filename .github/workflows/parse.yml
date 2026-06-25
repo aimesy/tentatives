@@ -68,13 +68,13 @@ jobs:
 
       - name: Commit derived data updates
         run: |
-          if git diff --quiet -- archive/ data/ README.md LIVE.md && [ -z "$(git status --porcelain archive/ data/ README.md LIVE.md)" ]; then
+          if git diff --quiet -- archive/ data/ site/counties.json README.md LIVE.md && [ -z "$(git status --porcelain archive/ data/ site/counties.json README.md LIVE.md)" ]; then
             echo "no OCR, parquet, slice, or LIVE changes"
             exit 0
           fi
           git config user.name "tentatives-bot"
           git config user.email "tentatives-bot@users.noreply.github.com"
-          git add archive/ data/ README.md LIVE.md
+          git add archive/ data/ site/counties.json README.md LIVE.md
           git commit -m "ingest: update parsed data"
           for attempt in 1 2 3; do
             git pull --rebase origin "${GITHUB_REF_NAME}"
