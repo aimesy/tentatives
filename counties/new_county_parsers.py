@@ -103,6 +103,12 @@ SIERRA_MULTI_SECTION_SOURCE_SHAS = {
 SIERRA_MULTI_SECTION_URL_MARKERS = {
     "17RJ4PEhce-1OvPpZY8yRs01k-wAULiTN",
 }
+SIERRA_GUARDIANSHIP_RE = re.compile(
+    r"(?is)\bIn\s+the\s+matter\s+of\b.*?\bCASE\s+NO\.?:\s*PR\s*\d+.*?"
+    r"\bTENTATIVE\s+GUARDIANSHIP\s+RULING\b.*?"
+    r"\bhearing\s+currently\s+set\s+on\s+"
+    r"(?:[A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}/\d{1,2}/\d{2,4})"
+)
 
 
 TULARE_PROBATE_TYPES = (
@@ -119,6 +125,98 @@ TULARE_PROBATE_STATUS_RE = re.compile(
     r"\b(?:Appearance\s+Required|Recommended\s+for\s+Approval|Approval\s+Conditional(?:\s+Upon)?)\b",
     re.IGNORECASE,
 )
+
+
+def _sierra_guardianship_title(plain: str, case_match: re.Match[str]) -> str:
+    pre_case = plain[: case_match.start()]
+    title_match = re.search(
+        r"(?is)\bIn\s+the\s+matter\s+of\s+(?P<title>.*?)(?:\bIN\s+AND\s+FOR\b|$)",
+        pre_case,
+    )
+    title = inline(title_match.group("title")) if title_match else ""
+    title = re.sub(r"\bCASE\s+NO\.?:?\s*$", "", title, flags=re.IGNORECASE).strip()
+
+    heading_match = re.search(r"(?i)\bTENTATIVE\s+GUARDIANSHIP\s+RULING\b", plain)
+    tail = plain[case_match.end() : heading_match.start() if heading_match else case_match.end()]
+    tail_lines = []
+    for raw_line in tail.splitlines():
+        line = inline(raw_line)
+        if not line:
+            continue
+        if re.search(r"\b(?:CLERK|DEPUTY|COURT|COUNTY|SIERRA)\b", line, re.IGNORECASE):
+            continue
+        if re.search(r"\d", line):
+            continue
+        if line.isupper():
+            continue
+        tail_lines.append(line)
+    if tail_lines:
+        title = inline(f"{title} {' '.join(tail_lines)}")
+    return title or "Guardianship"
+
+
+def _parse_sierra_guardianship(
+    pages: list[str],
+    plain: str,
+    sha: str,
+    source_url: str,
+    dept_hint: str | None,
+) -> list[Ruling]:
+    if not SIERRA_GUARDIANSHIP_RE.search(plain):
+        return []
+    case_match = re.search(r"(?i)\bCASE\s+NO\.?:\s*(PR\s*\d+)\b", plain)
+    hearing_match = re.search(
+        r"(?i)\bhearing\s+currently\s+set\s+on\s+"
+        r"([A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}/\d{1,2}/\d{2,4})",
+        plain,
+    )
+    heading_match = re.search(r"(?i)\bTENTATIVE\s+GUARDIANSHIP\s+RULING\b", plain)
+    if not case_match or not hearing_match or not heading_match:
+        return []
+    hearing_date = parse_date_value(hearing_match.group(1))
+    if not hearing_date:
+        return []
+
+    footer_match = re.search(
+        r"(?im)^\s*(?:Dated:|(?:\S+\s+)?Dated:|Charles\s+H\.?\s+Ervin\b)",
+        plain[heading_match.end() :],
+    )
+    body_start = heading_match.end()
+    body_end = body_start + footer_match.start() if footer_match else len(plain)
+    body = clean_lines(plain[body_start:body_end])
+    if not body:
+        return []
+    outcome_text = re.sub(
+        r"(?is)^NO\s+APPEARANCE\s+REQUIRED\b.*?(?=\bThe\s+court\b)",
+        "",
+        body,
+    ).strip()
+
+    full_start = plain.lower().rfind("in the matter of", 0, heading_match.start())
+    if full_start < 0:
+        full_start = 0
+
+    return [
+        make_ruling(
+            county="sierra",
+            source_sha256=sha,
+            source_url=source_url,
+            parser_version="sierra-v2",
+            style="sierra-guardianship",
+            index=1,
+            case_number=case_match.group(1).replace(" ", ""),
+            case_title=_sierra_guardianship_title(plain, case_match),
+            hearing_date=hearing_date,
+            full_text=clean_lines(plain[full_start:body_end]),
+            body_text=body,
+            motion_type="Tentative Guardianship Ruling",
+            division="Guardianships",
+            dept=dept_hint,
+            page_start=1,
+            page_end=max(1, len(pages)),
+            outcome_text=outcome_text or body,
+        )
+    ]
 
 
 def _split_tulare_probate_row(case_number: str, block: str) -> tuple[str, str, str]:
@@ -769,6 +867,15 @@ def parse_sierra(
     pages, plain, _offsets = _pdf_text(pdf_bytes)
     if not plain or "do not have any tentative rulings" in plain.lower():
         return []
+    guardianship_rows = _parse_sierra_guardianship(
+        pages,
+        plain,
+        sha,
+        source_url,
+        dept_hint,
+    )
+    if guardianship_rows:
+        return guardianship_rows
     match = re.search(
         r"Tentative rulings for (?P<date>[A-Za-z]+ \d{1,2},? \d{4}) in (?P<title>.*?)\s+(?P<num>\d{2}CU\d{4})",
         plain,

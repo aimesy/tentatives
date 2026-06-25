@@ -158,6 +158,45 @@ def test_sierra_splits_multiple_motion_rulings_in_one_case():
     assert rows[1].outcome == "off_calendar"
 
 
+def test_sierra_parses_ocr_guardianship_rulings():
+    fixtures = [
+        (
+            "7cff558939630a3e9c3c8633af798045f0a1b196728df1618345c9c3de9b7bd1",
+            "PR2092",
+            "Mason Robert Pasquetti",
+            "2026-05-20",
+        ),
+        (
+            "04bd3c9835be41a3924647acca7bdaf948d47176c454602ea2c3e5021b951c72",
+            "PR2093",
+            "Celeste and Claire Quintana",
+            "2026-06-24",
+        ),
+    ]
+    for sha, case_number, case_title, hearing_date in fixtures:
+        path = Path("archive/sierra/ocr") / sha[:2] / f"{sha}.pdf"
+        if not path.exists():
+            pytest.skip("Sierra OCR archive fixture not present in this checkout")
+
+        rows = sierra.parse(
+            path.read_bytes(),
+            "https://drive.google.com/uc?export=download&id=16hoZfiSfS7nnckxmR45XvN_oxVHUPVBM",
+            source_sha256=sha,
+            division_hint="Guardianships",
+        )
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.case_number == case_number
+        assert row.case_title == case_title
+        assert row.hearing_date.isoformat() == hearing_date
+        assert row.division == "Guardianships"
+        assert row.motion_type == "Tentative Guardianship Ruling"
+        assert row.style == "sierra-guardianship"
+        assert "NO APPEARANCE REQUIRED" in row.body_text
+        assert row.outcome != "appearance_required"
+
+
 def test_stanislaus_prefers_explicit_page_date_over_reporter_citation():
     html = """
     <main>

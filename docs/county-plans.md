@@ -40,7 +40,7 @@ Current registered parsers:
 | Santa Clara | Department-page PDF parser. | Parse tests. |
 | Santa Cruz | Public Google Drive weekday PDF parser. | Fixture-backed parse coverage plus full suite. |
 | Shasta | Department PDF parser. | Parse tests. |
-| Sierra | Public Google Drive category PDF parser; blank/stale small-county calendars are tolerated. | Fixture-backed parse coverage plus full suite. |
+| Sierra | Public Google Drive category PDF parser for law-and-motion plus Sierra's exact OCR guardianship ruling form; blank/stale small-county calendars are tolerated. | Fixture-backed parse coverage plus full suite. |
 | Solano | Civil/probate PDF parser. | Parse tests. |
 | Sonoma | Drupal civil/family/probate HTML page parser. | Fixture-backed parse coverage plus full suite. |
 | Stanislaus | Drupal civil/family/probate-note HTML page parser. | Fixture-backed parse coverage plus full suite. |
@@ -90,7 +90,7 @@ capture/parser gaps to keep working.
 | San Mateo | Static category pages with weekday PDFs on `web.sanmateocourt.org`. | PDF source captures. | Parser registered. |
 | Santa Barbara | Public Drupal tentative-rulings index/detail pages. | HTML page captures. | Page parser registered. |
 | Santa Cruz | Official page links public Google Drive weekday PDFs. | PDF source captures through shared Drive adapter. | Parser registered. |
-| Sierra | Official page links public Google Drive category PDFs. | PDF source captures through shared Drive adapter. | Parser registered. |
+| Sierra | Official page links four fixed public Google Drive category PDFs. | PDF source captures through shared Drive adapter. | Parser registered for law-and-motion and the exact tentative guardianship order form. |
 | Sonoma | Public Drupal civil/family/probate tentative-ruling pages. | HTML page captures. | Page parser registered. |
 | Stanislaus | Public Drupal civil/family/probate-note pages. | HTML page captures. | Page parser registered. |
 | Tulare | Civil tentative-ruling page plus probate PDFs. | HTML page capture plus PDF source captures. | Mixed page/PDF parsers registered. |
@@ -110,6 +110,7 @@ covered.
 | Placer | The official home advertises Law and Motion Tentative Rulings, CMC Notes, OSC Calendar, and Calendar Notes. Current docs mention law-and-motion and calendar-note PDFs. | Verify whether CMC/OSC are already covered by calendar-note capture; add source labels if they are. |
 | San Bernardino | Legacy civil-table PDFs are implemented. Probate notes are separately available through CAP. | Triage the CAP probate-notes surface before treating it as extractable. |
 | San Francisco | This project implements only UFC Departments 403, 404, and 414. The official SF page also lists asbestos, law-and-motion/discovery, probate, real property/housing, and family-law surfaces, with some owned by the sibling `aimesy/sfsc` project. | Mirror the SFSC split here and specifically verify Department 210 / housing coverage. |
+| Sierra | Current history surface is four fixed Drive file IDs, probably overwritten in place. Direct Drive downloads expose filename, content length, and `Last-Modified`; unauthenticated Drive API metadata/revisions are blocked. Wayback `available` sees some Drive view-page snapshots and the official page, but direct `uc?export=download&id=...` snapshots were not found, and CDX/Timemap was rate-limited or timed out during the audit. Old `www.sierracourt.org` is a Wayback-only lead. | Keep the fixed-ID allowlist tight; run bounded Wayback jobs against the official page, the four Drive view URL variants, and `sierracourt.org/*tentative*` when IA is reachable. Do not broaden to all Drive links or generic probate forms. |
 
 ## Automation Constraints and Fallbacks
 

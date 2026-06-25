@@ -2,10 +2,10 @@
 
 | Metric | Count |
 |---|---:|
-| Parsed rulings | 19,056 |
+| Parsed rulings | 19,058 |
 | Parsed counties | 34 |
-| Source documents | 2,674 |
-| Archived files | 33,133 |
+| Source documents | 2,676 |
+| Archived files | 33,135 |
 | Archive size | 5,577 MB |
 | Hearing-date coverage | 2012-04-02 to 2028-04-28 |
 
