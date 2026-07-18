@@ -1112,8 +1112,8 @@ th {
 }
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { background: var(--paper-3); }
-th.sort-asc .col-label::after { content: " ^"; font-size: 0.7em; color: var(--ink); }
-th.sort-desc .col-label::after { content: " v"; font-size: 0.7em; color: var(--ink); }
+th.sort-asc .col-label::after { content: " ▴"; font-size: 0.7em; color: var(--ink); }
+th.sort-desc .col-label::after { content: " ▾"; font-size: 0.7em; color: var(--ink); }
 th .col-head {
   display: inline-flex;
   align-items: center;
@@ -1165,15 +1165,13 @@ tbody tr.rec-main > td { border-bottom: 0; }
 .col-title { width: 20%; }
 .col-mtype { width: 132px; }
 .col-outcome { width: 112px; }
-.col-text { width: 24%; }
 .col-pdf { width: 96px; text-align: center; white-space: nowrap; }
 .col-share { width: 48px; text-align: center; white-space: nowrap; }
 .col-id { width: 126px; font-family: var(--font-mono); font-size: 0.67rem; color: var(--ink-3); }
 td.col-county,
 td.col-title,
 td.col-mtype,
-td.col-outcome,
-td.col-text {
+td.col-outcome {
   line-height: 1.22;
 }
 td.col-county,
@@ -1191,18 +1189,6 @@ td.col-title .case-title-link {
 td.col-title .case-title-link:hover {
   color: var(--ink);
   border-bottom-color: var(--link);
-}
-td.col-text {
-  color: var(--ink-2);
-  font-size: 0.68rem;
-  line-height: 1.35;
-  white-space: normal;
-}
-.cell-clamp {
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
 }
 tbody td a { color: var(--link); text-decoration: none; }
 tbody td a:hover { text-decoration: underline; }
@@ -1864,7 +1850,6 @@ tbody td a:hover { text-decoration: underline; }
   .chip input[type=search],
   .chip input[type=date] { width: 100%; max-width: none; }
   .toolbar .sep { display: none; }
-  .col-text,
   .col-id { display: none; }
   .col-title { width: 28%; }
   .col-mtype { width: 110px; }

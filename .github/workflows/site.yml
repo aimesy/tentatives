@@ -42,6 +42,9 @@ jobs:
       # "Source: GitHub Actions"; after that this workflow deploys on its own.
       - uses: actions/configure-pages@v5
 
+      - name: Check viewer integration contracts
+        run: node site/check-static.mjs
+
       - name: Assemble Pages payload
         run: |
           python3 update-site-counties.py

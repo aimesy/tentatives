@@ -65,7 +65,6 @@ const TOGGLEABLE_COLS = [
   { key: "title",   label: "Title",   default: true  },
   { key: "mtype",   label: "Motion",  default: true  },
   { key: "outcome", label: "Outcome", default: true  },
-  { key: "text",    label: "Excerpt", default: true  },
   { key: "pdf",     label: "PDF",     default: true  },
   { key: "id",      label: "ID",      default: true  },
   { key: "share",   label: "Link",    default: true  },
@@ -529,7 +528,7 @@ function renderTable(slice, start, loadingSelected) {
   if (slice.length === 0) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 11;
+    td.colSpan = 10;
     td.className = "no-data";
     td.textContent = emptyMessage(loadingSelected);
     tr.appendChild(td);
@@ -608,16 +607,6 @@ function renderRow(r, idx, pageIdx = idx) {
   }
   tr.appendChild(outcomeCell);
 
-  const previewText = (r.outcome_text || r.body_text || r.full_text || "").trim();
-  const excerpt = appendCell(tr, "", "col-text");
-  if (previewText) {
-    const preview = document.createElement("div");
-    preview.className = "cell-clamp";
-    preview.textContent = previewText;
-    excerpt.title = previewText.slice(0, 600);
-    excerpt.appendChild(preview);
-  }
-
   // PDF cell.
   const pdfCell = document.createElement("td");
   pdfCell.className = "col-pdf";
@@ -676,7 +665,7 @@ function renderRow(r, idx, pageIdx = idx) {
   sub.dataset.id = rowKey(r);
   if (rowKey(r) && rowKey(r) === state.selectedRowId) sub.classList.add("selected-row");
   const subCell = document.createElement("td");
-  subCell.colSpan = 11;
+  subCell.colSpan = 10;
   const excerptBox = document.createElement("div");
   excerptBox.className = "ruling-excerpt";
   const subPreviewText = previewTextForRow(r);
