@@ -916,74 +916,67 @@ a:focus-visible {
 .btn[disabled] { opacity: 0.45; cursor: default; }
 
 .banner {
-  padding: 1.4rem 1rem 1.8rem;
-  text-align: center;
+  display: grid;
+  min-height: min(52vh, 420px);
+  padding: 2rem 1rem;
+  place-items: center;
   background: var(--paper);
   color: var(--ink-2);
-  font-size: 0.85rem;
 }
-.banner.err { color: var(--warn); }
-.banner .spinner {
-  width: 28px;
-  height: 28px;
-  border: 3px solid var(--rule);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-  margin: 0 auto 0.6rem;
+.banner[hidden] { display: none; }
+.loading-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.2rem 0.85rem;
+  align-items: center;
+  width: min(460px, 100%);
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  background: var(--paper-2);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.06);
 }
-@keyframes spin { to { transform: rotate(360deg); } }
-#loading-msg {
-  font-weight: 600;
-  color: var(--accent);
-  font-size: 0.92rem;
-}
-.stages {
+.loading-spinner,
+.load-status-spinner,
+.empty-state-spinner {
   display: inline-block;
-  text-align: left;
-  margin-top: 1rem;
-  min-width: min(360px, 92vw);
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  line-height: 1.5;
-  color: var(--ink-2);
-}
-.stages .stage {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  padding: 0.12rem 0;
-}
-.stages .stage .s-icon {
-  width: 1.2em;
-  flex-shrink: 0;
-  text-align: center;
-  font-weight: 700;
-}
-.stages .stage .s-name { flex: 1; }
-.stages .stage .s-val {
-  color: var(--ink-3);
-  font-size: 0.92em;
-  margin-left: auto;
-  padding-left: 1rem;
-  white-space: nowrap;
-}
-.stages .stage.queued .s-icon::before { content: "."; color: var(--ink-4); }
-.stages .stage.active { color: var(--accent); }
-.stages .stage.active .s-icon::before {
-  content: "";
-  display: inline-block;
-  width: 0.6em;
-  height: 0.6em;
+  width: 20px;
+  height: 20px;
   border: 2px solid var(--rule);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: spin 0.7s linear infinite;
+  animation: spin 0.75s linear infinite;
 }
-.stages .stage.done { color: var(--ok); }
-.stages .stage.done .s-icon::before { content: "OK"; font-size: 0.66rem; }
-.stages .stage.err { color: var(--warn); }
-.stages .stage.err .s-icon::before { content: "!"; }
+.loading-copy { min-width: 0; }
+#loading-msg {
+  color: var(--accent);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+#loading-detail {
+  margin-top: 0.16rem;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+.loading-retry {
+  grid-column: 2;
+  justify-self: start;
+  margin-top: 0.5rem;
+}
+.banner.err .loading-card { border-left-color: var(--warn); }
+.banner.err .loading-spinner {
+  border: 0;
+  animation: none;
+}
+.banner.err .loading-spinner::before {
+  content: "!";
+  color: var(--warn);
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .result-bar {
   padding: 0.34rem 0.85rem;
@@ -1024,6 +1017,44 @@ a:focus-visible {
 }
 .result-bar .filter-tag button:hover { color: var(--warn); }
 .muted { color: var(--ink-3); }
+
+.load-status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(90px, 180px) auto;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 34px;
+  padding: 0.35rem 0.85rem;
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper-2);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+.load-status[hidden] { display: none; }
+.load-status-spinner {
+  width: 13px;
+  height: 13px;
+}
+.load-status progress {
+  width: 100%;
+  height: 5px;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--rule);
+  accent-color: var(--accent);
+}
+.load-status progress::-webkit-progress-bar { background: var(--rule); }
+.load-status progress::-webkit-progress-value { background: var(--accent); }
+.load-status progress::-moz-progress-bar { background: var(--accent); }
+.load-status.error {
+  border-bottom-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+.load-status.error .load-status-spinner { display: none; }
+.load-status-retry { white-space: nowrap; }
 
 .view-strip {
   display: flex;
@@ -1277,8 +1308,33 @@ tbody td a:hover { text-decoration: underline; }
   text-align: center;
   padding: 2.5rem;
   color: var(--ink-3);
-  font-style: italic;
 }
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 150px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-style: normal;
+  line-height: 1.45;
+}
+.empty-state strong {
+  color: var(--ink-2);
+  font-size: 0.78rem;
+}
+.empty-state-spinner {
+  width: 22px;
+  height: 22px;
+  margin-bottom: 0.35rem;
+}
+.empty-state.error strong { color: var(--warn); }
+.empty-state-retry { margin-top: 0.4rem; }
+.no-data { padding: 0.75rem; }
+.no-data .empty-state { min-height: 180px; }
 
 .dossier-wrap {
   display: none;
@@ -1356,9 +1412,9 @@ tbody td a:hover { text-decoration: underline; }
 .dossier-empty {
   padding: 2.5rem;
   color: var(--ink-3);
-  font-style: italic;
   text-align: center;
 }
+.dossier-empty .empty-state { height: 100%; }
 .dossier-head {
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--rule);
@@ -1845,6 +1901,14 @@ tbody td a:hover { text-decoration: underline; }
   .status-strip { gap: 0.3rem; letter-spacing: 0.08em; }
   #dl-btn { max-width: 100%; }
   #dl-btn .dl-summary { max-width: 96px; }
+  .load-status {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding-inline: 0.55rem;
+  }
+  .load-status progress {
+    grid-column: 2 / -1;
+    grid-row: 2;
+  }
   .toolbar { align-items: stretch; }
   .chip { width: 100%; }
   .chip input[type=search],
@@ -1872,5 +1936,14 @@ tbody td a:hover { text-decoration: underline; }
   #case-history-list .ch-county,
   #case-history-list .ch-dept {
     display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-spinner,
+  .load-status-spinner,
+  .empty-state-spinner,
+  .dl-status.downloading::before {
+    animation: none;
   }
 }

@@ -92,6 +92,7 @@ const state = {
   columnFilters: new Map(),
   loadedCounties: new Map(),
   countyStatus: new Map(),
+  countyLoads: new Map(),
   selectedCounties: new Set(),
   sort: { col: "hearing_date", dir: "desc" },
   page: 1,
@@ -101,25 +102,6 @@ const state = {
   colVisibility: {},
   pendingFocusId: null, // ?r=<id> to auto-open after load
 };
-
-// ============================================================ STAGES
-
-function setStage(name, value, kind = "active") {
-  const id = `stage-${name}`;
-  let row = $(id);
-  if (!row) {
-    row = document.createElement("div");
-    row.className = "stage";
-    row.id = id;
-    const icon = document.createElement("span"); icon.className = "s-icon";
-    const stageName = document.createElement("span"); stageName.className = "s-name"; stageName.textContent = name;
-    const stageValue = document.createElement("span"); stageValue.className = "s-val";
-    row.append(icon, stageName, stageValue);
-    $("stages").appendChild(row);
-  }
-  row.className = `stage ${kind}`;
-  row.querySelector(".s-val").textContent = value;
-}
 
 function setCountyStatus(slug, status = "idle", detail = "") {
   state.countyStatus.set(slug, { status, detail });
@@ -145,11 +127,7 @@ let parquetModulePromise = null;
 
 async function loadParquetModule() {
   if (!parquetModulePromise) {
-    setStage("Engine", "loading parquet reader...", "active");
-    parquetModulePromise = import("./vendor/hyparquet-1.18.1/src/index.js").then((parquet) => {
-      setStage("Engine", "ready", "done");
-      return parquet;
-    });
+    parquetModulePromise = import("./vendor/hyparquet-1.18.1/src/index.js");
   }
   return parquetModulePromise;
 }
@@ -204,25 +182,20 @@ async function resolveDataRoot() {
 async function fetchAndParse(county) {
   const root = await resolveDataRoot();
   const url = `${root}/${county.slug}/rulings.parquet`;
-  setStage(county.label, "downloading...", "active");
-  setCountyStatus(county.slug, "downloading", "downloading data file...");
+  if (state.selectedCounties.has(county.slug)) {
+    setCountyStatus(county.slug, "downloading", "downloading data file...");
+  }
   let res;
   try {
     res = await fetch(url);
   } catch (e) {
-    setStage(county.label, `network error: ${e.message || e}`, "err");
-    setCountyStatus(county.slug, "error", `network error: ${e.message || e}`);
-    return [];
+    throw new Error(`network error: ${e.message || e}`);
   }
   if (res.status === 404) {
-    setStage(county.label, "no data yet", "done");
-    setCountyStatus(county.slug, "loaded", "no data yet");
     return [];
   }
   if (!res.ok) {
-    setStage(county.label, `HTTP ${res.status}`, "err");
-    setCountyStatus(county.slug, "error", `HTTP ${res.status}`);
-    return [];
+    throw new Error(`HTTP ${res.status}`);
   }
   const buffer = await res.arrayBuffer();
   const { parquetReadObjects } = await loadParquetModule();
@@ -230,11 +203,10 @@ async function fetchAndParse(county) {
     byteLength: buffer.byteLength,
     async slice(start, end) { return buffer.slice(start, end); },
   };
-  setStage(county.label, "parsing...", "active");
-  setCountyStatus(county.slug, "downloading", "parsing...");
+  if (state.selectedCounties.has(county.slug)) {
+    setCountyStatus(county.slug, "downloading", "parsing data file...");
+  }
   const rows = await parquetReadObjects({ file });
-  setStage(county.label, `${rows.length.toLocaleString()} rulings`, "done");
-  setCountyStatus(county.slug, "loaded", `${rows.length.toLocaleString()} rulings loaded`);
   return rows;
 }
 
@@ -270,35 +242,71 @@ function normalizeRow(row) {
   };
 }
 
-async function ensureCountiesLoaded() {
+function rebuildRows() {
+  state.rows = [];
+  for (const rows of state.loadedCounties.values()) state.rows.push(...rows);
+}
+
+function startCountyLoad(slug) {
+  const existing = state.countyLoads.get(slug);
+  if (existing) {
+    setCountyStatus(slug, "downloading", "download in progress...");
+    return existing;
+  }
+  const county = KNOWN_COUNTIES.find((c) => c.slug === slug);
+  if (!county) return Promise.resolve();
+
+  setCountyStatus(slug, "downloading", "starting download...");
+  const load = (async () => {
+    try {
+      const rows = (await fetchAndParse(county)).map(normalizeRow);
+      if (state.selectedCounties.has(slug)) {
+        state.loadedCounties.set(slug, rows);
+        setCountyStatus(
+          slug,
+          "loaded",
+          rows.length ? `${rows.length.toLocaleString()} rulings loaded` : "no data yet",
+        );
+      }
+    } catch (e) {
+      console.error(`Failed to load ${slug}:`, e);
+      if (state.selectedCounties.has(slug)) {
+        setCountyStatus(slug, "error", `error: ${e.message || e}`);
+      }
+    } finally {
+      if (state.countyLoads.get(slug) === load) state.countyLoads.delete(slug);
+      if (!state.selectedCounties.has(slug)) setCountyStatus(slug, "idle", "not loaded");
+      rebuildRows();
+      applyFilters();
+    }
+  })();
+  state.countyLoads.set(slug, load);
+  return load;
+}
+
+function ensureCountiesLoaded({ retryErrors = false } = {}) {
   const wanted = new Set(state.selectedCounties);
-  const toAdd = [...wanted].filter((slug) => !state.loadedCounties.has(slug));
   const toRemove = [...state.loadedCounties.keys()].filter((slug) => !wanted.has(slug));
+
+  for (const slug of state.countyLoads.keys()) {
+    if (!wanted.has(slug)) setCountyStatus(slug, "idle", "not loaded");
+  }
 
   for (const slug of toRemove) {
     state.loadedCounties.delete(slug);
     setCountyStatus(slug, "idle", "not loaded");
-    const stage = $(`stage-${COUNTY_LABEL[slug] || slug}`);
-    if (stage) stage.remove();
   }
 
-  const batches = await Promise.all(toAdd.map(async (slug) => {
-    const county = KNOWN_COUNTIES.find((c) => c.slug === slug);
-    if (!county) return [slug, []];
-    try {
-      const rows = await fetchAndParse(county);
-      return [slug, rows.map(normalizeRow)];
-    } catch (e) {
-      console.error(`Failed to load ${slug}:`, e);
-      setStage(county.label, `error: ${e.message || e}`, "err");
-      setCountyStatus(slug, "error", `error: ${e.message || e}`);
-      return [slug, []];
-    }
-  }));
-  for (const [slug, rows] of batches) state.loadedCounties.set(slug, rows);
-
-  state.rows = [];
-  for (const rows of state.loadedCounties.values()) state.rows.push(...rows);
+  const loads = [];
+  for (const slug of wanted) {
+    if (state.loadedCounties.has(slug)) continue;
+    const status = state.countyStatus.get(slug)?.status;
+    if (status === "error" && !retryErrors) continue;
+    loads.push(startCountyLoad(slug));
+  }
+  rebuildRows();
+  applyFilters();
+  return Promise.allSettled(loads);
 }
 
 // ============================================================ SEARCH (with wildcards)
@@ -438,10 +446,55 @@ function rawSourceLabel(row) {
   return range ? `Raw ${range}` : "Source";
 }
 
+function selectedLoadState() {
+  const selected = [...state.selectedCounties];
+  const ready = selected.filter((slug) => state.loadedCounties.has(slug)).length;
+  const loading = selected.filter((slug) => state.countyLoads.has(slug)).length;
+  const failed = selected.filter((slug) => (
+    !state.loadedCounties.has(slug) &&
+    !state.countyLoads.has(slug) &&
+    state.countyStatus.get(slug)?.status === "error"
+  )).length;
+  const waiting = Math.max(0, selected.length - ready - loading - failed);
+  return { total: selected.length, ready, loading, failed, waiting };
+}
+
+function updateCountyLoadStatus(loadState) {
+  const bar = $("county-load-status");
+  const label = $("county-load-label");
+  const progress = $("county-load-progress");
+  const retry = $("county-load-retry");
+  const active = loadState.loading + loadState.waiting;
+  const finished = loadState.ready + loadState.failed;
+  const countyWord = loadState.total === 1 ? "county" : "counties";
+
+  $("results-wrap").setAttribute("aria-busy", active > 0 ? "true" : "false");
+  if (active > 0) {
+    bar.hidden = false;
+    bar.classList.remove("error");
+    label.textContent = `Loading county data - ${finished} of ${loadState.total} ${countyWord} finished`;
+    progress.hidden = false;
+    progress.max = Math.max(1, loadState.total);
+    progress.value = finished;
+    retry.hidden = true;
+    return;
+  }
+  if (loadState.failed > 0) {
+    bar.hidden = false;
+    bar.classList.add("error");
+    label.textContent = `${loadState.failed} ${loadState.failed === 1 ? "county file" : "county files"} could not be loaded.`;
+    progress.hidden = true;
+    retry.hidden = false;
+    return;
+  }
+  bar.hidden = true;
+  bar.classList.remove("error");
+}
+
 function render() {
   const total = state.filtered.length;
-  const selectedLoadedCount = [...state.selectedCounties].filter((slug) => state.loadedCounties.has(slug)).length;
-  const loadingSelected = selectedLoadedCount < state.selectedCounties.size;
+  const loadState = selectedLoadState();
+  const loadingSelected = loadState.loading + loadState.waiting > 0;
   $("result-count").textContent =
     total === state.rows.length
       ? `${total.toLocaleString()} rulings`
@@ -456,9 +509,9 @@ function render() {
   const start = (state.page - 1) * state.pageSize;
   const slice = state.filtered.slice(start, start + state.pageSize);
 
-  renderTable(slice, start, loadingSelected);
+  renderTable(slice, start, loadState);
   if (state.viewMode === "dossier") {
-    renderDossier(slice, start, loadingSelected);
+    renderDossier(slice, start, loadState);
   }
 
   // Sort markers on the headers.
@@ -470,19 +523,23 @@ function render() {
   }
 
   if (state.rows.length === 0) {
-    const countyWord = selectedLoadedCount === 1 ? "county" : "counties";
+    const countyWord = loadState.ready === 1 ? "county" : "counties";
     $("stats").textContent = state.selectedCounties.size === 0
       ? "no counties selected"
       : loadingSelected
-        ? "loading..."
-        : `0 rulings / ${selectedLoadedCount} ${countyWord}`;
+        ? `${loadState.ready}/${loadState.total} counties ready`
+        : loadState.failed > 0
+          ? `county load failed`
+          : `0 rulings / ${loadState.ready} ${countyWord}`;
   } else {
     const counties = new Set(state.rows.map((r) => r.county)).size;
     const countyWord = counties === 1 ? "county" : "counties";
     $("stats").textContent =
-      `${state.rows.length.toLocaleString()} rulings / ${counties} ${countyWord}`;
+      `${state.rows.length.toLocaleString()} rulings / ${counties} ${countyWord}` +
+      (loadingSelected ? ` / loading ${loadState.ready + loadState.failed} of ${loadState.total}` : "");
   }
 
+  updateCountyLoadStatus(loadState);
   refreshColFilterButtons();
   updateCountiesSummary();
   updateActionAvailability();
@@ -501,13 +558,44 @@ function updateActionAvailability() {
     : "Load county data or adjust filters before exporting CSV";
 }
 
-function emptyMessage(loadingSelected) {
+function emptyMessage(loadState) {
   if (state.selectedCounties.size === 0) {
     return "Open Database Downloads to load one or more county data files.";
   }
-  if (loadingSelected) return "Loading selected county data files...";
+  if (loadState.loading + loadState.waiting > 0) return "Results appear as each county data file is ready.";
+  if (loadState.failed > 0) return "County data could not be loaded. Retry the failed download.";
   if (state.rows.length === 0) return "Selected county data files contain no rulings.";
   return "No rulings match the current filters.";
+}
+
+function buildEmptyState(loadState) {
+  const loading = loadState.loading + loadState.waiting > 0;
+  const wrap = document.createElement("div");
+  wrap.className = `empty-state${loading ? " loading" : ""}${loadState.failed > 0 && !loading ? " error" : ""}`;
+  if (loading) {
+    const spinner = document.createElement("span");
+    spinner.className = "empty-state-spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    wrap.appendChild(spinner);
+  }
+  const title = document.createElement("strong");
+  title.textContent = loading
+    ? `Loading county data (${loadState.ready + loadState.failed}/${loadState.total})`
+    : loadState.failed > 0
+      ? "County data unavailable"
+      : "No rulings to display";
+  const detail = document.createElement("span");
+  detail.textContent = emptyMessage(loadState);
+  wrap.append(title, detail);
+  if (loadState.failed > 0 && !loading) {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn empty-state-retry";
+    retry.textContent = "Retry failed";
+    retry.addEventListener("click", retryFailedCounties);
+    wrap.appendChild(retry);
+  }
+  return wrap;
 }
 
 function rowKey(row) {
@@ -522,7 +610,7 @@ function previewTextForRow(row) {
   return (row?.outcome_text || row?.body_text || row?.full_text || "").trim();
 }
 
-function renderTable(slice, start, loadingSelected) {
+function renderTable(slice, start, loadState) {
   const body = $("results-body");
   const fragment = document.createDocumentFragment();
   if (slice.length === 0) {
@@ -530,7 +618,7 @@ function renderTable(slice, start, loadingSelected) {
     const td = document.createElement("td");
     td.colSpan = 10;
     td.className = "no-data";
-    td.textContent = emptyMessage(loadingSelected);
+    td.appendChild(buildEmptyState(loadState));
     tr.appendChild(td);
     fragment.appendChild(tr);
   } else {
@@ -759,12 +847,12 @@ function selectRuling(row, idx) {
   }
   state.selectedRowId = rowKey(row);
   const { start, slice } = currentPageRows();
-  renderDossier(slice, start, false);
+  renderDossier(slice, start, selectedLoadState());
   markSelectedTableRow();
   syncUrl();
 }
 
-function renderDossier(slice, start, loadingSelected) {
+function renderDossier(slice, start, loadState) {
   const rail = $("dossier-rail");
   const railHead = $("dossier-rail-head");
   const detail = $("dossier-detail");
@@ -774,7 +862,7 @@ function renderDossier(slice, start, loadingSelected) {
     if (railHead) railHead.textContent = "Current page";
     const empty = document.createElement("div");
     empty.className = "dossier-empty";
-    empty.textContent = emptyMessage(loadingSelected);
+    empty.appendChild(buildEmptyState(loadState));
     detail.replaceChildren(empty);
     return;
   }
@@ -811,7 +899,7 @@ function renderDossier(slice, start, loadingSelected) {
     div.append(date, body);
     div.addEventListener("click", () => {
       state.selectedRowId = rowKey(row);
-      renderDossier(slice, start, loadingSelected);
+      renderDossier(slice, start, selectedLoadState());
       markSelectedTableRow();
       syncUrl();
     });
@@ -1108,7 +1196,7 @@ function openColFilter(col, btn) {
       `<button class="cf-byn active">By count</button>` +
     `</div>` +
     `<input class="cf-search" type="search" placeholder="Search values...">` +
-    `<div class="cf-list"><div class="cf-empty">Loading...</div></div>` +
+    `<div class="cf-list"></div>` +
     `<div class="cf-actions">` +
       `<button class="cf-apply">Apply</button>` +
       `<button class="cf-clear">Clear</button>` +
@@ -1381,11 +1469,18 @@ function updateCountiesSummary() {
   }
 }
 
-async function refreshFromSelection() {
+function refreshFromSelection() {
   updateCountiesSummary();
-  await ensureCountiesLoaded();
-  updateCountiesSummary();
-  applyFilters();
+  void ensureCountiesLoaded();
+}
+
+function retryFailedCounties() {
+  for (const slug of state.selectedCounties) {
+    if (state.countyStatus.get(slug)?.status === "error") {
+      setCountyStatus(slug, "idle", "waiting to retry...");
+    }
+  }
+  void ensureCountiesLoaded({ retryErrors: true });
 }
 
 // ============================================================ CSV EXPORT
@@ -1750,6 +1845,7 @@ function wire() {
   });
 
   $("export-btn").addEventListener("click", exportCsv);
+  $("county-load-retry").addEventListener("click", retryFailedCounties);
 }
 
 // ============================================================ BOOT
@@ -1763,15 +1859,16 @@ function wire() {
     buildCountiesPicker();
     buildColsMenu();
     wire();
-    if (state.selectedCounties.size > 0) {
-      await ensureCountiesLoaded();
-    }
-    applyFilters();
     $("loading-banner").hidden = true;
+    $("loading-banner").setAttribute("aria-busy", "false");
     $("view-strip").hidden = false;
     $("toolbar").hidden = false;
     $("result-bar").hidden = false;
     $("results-wrap").hidden = false;
+    applyFilters();
+    if (state.selectedCounties.size > 0) {
+      await ensureCountiesLoaded();
+    }
 
     // Honour ?r=<id>: open the modal for that ruling once data is loaded.
     if (state.pendingFocusId) {
@@ -1781,7 +1878,11 @@ function wire() {
     }
   } catch (e) {
     console.error(e);
-    $("loading-msg").textContent = `Failed to load: ${e.message || e}`;
+    $("loading-msg").textContent = "The database viewer could not start";
+    $("loading-detail").textContent = e.message || String(e);
     $("loading-banner").classList.add("err");
+    $("loading-banner").setAttribute("aria-busy", "false");
+    $("loading-retry").hidden = false;
+    $("loading-retry").addEventListener("click", () => window.location.reload());
   }
 })();

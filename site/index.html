@@ -10,7 +10,7 @@
     />
     <title>California Tentative Decisions Database</title>
     <meta name="theme-color" content="#24211d" />
-    <link rel="stylesheet" href="styles.css?v=20260623-links" />
+    <link rel="stylesheet" href="styles.css?v=20260718-loading" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/aimesy/themes@master/src/theme.css" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/aimesy/themes@master/src/bug-report.css" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/aimesy/themes@master/src/font-system.css" />
@@ -56,7 +56,7 @@
       <div class="entity-bar">
         <div class="hdr-left">
           <h1>California Tentative Decisions Database</h1>
-          <span id="stats" class="hdr-stats">loading...</span>
+          <span id="stats" class="hdr-stats">preparing viewer</span>
         </div>
         <div class="hdr-right">
           <span class="dl-wrap">
@@ -110,15 +110,27 @@
       <button class="btn" id="permalink" title="Copy a URL for the current view">Copy link</button>
     </section>
 
-    <section class="banner" id="loading-banner">
-      <div class="spinner"></div>
-      <div id="loading-msg">Loading parsed rulings...</div>
-      <div class="stages" id="stages"></div>
+    <section class="banner" id="loading-banner" role="status" aria-live="polite" aria-busy="true">
+      <div class="loading-card">
+        <span class="loading-spinner" aria-hidden="true"></span>
+        <div class="loading-copy">
+          <div id="loading-msg">Opening the database viewer</div>
+          <div id="loading-detail">Preparing county controls and saved settings.</div>
+        </div>
+        <button class="btn loading-retry" id="loading-retry" type="button" hidden>Retry</button>
+      </div>
     </section>
 
     <section class="result-bar" id="result-bar" hidden>
       <span id="result-count" class="muted">-</span>
       <span id="active-filters" class="active-filters"></span>
+    </section>
+
+    <section class="load-status" id="county-load-status" role="status" aria-live="polite" hidden>
+      <span class="load-status-spinner" aria-hidden="true"></span>
+      <span class="load-status-label" id="county-load-label"></span>
+      <progress id="county-load-progress" value="0" max="1" aria-labelledby="county-load-label"></progress>
+      <button class="btn load-status-retry" id="county-load-retry" type="button" hidden>Retry failed</button>
     </section>
 
     <section class="results-wrap" id="results-wrap" hidden>
@@ -216,6 +228,6 @@
       Compiled by Amy Chattopadhyay &middot; contact <a href="mailto:me@amyc.us">me@amyc.us</a>
     </footer>
 
-    <script type="module" src="app.js?v=20260623-links"></script>
+    <script type="module" src="app.js?v=20260718-loading"></script>
   </body>
 </html>
