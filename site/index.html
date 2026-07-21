@@ -93,9 +93,9 @@
     </section>
 
     <section class="toolbar" id="toolbar" hidden>
-      <span class="chip" title="Free-text search across case #, title, motion, body, full text. Wildcards: * (any sequence), ? (single char).">
+      <span class="chip" title="Free-text search across case #, title, motion category/type/subtype/caption, body, and full text. Wildcards: * (any sequence), ? (single char).">
         <label class="chip-lbl" for="q">Search</label>
-        <input id="q" type="search" placeholder="case #, title, motion, body... (* and ? wildcards)" />
+        <input id="q" type="search" placeholder="case #, title, category, motion... (* and ? wildcards)" />
       </span>
       <span class="chip">
         <label class="chip-lbl" for="from">From</label>
@@ -163,8 +163,14 @@
               <th class="col-title sortable" data-col="case_title">
                 <span class="col-head"><span class="col-label">Title</span><button class="col-filter-btn" data-filter-col="case_title" title="Filter by Title - search and tick">▾</button></span>
               </th>
+              <th class="col-mcat sortable" data-col="motion_category">
+                <span class="col-head"><span class="col-label">Category</span><button class="col-filter-btn" data-filter-col="motion_category" title="Filter by motion category">▾</button></span>
+              </th>
               <th class="col-mtype sortable" data-col="motion_type">
-                <span class="col-head"><span class="col-label">Motion</span><button class="col-filter-btn" data-filter-col="motion_type" title="Filter by Motion">▾</button></span>
+                <span class="col-head"><span class="col-label">Motion Type</span><button class="col-filter-btn" data-filter-col="motion_type" title="Filter by category and motion type">▾</button></span>
+              </th>
+              <th class="col-mcaption sortable" data-col="motion_caption">
+                <span class="col-head"><span class="col-label">Motion Caption</span></span>
               </th>
               <th class="col-outcome sortable" data-col="outcome">
                 <span class="col-head"><span class="col-label">Outcome</span><button class="col-filter-btn" data-filter-col="outcome" title="Filter by Outcome">▾</button></span>
@@ -228,6 +234,6 @@
       Compiled by Amy Chattopadhyay &middot; contact <a href="mailto:me@amyc.us">me@amyc.us</a>
     </footer>
 
-    <script type="module" src="app.js?v=20260718-loading"></script>
+    <script type="module" src="app.js?v=20260721-motion-taxonomy"></script>
   </body>
 </html>

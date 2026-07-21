@@ -1,3 +1,9 @@
+import {
+  classifyMotion,
+  motionFallbackTextForClassification,
+  motionTextForClassification,
+} from "./motions.js";
+
 // California Tentative Rulings - static viewer.
 //
 // Reads data/<county>/rulings.parquet from the same origin via hyparquet,
@@ -27,7 +33,10 @@ const FILTER_IDS = ["q", "from", "to"];
 const SEARCH_FIELDS = [
   "case_number",
   "case_title",
+  "motion_category",
   "motion_type",
+  "motion_subtype",
+  "motion_caption",
   "outcome_text",
   "body_text",
   "full_text",
@@ -38,7 +47,9 @@ const SORT_COLUMNS = new Set([
   "hearing_date",
   "case_number",
   "case_title",
+  "motion_category",
   "motion_type",
+  "motion_caption",
   "outcome",
 ]);
 const SORT_DIRECTIONS = new Set(["asc", "desc"]);
@@ -53,7 +64,8 @@ const HIGH_CARD_RENDER_CAP = 200;
 const COL_FILTER_LABELS = {
   county:      "County",
   dept:        "Dept",
-  motion_type: "Motion",
+  motion_category: "Category",
+  motion_type: "Motion Type",
   outcome:     "Outcome",
   case_title:  "Title",
 };
@@ -63,7 +75,9 @@ const TOGGLEABLE_COLS = [
   { key: "county",  label: "County",  default: true  },
   { key: "dept",    label: "Dept",    default: true  },
   { key: "title",   label: "Title",   default: true  },
-  { key: "mtype",   label: "Motion",  default: true  },
+  { key: "mcat",    label: "Category", default: true },
+  { key: "mtype",   label: "Motion Type", default: true },
+  { key: "mcaption", label: "Motion Caption", default: false },
   { key: "outcome", label: "Outcome", default: true  },
   { key: "pdf",     label: "PDF",     default: true  },
   { key: "id",      label: "ID",      default: true  },
@@ -234,12 +248,28 @@ function buildShortId(row) {
 }
 
 function normalizeRow(row) {
-  return {
+  const motionCaption = String(row.motion_type || "").trim();
+  let motion = classifyMotion(motionTextForClassification(row), row.division);
+  if (["Miscellaneous", "Probate Matter", "Family Law Matter"].includes(motion.type)) {
+    const fallbackText = motionFallbackTextForClassification(row);
+    if (fallbackText && fallbackText !== motionCaption) {
+      const refined = classifyMotion(fallbackText, row.division);
+      if (!["Miscellaneous", "Probate Matter", "Family Law Matter"].includes(refined.type)) {
+        motion = refined;
+      }
+    }
+  }
+  const normalized = {
     ...row,
-    _search: searchTextForRow(row),
+    motion_caption: motionCaption,
+    motion_category: motion.category,
+    motion_type: motion.type,
+    motion_subtype: motion.subtype || "",
     _shortId: buildShortId(row),
     _rowId: row.ruling_id || buildShortId(row),
   };
+  normalized._search = searchTextForRow(normalized);
+  return normalized;
 }
 
 function rebuildRows() {
@@ -333,11 +363,26 @@ function matchesSearch(row, compiled) {
 
 // ============================================================ FILTER & SORT
 
+const SUB_SEPARATOR = " ⊂ ";
+
+function combineMainSub(main, sub) {
+  return sub ? `${main}${SUB_SEPARATOR}${sub}` : main;
+}
+
+function splitMainSub(value) {
+  const i = String(value).indexOf(SUB_SEPARATOR);
+  return i < 0
+    ? { main: String(value), sub: "" }
+    : { main: String(value).slice(0, i), sub: String(value).slice(i + SUB_SEPARATOR.length) };
+}
+
 function rowColumnValue(row, col) {
   if (col === "county") return row.county || "";
   if (col === "dept") return row.dept == null ? "" : String(row.dept);
   if (col === "case_title") return row.case_title || "";
+  if (col === "motion_category") return row.motion_category || "Other";
   if (col === "motion_type") return row.motion_type || "";
+  if (col === "motion_caption") return row.motion_caption || "";
   if (col === "outcome") return row.outcome || "";
   return row[col] ?? "";
 }
@@ -346,8 +391,13 @@ function passesColumnFilters(row) {
   for (const [col, set] of state.columnFilters) {
     if (!(set instanceof Set)) continue;
     if (set.size === 0) return false; // user-emptied matches nothing
-    const v = rowColumnValue(row, col);
-    if (!set.has(v)) return false;
+    if (col === "motion_type") {
+      const category = row.motion_category || "Other";
+      const type = row.motion_type || "";
+      if (!set.has(category) && !set.has(combineMainSub(category, type))) return false;
+      continue;
+    }
+    if (!set.has(rowColumnValue(row, col))) return false;
   }
   return true;
 }
@@ -369,8 +419,12 @@ function applyFilters() {
   const { col, dir } = state.sort;
   const sign = dir === "asc" ? 1 : -1;
   state.filtered.sort((a, b) => {
-    const av = rowColumnValue(a, col);
-    const bv = rowColumnValue(b, col);
+    let av = rowColumnValue(a, col);
+    let bv = rowColumnValue(b, col);
+    if (col === "motion_type") {
+      av = `${a.motion_category || "Other"}\u0000${a.motion_type || ""}\u0000${a.motion_subtype || ""}`;
+      bv = `${b.motion_category || "Other"}\u0000${b.motion_type || ""}\u0000${b.motion_subtype || ""}`;
+    }
     // Dept sorts numerically when both sides parse as numbers.
     if (col === "dept") {
       const an = Number(av), bn = Number(bv);
@@ -610,13 +664,24 @@ function previewTextForRow(row) {
   return (row?.outcome_text || row?.body_text || row?.full_text || "").trim();
 }
 
+function motionTaxonomyLabel(row) {
+  return [row?.motion_category, row?.motion_type, row?.motion_subtype]
+    .filter(Boolean).join(" > ");
+}
+
+function motionDetailText(row) {
+  const taxonomy = motionTaxonomyLabel(row);
+  const caption = String(row?.motion_caption || "").trim();
+  return caption && caption !== row?.motion_type ? `${taxonomy}\n${caption}` : taxonomy;
+}
+
 function renderTable(slice, start, loadState) {
   const body = $("results-body");
   const fragment = document.createDocumentFragment();
   if (slice.length === 0) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 10;
+    td.colSpan = 12;
     td.className = "no-data";
     td.appendChild(buildEmptyState(loadState));
     tr.appendChild(td);
@@ -669,16 +734,34 @@ function renderRow(r, idx, pageIdx = idx) {
   title.title = r.case_title || r.case_number || "";
   tr.appendChild(title);
 
+  const categoryCell = document.createElement("td");
+  categoryCell.className = "col-mcat";
+  const categoryPill = document.createElement("span");
+  categoryPill.className = `mcategory-pill mcategory-${classToken(r.motion_category)}`;
+  categoryPill.textContent = r.motion_category || "Other";
+  categoryCell.appendChild(categoryPill);
+  tr.appendChild(categoryCell);
+
   const mtypeCell = document.createElement("td");
   mtypeCell.className = "col-mtype";
   if (r.motion_type) {
     const pill = document.createElement("span");
     pill.className = "mtype-pill";
     pill.textContent = r.motion_type;
-    pill.title = r.motion_type;
+    pill.title = [r.motion_category, r.motion_type, r.motion_subtype, r.motion_caption]
+      .filter(Boolean).join(" > ");
     mtypeCell.appendChild(pill);
+    if (r.motion_subtype) {
+      const subtype = document.createElement("span");
+      subtype.className = "motion-subtype";
+      subtype.textContent = r.motion_subtype;
+      mtypeCell.appendChild(subtype);
+    }
   }
   tr.appendChild(mtypeCell);
+
+  const captionCell = appendCell(tr, r.motion_caption || "", "col-mcaption");
+  captionCell.title = r.motion_caption || "";
 
   const outcomeCell = document.createElement("td");
   outcomeCell.className = "col-outcome";
@@ -753,7 +836,7 @@ function renderRow(r, idx, pageIdx = idx) {
   sub.dataset.id = rowKey(r);
   if (rowKey(r) && rowKey(r) === state.selectedRowId) sub.classList.add("selected-row");
   const subCell = document.createElement("td");
-  subCell.colSpan = 10;
+  subCell.colSpan = 12;
   const excerptBox = document.createElement("div");
   excerptBox.className = "ruling-excerpt";
   const subPreviewText = previewTextForRow(r);
@@ -893,7 +976,7 @@ function renderDossier(slice, start, loadState) {
     title.textContent = displayCaseTitle(row);
     const motion = document.createElement("div");
     motion.className = "dossier-row-motion";
-    motion.textContent = row.motion_type || row.outcome || "";
+    motion.textContent = motionTaxonomyLabel(row) || row.outcome || "";
     body.append(title, motion);
 
     div.append(date, body);
@@ -952,10 +1035,11 @@ function renderDossierDetail(row) {
     + (pdfHref ? `<a class="btn" href="${esc(pdfHref)}" target="_blank" rel="noopener">Slice PDF</a>` : "")
     + (sourceUrl ? `<a class="btn" href="${esc(sourceUrl.href)}" target="_blank" rel="noopener">${esc(rawSourceLabel(row))}</a>` : "")
     + `</div></div>`
-    + dossierSection("M", "Motion", `<div class="dossier-motion">${esc(row.motion_type || "")}</div>`)
+    + dossierSection("M", "Motion", `<div class="dossier-motion-taxonomy">${esc(motionTaxonomyLabel(row))}</div>`
+      + (row.motion_caption ? `<div class="dossier-motion">${esc(row.motion_caption)}</div>` : ""))
     + dossierSection("1", "Disposition", `<div class="dossier-ruling">${esc(outcomeText)}</div>`)
     + dossierSection("T", "Full text", `<div class="dossier-ruling">${esc(fullText)}</div>`)
-    + `<div class="dossier-foot">source: parsed ruling row${range ? `; raw source ${esc(range)}` : ""} &middot; derived: outcome label</div>`;
+    + `<div class="dossier-foot">source: parsed ruling row${range ? `; raw source ${esc(range)}` : ""} &middot; derived: motion taxonomy and outcome label</div>`;
 
   detail.querySelector("[data-dossier-open-modal]")?.addEventListener("click", () => openModal(row));
   detail.querySelector("[data-dossier-share]")?.addEventListener("click", async (event) => {
@@ -1021,7 +1105,7 @@ function openModal(rowOrIdx) {
     span.textContent = p.label;
     meta.appendChild(span);
   }
-  $("modal-motion").textContent = r.motion_type || "";
+  $("modal-motion").textContent = motionDetailText(r);
   $("modal-outcome").textContent = r.outcome_text || "(empty)";
   $("modal-full").textContent = r.full_text || r.body_text || "(empty)";
   $("modal-id").textContent = r._shortId;
@@ -1132,7 +1216,7 @@ function openCaseHistory(caseNumber, currentRow) {
 
       const motion = document.createElement("div");
       motion.className = "ch-motion";
-      motion.textContent = row.motion_type || displayCaseTitle(row);
+      motion.textContent = motionTaxonomyLabel(row) || displayCaseTitle(row);
 
       const outcome = document.createElement("div");
       outcome.className = "ch-outcome";
@@ -1164,6 +1248,38 @@ let _openColFilter = null;
 // Compute unique-value buckets for a column from the currently loaded rows.
 // Returns [{value, count}, ...] sorted by count desc.
 function uniqueValuesFor(col) {
+  if (col === "motion_type") {
+    const byCategory = new Map();
+    for (const row of state.rows) {
+      const category = row.motion_category || "Other";
+      const type = row.motion_type || "Miscellaneous";
+      let bucket = byCategory.get(category);
+      if (!bucket) {
+        bucket = { count: 0, types: new Map() };
+        byCategory.set(category, bucket);
+      }
+      bucket.count += 1;
+      bucket.types.set(type, (bucket.types.get(type) || 0) + 1);
+    }
+    const pairs = [];
+    const categories = [...byCategory.entries()]
+      .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]));
+    for (const [category, bucket] of categories) {
+      pairs.push({ value: category, label: category, count: bucket.count, parentRow: true });
+      const types = [...bucket.types.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+      for (const [type, count] of types) {
+        pairs.push({
+          value: combineMainSub(category, type),
+          label: type,
+          parent: category,
+          child: true,
+          count,
+        });
+      }
+    }
+    return pairs;
+  }
   const counts = new Map();
   for (const r of state.rows) {
     const v = rowColumnValue(r, col);
@@ -1205,7 +1321,9 @@ function openColFilter(col, btn) {
   pop.classList.add("open");
 
   const pairs = uniqueValuesFor(col);
+  const pairByValue = new Map(pairs.map((p) => [p.value, p]));
   const isHighCard = HIGH_CARDINALITY_FILTER_COLS.has(col);
+  const isHierarchical = col === "motion_type";
   const existing = state.columnFilters.get(col);
   const selected = existing instanceof Set
     ? new Set(existing)
@@ -1229,12 +1347,30 @@ function openColFilter(col, btn) {
     setSortBtn();
     const listEl = pop.querySelector(".cf-list");
     let view = pairs.slice();
-    if (sortMode === "az") view.sort((a, b) => String(a.value).localeCompare(String(b.value)));
+    if (isHierarchical) {
+      const categoryOrder = new Map();
+      const parents = pairs.filter((p) => p.parentRow);
+      if (sortMode === "az") parents.sort((a, b) => a.label.localeCompare(b.label));
+      else if (sortMode === "za") parents.sort((a, b) => b.label.localeCompare(a.label));
+      else parents.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+      parents.forEach((p, i) => categoryOrder.set(p.value, i));
+      view.sort((a, b) => {
+        const ap = a.parent || a.value;
+        const bp = b.parent || b.value;
+        const group = (categoryOrder.get(ap) ?? 0) - (categoryOrder.get(bp) ?? 0);
+        if (group) return group;
+        if (a.parentRow) return -1;
+        if (b.parentRow) return 1;
+        if (sortMode === "az") return a.label.localeCompare(b.label);
+        if (sortMode === "za") return b.label.localeCompare(a.label);
+        return b.count - a.count || a.label.localeCompare(b.label);
+      });
+    } else if (sortMode === "az") view.sort((a, b) => String(a.value).localeCompare(String(b.value)));
     else if (sortMode === "za") view.sort((a, b) => String(b.value).localeCompare(String(a.value)));
     else view.sort((a, b) => b.count - a.count);
     if (search) {
       const q = search.toLowerCase();
-      view = view.filter((p) => String(p.value).toLowerCase().includes(q));
+      view = view.filter((p) => `${p.parent || ""} ${p.label ?? p.value}`.toLowerCase().includes(q));
     }
     if (!view.length) {
       if (isHighCard && !search && selected.size > 0) {
@@ -1260,9 +1396,9 @@ function openColFilter(col, btn) {
         `<span class="cf-label">(Select all${search || isHighCard ? " visible" : ""})</span>` +
       `</label>`;
     for (const p of view) {
-      const display = p.value === "" ? "(blank)" : p.value;
+      const display = p.value === "" ? "(blank)" : (p.label ?? p.value);
       html +=
-        `<label class="cf-row" data-value="${esc(p.value)}">` +
+        `<label class="cf-row${p.child ? " cf-child" : ""}${p.parentRow ? " cf-parent" : ""}" data-value="${esc(p.value)}">` +
           `<input type="checkbox"${selected.has(p.value) ? " checked" : ""}>` +
           `<span class="cf-label" title="${esc(p.value)}">${esc(display)}</span>` +
           `<span class="cf-count">${p.count.toLocaleString()}</span>` +
@@ -1281,7 +1417,22 @@ function openColFilter(col, btn) {
       const cb = row.querySelector("input");
       cb.addEventListener("change", () => {
         const v = row.dataset.value;
+        const pair = pairByValue.get(v);
+        if (pair?.parentRow) {
+          const children = pairs.filter((p) => p.parent === pair.value);
+          for (const child of children) {
+            if (cb.checked) selected.add(child.value); else selected.delete(child.value);
+          }
+        } else if (pair?.child) {
+          const siblings = pairs.filter((p) => p.parent === pair.parent);
+          if (!cb.checked) {
+            selected.delete(pair.parent);
+          } else if (siblings.every((p) => p.value === pair.value || selected.has(p.value))) {
+            selected.add(pair.parent);
+          }
+        }
         if (cb.checked) selected.add(v); else selected.delete(v);
+        if (isHierarchical) renderList();
       });
     }
   }
@@ -1338,7 +1489,11 @@ function renderActiveFilters() {
     const text = set.size === 0
       ? `${label}: (none)`
       : set.size <= 2
-        ? `${label}: ${[...set].map((v) => v === "" ? "(blank)" : v).join(", ")}`
+        ? `${label}: ${[...set].map((v) => {
+            if (v === "") return "(blank)";
+            const { main, sub } = splitMainSub(v);
+            return sub ? `${main}: ${sub}` : main;
+          }).join(", ")}`
         : `${label}: ${set.size} values`;
     const tag = document.createElement("span");
     tag.className = "filter-tag";
@@ -1493,7 +1648,8 @@ function exportCsv() {
   }
   const cols = [
     "id", "county", "dept", "hearing_date", "case_number", "case_title",
-    "motion_type", "outcome", "conditional", "continued_to", "outcome_text",
+    "motion_category", "motion_type", "motion_subtype", "motion_caption",
+    "outcome", "conditional", "continued_to", "outcome_text",
     "page_start", "page_end", "source_url",
   ];
   const header = cols.map(csvCell).join(",");
@@ -1506,7 +1662,10 @@ function exportCsv() {
       hearing_date: r.hearing_date,
       case_number: r.case_number,
       case_title: r.case_title,
+      motion_category: r.motion_category,
       motion_type: r.motion_type,
+      motion_subtype: r.motion_subtype,
+      motion_caption: r.motion_caption,
       outcome: r.outcome,
       conditional: r.conditional ? "true" : "false",
       continued_to: r.continued_to || "",

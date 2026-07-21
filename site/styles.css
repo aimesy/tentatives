@@ -1193,21 +1193,27 @@ tbody tr.rec-main > td { border-bottom: 0; }
 .col-dept { width: 48px; text-align: center; white-space: nowrap; }
 .col-date { width: 78px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .col-case { width: 112px; font-family: var(--font-mono); }
-.col-title { width: 20%; }
-.col-mtype { width: 132px; }
+.col-title { width: 18%; }
+.col-mcat { width: 112px; }
+.col-mtype { width: 150px; }
+.col-mcaption { width: 210px; }
 .col-outcome { width: 112px; }
 .col-pdf { width: 96px; text-align: center; white-space: nowrap; }
 .col-share { width: 48px; text-align: center; white-space: nowrap; }
 .col-id { width: 126px; font-family: var(--font-mono); font-size: 0.67rem; color: var(--ink-3); }
 td.col-county,
 td.col-title,
+td.col-mcat,
 td.col-mtype,
+td.col-mcaption,
 td.col-outcome {
   line-height: 1.22;
 }
 td.col-county,
 td.col-title,
+td.col-mcat,
 td.col-mtype,
+td.col-mcaption,
 td.col-outcome {
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1279,6 +1285,7 @@ tbody td a:hover { text-decoration: underline; }
 }
 .share-btn.copied { background: var(--good-bg); color: var(--ok); border-color: var(--good-border); }
 .outcome-pill,
+.mcategory-pill,
 .mtype-pill {
   display: inline-block;
   padding: 1px 5px;
@@ -1292,6 +1299,18 @@ tbody td a:hover { text-decoration: underline; }
   white-space: nowrap;
 }
 .mtype-pill { background: var(--paper-2); color: var(--accent); }
+.mcategory-pill { background: var(--paper-3); color: var(--ink-2); }
+.motion-subtype {
+  display: block;
+  overflow: hidden;
+  margin-top: 0.12rem;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .outcome-granted { background: var(--good-bg); border-color: var(--good-border); color: var(--ok); }
 .outcome-denied { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn); }
 .outcome-continued { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn-ink); }
@@ -1499,6 +1518,14 @@ tbody td a:hover { text-decoration: underline; }
   font-size: 0.76rem;
   line-height: 1.45;
 }
+.dossier-motion-taxonomy {
+  margin-bottom: 0.28rem;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
 .dossier-ruling {
   max-width: 76ch;
   color: var(--ink);
@@ -1603,6 +1630,18 @@ tbody td a:hover { text-decoration: underline; }
   border-bottom: 1px solid var(--rule-2);
   margin-bottom: 0.2rem;
   padding-bottom: 0.3rem;
+}
+.col-filter-pop .cf-row.cf-parent {
+  margin-top: 0.18rem;
+  border-top: 1px solid var(--rule-2);
+  font-weight: 700;
+}
+.col-filter-pop .cf-row.cf-child {
+  padding-left: 1.15rem;
+}
+.col-filter-pop .cf-row.cf-child .cf-label::before {
+  content: "↳ ";
+  color: var(--ink-4);
 }
 .col-filter-pop .cf-empty {
   padding: 0.5rem;
