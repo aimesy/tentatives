@@ -11,6 +11,7 @@ on:
       - "site/**"
       - "data/**/rulings.parquet"
       - "update-site-counties.py"
+      - "scripts/sync-theme-ref.mjs"
       - ".github/workflows/site.yml"
   workflow_run:
     workflows: ["Backfill captures"]
@@ -42,7 +43,7 @@ jobs:
       # "Source: GitHub Actions"; after that this workflow deploys on its own.
       - uses: actions/configure-pages@v5
 
-      - name: Check viewer integration contracts
+      - name: Check viewer and shared theme integration contracts
         run: node site/check-static.mjs
 
       - name: Assemble Pages payload
