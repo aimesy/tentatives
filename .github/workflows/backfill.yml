@@ -53,22 +53,42 @@ jobs:
   backfill:
     runs-on: ubuntu-latest
     steps:
+      - name: Gate duplicate DST slot
+        id: gate
+        run: |
+          should_run=true
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" != "17 11 * * 0" ]; then
+            pacific_offset="$(TZ=America/Los_Angeles date +%z)"
+            case "${{ github.event.schedule }}:$pacific_offset" in
+              "0 0 * * *:-0700"|"0 1 * * *:-0800") ;;
+              *)
+                should_run=false
+                echo "skipping duplicate DST slot (schedule=${{ github.event.schedule }}, Pacific offset=$pacific_offset)"
+                ;;
+            esac
+          fi
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.should_run == 'true'
         with:
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.should_run == 'true'
         with:
           python-version: "3.11"
           cache: pip
 
       - name: Install dependencies
+        if: steps.gate.outputs.should_run == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y ghostscript ocrmypdf poppler-utils qpdf tesseract-ocr
           pip install -r requirements.txt
 
       - name: Run backfill
+        if: steps.gate.outputs.should_run == 'true'
         env:
           COUNTY: ${{ github.event.inputs.county || 'all' }}
           MODE: ${{ github.event.inputs.mode || (github.event.schedule == '17 11 * * 0' && 'wayback' || 'live') }}
@@ -79,16 +99,6 @@ jobs:
           LIMIT: ${{ github.event.inputs.limit || (github.event.schedule == '17 11 * * 0' && '50' || '') }}
         run: |
           set -o pipefail
-          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" != "17 11 * * 0" ]; then
-            pacific_offset="$(TZ=America/Los_Angeles date +%z)"
-            case "${{ github.event.schedule }}:$pacific_offset" in
-              "0 0 * * *:-0700"|"0 1 * * *:-0800") ;;
-              *)
-                echo "skipping duplicate DST slot (schedule=${{ github.event.schedule }}, Pacific offset=$pacific_offset)"
-                exit 0
-                ;;
-            esac
-          fi
           args=(--county "$COUNTY" --continue-on-error)
           case "$MODE" in
             live) args+=(--live) ;;
@@ -111,6 +121,7 @@ jobs:
           fi
 
       - name: Parse archived sources
+        if: steps.gate.outputs.should_run == 'true'
         env:
           COUNTY: ${{ github.event.inputs.county || 'all' }}
         run: |
@@ -125,6 +136,7 @@ jobs:
           fi
 
       - name: Slice parsed PDF rulings
+        if: steps.gate.outputs.should_run == 'true'
         env:
           COUNTY: ${{ github.event.inputs.county || 'all' }}
         run: |
@@ -137,9 +149,11 @@ jobs:
           fi
 
       - name: Refresh LIVE table
+        if: steps.gate.outputs.should_run == 'true'
         run: python update-readme.py
 
       - name: Commit archive and data updates
+        if: steps.gate.outputs.should_run == 'true'
         run: |
           if git diff --quiet -- archive/ data/ site/counties.json README.md LIVE.md && [ -z "$(git status --porcelain archive/ data/ site/counties.json README.md LIVE.md)" ]; then
             echo "no archive, data, or LIVE changes"
@@ -159,10 +173,10 @@ jobs:
           exit 1
 
       - name: File failure bug report
-        # File on any failure (schedule or manual). Even when an operator
+        if: failure() && steps.gate.outputs.should_run == 'true'
+        # File on any real failure (schedule or manual). Even when an operator
         # dispatches the workflow themselves, the issue collects the diagnostic
         # snapshot in one place for a follow-up agent to act on.
-        if: failure()
         env:
           WORKFLOW_LABEL: "Backfill captures"
           LOG_PATH: backfill.log
@@ -177,3 +191,4 @@ jobs:
             or a parser shape miss on a new source.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: .github/scripts/file_failure_report.sh
+
