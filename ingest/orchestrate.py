@@ -246,8 +246,9 @@ def write_parquet_atomic(table: pa.Table, parquet_path: Path) -> None:
     tmp = Path(tmp_file.name)
     tmp_file.close()
     try:
-        # Keep published Parquet readable under the static viewer CSP without a WASM decompressor.
-        pq.write_table(table, tmp, compression="NONE")
+        # Snappy stays readable by the vendored browser reader and keeps county files
+        # below GitHub's single-file limit as the archive grows.
+        pq.write_table(table, tmp, compression="snappy")
         os.replace(tmp, parquet_path)
     finally:
         try:
