@@ -50,7 +50,7 @@ def test_write_parquet_atomic_preserves_existing_on_failure(tmp_path, monkeypatc
     pq.write_table(original, parquet_path, compression="NONE")
     original_bytes = parquet_path.read_bytes()
 
-    def fail_write(table, path, compression):
+    def fail_write(table, path, compression, compression_level):
         path.write_bytes(b"partial parquet")
         raise RuntimeError("simulated write failure")
 
@@ -66,7 +66,7 @@ def test_write_parquet_atomic_preserves_existing_on_failure(tmp_path, monkeypatc
     assert not list(tmp_path.glob(".rulings.parquet.*.tmp"))
 
 
-def test_write_parquet_atomic_uses_snappy(tmp_path):
+def test_write_parquet_atomic_uses_zstd(tmp_path):
     parquet_path = tmp_path / "rulings.parquet"
     table = pa.table(
         {
@@ -82,7 +82,7 @@ def test_write_parquet_atomic_uses_snappy(tmp_path):
         metadata.row_group(0).column(index).compression
         for index in range(metadata.num_columns)
     }
-    assert compressions == {"SNAPPY"}
+    assert compressions == {"ZSTD"}
     assert pq.read_table(parquet_path).to_pylist() == table.to_pylist()
 
 

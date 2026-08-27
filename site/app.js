@@ -127,7 +127,13 @@ let parquetModulePromise = null;
 
 async function loadParquetModule() {
   if (!parquetModulePromise) {
-    parquetModulePromise = import("./vendor/hyparquet-1.18.1/src/index.js");
+    parquetModulePromise = Promise.all([
+      import("./vendor/hyparquet-1.18.1/src/index.js"),
+      import("./vendor/hyparquet-compressors-1.1.1.esm.js"),
+    ]).then(([parquet, compression]) => ({
+      ...parquet,
+      compressors: compression.compressors,
+    }));
   }
   return parquetModulePromise;
 }
@@ -198,7 +204,7 @@ async function fetchAndParse(county) {
     throw new Error(`HTTP ${res.status}`);
   }
   const buffer = await res.arrayBuffer();
-  const { parquetReadObjects } = await loadParquetModule();
+  const { parquetReadObjects, compressors } = await loadParquetModule();
   const file = {
     byteLength: buffer.byteLength,
     async slice(start, end) { return buffer.slice(start, end); },
@@ -206,7 +212,7 @@ async function fetchAndParse(county) {
   if (state.selectedCounties.has(county.slug)) {
     setCountyStatus(county.slug, "downloading", "parsing data file...");
   }
-  const rows = await parquetReadObjects({ file });
+  const rows = await parquetReadObjects({ file, compressors });
   return rows;
 }
 

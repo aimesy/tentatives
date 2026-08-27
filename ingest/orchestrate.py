@@ -246,9 +246,10 @@ def write_parquet_atomic(table: pa.Table, parquet_path: Path) -> None:
     tmp = Path(tmp_file.name)
     tmp_file.close()
     try:
-        # Snappy stays readable by the vendored browser reader and keeps county files
-        # below GitHub's single-file limit as the archive grows.
-        pq.write_table(table, tmp, compression="snappy")
+        # The vendored browser reader includes its Zstandard decompressor.  Zstd
+        # materially reduces the large text columns and keeps county files below
+        # GitHub's single-file limit as the archive grows.
+        pq.write_table(table, tmp, compression="zstd", compression_level=9)
         os.replace(tmp, parquet_path)
     finally:
         try:
