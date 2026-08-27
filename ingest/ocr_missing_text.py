@@ -15,12 +15,51 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 
 import pypdf
 
 REPO = Path(__file__).parent.parent
 ARCHIVE = REPO / "archive"
+
+
+@lru_cache(maxsize=1)
+def sparse_tracked_paths() -> frozenset[str]:
+    """Return tracked archive paths omitted by a sparse checkout.
+
+    A temporary blob-filtered VPS fallback intentionally omits historical OCR
+    sidecars.  Treat those tracked paths as present so the fallback OCRs only
+    genuinely new sources instead of recreating the repository's history.
+    Full checkouts retain the ordinary filesystem-only behavior.
+    """
+    sparse = subprocess.run(
+        ["git", "config", "--bool", "core.sparseCheckout"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if sparse.stdout.strip().lower() != "true":
+        return frozenset()
+    result = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", "HEAD", "--", "archive"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return frozenset(result.stdout.splitlines())
+
+
+def exists_or_sparse_tracked(path: Path) -> bool:
+    if path.exists():
+        return True
+    try:
+        relative = path.relative_to(REPO).as_posix()
+    except ValueError:
+        return False
+    return relative in sparse_tracked_paths()
 
 
 def re_fullmatch_hex2(value: str) -> bool:
@@ -104,7 +143,7 @@ def process_county(
             break
         source_sha = source.stem
         target = ocr_sidecar_path(county, source_sha)
-        if target.exists() and not force:
+        if exists_or_sparse_tracked(target) and not force:
             skipped_other += 1
             continue
         text_chars = extractable_text_chars(source)

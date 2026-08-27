@@ -22,7 +22,9 @@ or `--force` is passed.
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 from xml.sax.saxutils import escape
@@ -37,6 +39,38 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 REPO = Path(__file__).parent.parent
 ARCHIVE = REPO / "archive"
 DATA = REPO / "data"
+
+
+@lru_cache(maxsize=1)
+def sparse_tracked_paths() -> frozenset[str]:
+    """Return tracked archive paths omitted by a sparse checkout."""
+    sparse = subprocess.run(
+        ["git", "config", "--bool", "core.sparseCheckout"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if sparse.stdout.strip().lower() != "true":
+        return frozenset()
+    result = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", "HEAD", "--", "archive"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return frozenset(result.stdout.splitlines())
+
+
+def exists_or_sparse_tracked(path: Path) -> bool:
+    if path.exists():
+        return True
+    try:
+        relative = path.relative_to(REPO).as_posix()
+    except ValueError:
+        return False
+    return relative in sparse_tracked_paths()
 
 
 def source_pdf_path(county: str, source_sha: str) -> Path:
@@ -152,7 +186,7 @@ def process_county(county: str, *, force: bool) -> tuple[int, int, int]:
         if not (ruling_id and source_sha):
             continue
         out = slice_path(county, ruling_id)
-        if out.exists() and not force:
+        if exists_or_sparse_tracked(out) and not force:
             skipped += 1
             continue
         source = source_pdf_path(county, source_sha)
