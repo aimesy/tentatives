@@ -942,6 +942,7 @@ tbody td a:hover { text-decoration: underline; }
 .outcome-appearance_required { background: var(--paper-3); border-color: var(--rule); color: var(--accent); }
 .outcome-off_calendar { background: var(--paper-2); border-color: var(--rule); color: var(--ink-2); }
 .outcome-other { background: var(--paper-2); border-color: var(--rule); color: var(--link); }
+.outcome-pending { background: var(--warn-bg); border-color: var(--good-border); color: var(--warn-ink); }
 .cond {
   margin-left: 0.3rem;
   color: var(--warn-ink);
@@ -1159,6 +1160,34 @@ tbody td a:hover { text-decoration: underline; }
   color: var(--ink-3);
   font-family: var(--font-mono);
   font-size: 0.66rem;
+}
+.previous-versions {
+  margin: 0.75rem 0.9rem;
+  border: 1px solid var(--rule);
+  background: var(--paper-2);
+}
+.previous-versions summary {
+  padding: 0.5rem 0.65rem;
+  cursor: pointer;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.previous-version {
+  padding: 0.65rem;
+  border-top: 1px solid var(--rule-2);
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 0.88rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.previous-version-meta {
+  margin-bottom: 0.3rem;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
 }
 
 .col-filter-pop {

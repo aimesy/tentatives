@@ -127,12 +127,17 @@ let parquetModulePromise = null;
 
 async function loadParquetModule() {
   if (!parquetModulePromise) {
+    // County parquet files are produced with DuckDB's default ZSTD
+    // compression. hyparquet keeps codecs optional, so load the bundled ZSTD
+    // decompressor and pass it through explicitly. Importing the full
+    // compressor bundle would also initialize its WASM Snappy fallback,
+    // which this viewer's CSP intentionally does not permit.
     parquetModulePromise = Promise.all([
       import("./vendor/hyparquet-1.18.1/src/index.js"),
-      import("./vendor/hyparquet-compressors-1.1.1.esm.js"),
-    ]).then(([parquet, compression]) => ({
+      import("./vendor/fzstd-0.1.1.esm.js"),
+    ]).then(([parquet, codec]) => ({
       ...parquet,
-      compressors: compression.compressors,
+      compressors: { ZSTD: codec.decompress },
     }));
   }
   return parquetModulePromise;
@@ -226,6 +231,13 @@ function searchTextForRow(row) {
     .toLowerCase();
 }
 
+const PENDING_NOTES_RE = /calendar\s+notes\s+are\s+not\s+yet\s+available[\s\S]*check\s+back\s+for\s+updated\s+notes/i;
+
+function inferredStatus(row) {
+  if (row.status === "pending") return "pending";
+  return PENDING_NOTES_RE.test(previewTextForRow(row)) ? "pending" : "published";
+}
+
 // Build the short, share-friendly ruling ID: <CODE>-<YYMMDD>-D<dept>-<seq>.
 // Example: ELD-251201-D9-3.
 function buildShortId(row) {
@@ -242,6 +254,7 @@ function buildShortId(row) {
 function normalizeRow(row) {
   return {
     ...row,
+    status: inferredStatus(row),
     _search: searchTextForRow(row),
     _shortId: buildShortId(row),
     _rowId: row.ruling_id || buildShortId(row),
@@ -251,6 +264,8 @@ function normalizeRow(row) {
 function rebuildRows() {
   state.rows = [];
   for (const rows of state.loadedCounties.values()) state.rows.push(...rows);
+  const previousIds = new Set(state.rows.map((row) => row.previous_version_id).filter(Boolean));
+  for (const row of state.rows) row._isPreviousVersion = previousIds.has(rowKey(row));
 }
 
 function startCountyLoad(slug) {
@@ -363,6 +378,7 @@ function applyFilters() {
   const compiled = compileSearch(q.trim());
 
   state.filtered = state.rows.filter((r) => {
+    if (r._isPreviousVersion) return false;
     if (from && (r.hearing_date || "") < from) return false;
     if (to && (r.hearing_date || "") > to) return false;
     if (!passesColumnFilters(r)) return false;
@@ -689,8 +705,9 @@ function renderRow(r, idx, pageIdx = idx) {
   const outcomeCell = document.createElement("td");
   outcomeCell.className = "col-outcome";
   const outPill = document.createElement("span");
-  outPill.className = `outcome-pill outcome-${classToken(r.outcome)}`;
-  outPill.textContent = r.outcome || "-";
+  const displayOutcome = r.status === "pending" ? "pending" : (r.outcome || "-");
+  outPill.className = `outcome-pill outcome-${classToken(displayOutcome)}`;
+  outPill.textContent = displayOutcome;
   outcomeCell.appendChild(outPill);
   if (r.conditional) {
     const cond = document.createElement("span");
@@ -924,12 +941,37 @@ function dossierSection(n, title, bodyHtml) {
     + `</div></section>`;
 }
 
+function previousVersionRows(row) {
+  const versions = [];
+  const seen = new Set();
+  let previousId = row?.previous_version_id;
+  while (previousId && !seen.has(previousId)) {
+    seen.add(previousId);
+    const previous = findRowById(previousId);
+    if (!previous) break;
+    versions.push(previous);
+    previousId = previous.previous_version_id;
+  }
+  return versions;
+}
+
+function previousVersionsHtml(row) {
+  const versions = previousVersionRows(row);
+  if (!versions.length) return "";
+  return `<details class="previous-versions"><summary>Previous version${versions.length === 1 ? "" : "s"}</summary>`
+    + versions.map((version) => `<article class="previous-version">`
+      + `<div class="previous-version-meta">${esc(version.ingest_ts || version.hearing_date || version._shortId || "Earlier capture")}</div>`
+      + `<div>${esc(previewTextForRow(version) || "(empty)")}</div>`
+      + `</article>`).join("")
+    + `</details>`;
+}
+
 function renderDossierDetail(row) {
   const detail = $("dossier-detail");
   if (!detail || !row) return;
   const pdfHref = rulingPdfHref(row);
   const sourceUrl = rawSourceHref(row);
-  const outcomeLabel = row.outcome || "Unknown";
+  const outcomeLabel = row.status === "pending" ? "pending" : (row.outcome || "Unknown");
   const outcomeText = row.outcome_text || "(empty)";
   const fullText = row.full_text || row.body_text || "(empty)";
   const range = pageRangeLabel(row);
@@ -961,6 +1003,7 @@ function renderDossierDetail(row) {
     + dossierSection("M", "Motion", `<div class="dossier-motion">${esc(row.motion_type || "")}</div>`)
     + dossierSection("1", "Disposition", `<div class="dossier-ruling">${esc(outcomeText)}</div>`)
     + dossierSection("T", "Full text", `<div class="dossier-ruling">${esc(fullText)}</div>`)
+    + previousVersionsHtml(row)
     + `<div class="dossier-foot">source: parsed ruling row${range ? `; raw source ${esc(range)}` : ""} &middot; derived: outcome label</div>`;
 
   detail.querySelector("[data-dossier-open-modal]")?.addEventListener("click", () => openModal(row));
@@ -1018,7 +1061,7 @@ function openModal(rowOrIdx) {
     r.dept ? { label: `Dept ${r.dept}` } : null,
     r.division ? { label: r.division } : null,
     r.hearing_date ? { label: r.hearing_date } : null,
-    r.outcome ? { label: r.outcome + (r.conditional ? " (conditional)" : "") } : null,
+    { label: r.status === "pending" ? "pending" : ((r.outcome || "other") + (r.conditional ? " (conditional)" : "")) },
     r.continued_to ? { label: `continued -> ${r.continued_to}` } : null,
   ].filter(Boolean);
   for (const p of pills) {
@@ -1030,6 +1073,8 @@ function openModal(rowOrIdx) {
   $("modal-motion").textContent = r.motion_type || "";
   $("modal-outcome").textContent = r.outcome_text || "(empty)";
   $("modal-full").textContent = r.full_text || r.body_text || "(empty)";
+  const oldVersions = $("modal-previous-versions");
+  if (oldVersions) oldVersions.innerHTML = previousVersionsHtml(r);
   $("modal-id").textContent = r._shortId;
 
   const pdfHref = rulingPdfHref(r);
