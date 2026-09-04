@@ -137,7 +137,7 @@ async function loadParquetModule() {
       import("./vendor/fzstd-0.1.1.esm.js"),
     ]).then(([parquet, codec]) => ({
       ...parquet,
-      compressors: { ZSTD: codec.decompress },
+        compressors: { ZSTD: (data) => codec.decompress(new Uint8Array(data)) },
     }));
   }
   return parquetModulePromise;
