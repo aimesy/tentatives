@@ -35,9 +35,9 @@ assert.doesNotMatch(indexSource, />\s*[vV]\s*</, "viewer controls must use arrow
 assert.doesNotMatch(indexSource, />Excerpt</, "the redundant Excerpt column must stay removed");
 assert.doesNotMatch(appSource, /col-text|label:\s*"Excerpt"|cell-clamp/);
 assert.doesNotMatch(stylesSource, /\.col-text|\.cell-clamp|content:\s*" [vV^]"/);
-assert.equal((indexSource.match(/class="col-filter-btn"/g) || []).length, 5);
+assert.equal((indexSource.match(/class="col-filter-btn"/g) || []).length, 6);
 assert.equal((indexSource.match(/class="caret">▾<\/span>/g) || []).length, 2);
-assert.equal((appSource.match(/\.colSpan = 10;/g) || []).length, 2);
+assert.equal((appSource.match(/\.colSpan = 11;/g) || []).length, 2);
 assert.match(indexSource, /id="county-load-status"[^>]*role="status"[^>]*aria-live="polite"/);
 assert.match(indexSource, /id="county-load-progress"[^>]*aria-labelledby="county-load-label"/);
 assert.match(appSource, /function selectedLoadState\(\)/);
