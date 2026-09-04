@@ -1375,11 +1375,6 @@ def parse_sonoma_page(html: str, capture: dict) -> list[Ruling]:
             body = block
             motion = ""
             style = "sonoma-html-list"
-        judge_match = re.search(
-            r"(?im)^\s*(?:Judge|Honorable|Hon\.)\s*:?\s+(?P<name>[A-Z][^\n]{2,100}?)\s*$",
-            block,
-        )
-        judge = inline(judge_match.group("name")) if judge_match else None
         division = "Civil"
         low_url = source_url.lower()
         if "probate" in low_url or anchor["num"].upper().startswith(("PR", "SPR")):
@@ -1391,7 +1386,7 @@ def parse_sonoma_page(html: str, capture: dict) -> list[Ruling]:
                 county="sonoma",
                 source_sha256=sha,
                 source_url=source_url,
-                parser_version="sonoma-html-v2",
+                parser_version="sonoma-html-v1",
                 style=style,
                 index=len(rulings) + 1,
                 case_number=anchor["num"].replace(" ", ""),
@@ -1401,7 +1396,6 @@ def parse_sonoma_page(html: str, capture: dict) -> list[Ruling]:
                 body_text=body,
                 motion_type=motion,
                 division=division,
-                judge=judge,
             )
         )
     return rulings

@@ -553,7 +553,6 @@ def parse(
                 conditional=conditional,
                 continued_to=continued_to,
                 body_text=filed_by,  # CCC doesn't have a narrative body before disposition
-                judge=meta.judge,
                 full_text=full_text,
                 page_start=page_start,
                 page_end=page_end,

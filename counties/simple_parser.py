@@ -241,7 +241,6 @@ def make_ruling(
     page_start: int = 1,
     page_end: int = 1,
     outcome_text: str | None = None,
-    judge: str | None = None,
 ) -> Ruling:
     outcome_source = outcome_text if outcome_text is not None else body_text or full_text
     outcome, conditional, continued_to = classify(outcome_source)
@@ -267,7 +266,6 @@ def make_ruling(
         source_url=source_url,
         parser_version=parser_version,
         style=style,
-        judge=inline(judge or "") or None,
         ingest_ts=datetime.now(UTC),
     )
 

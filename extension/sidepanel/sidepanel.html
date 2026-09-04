@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tentatives Capture</title>
+    <link rel="stylesheet" href="../styles/sidepanel.css" />
+  </head>
+  <body>
+    <header class="hdr">
+      <div class="hdr-title">Tentatives Capture</div>
+      <div class="hdr-conn">
+        <span class="dot" id="conn-dot"></span>
+        <span id="conn-text">Checking GitHub config…</span>
+      </div>
+      <div class="hdr-row">
+        <a class="link" id="open-options" href="#">Settings</a>
+        <span class="sep">·</span>
+        <a class="link" id="open-viewer" href="#" target="_blank" rel="noopener">Open viewer</a>
+        <span class="sep">·</span>
+        <a class="link" id="archive-link" href="#" target="_blank" rel="noopener">Archive</a>
+      </div>
+    </header>
+
+    <section class="active-tab">
+      <div class="section-head">
+        <h2 class="section-title">Active tab</h2>
+        <span class="progress" id="progress-text"></span>
+      </div>
+      <dl class="kv">
+        <dt>Page</dt>
+        <dd id="d-host" class="muted">checking…</dd>
+        <dt>County</dt>
+        <dd id="d-county"><span class="pill mute">—</span></dd>
+        <dt>PDFs</dt>
+        <dd id="d-pdfcount"><span class="pill mute">—</span></dd>
+      </dl>
+      <div class="row split">
+        <span class="progress muted" id="status-line"></span>
+        <div class="row">
+          <button class="btn icon" id="rescan" title="Re-scan the active tab for PDFs">↻</button>
+          <button class="btn small" id="active-wayback" title="Open Wayback snapshots for the active tab" disabled>Wayback</button>
+          <button class="btn primary" id="upload" disabled>Upload</button>
+        </div>
+      </div>
+      <div class="progress-bar" id="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+    </section>
+
+    <section class="pages">
+      <div class="section-head">
+        <h2 class="section-title">Pages</h2>
+        <div class="section-actions">
+          <label class="check">
+            <input type="checkbox" id="select-all-courts" checked />
+            <span>All</span>
+          </label>
+          <button class="btn small" id="scan-selected" type="button">Scan selected</button>
+          <button class="btn small" id="shell-selected" type="button" title="Scan selected courts in parallel browser tabs">Shell scan</button>
+          <span class="progress muted" id="bulk-status"></span>
+        </div>
+      </div>
+      <div id="county-blocks"></div>
+    </section>
+
+    <section class="activity">
+      <div class="section-head">
+        <h2 class="section-title">Recent activity</h2>
+        <button class="btn-link" id="clear-activity" hidden>Clear</button>
+      </div>
+      <ul class="activity-list" id="results" aria-live="polite">
+        <li class="empty">No uploads yet.</li>
+      </ul>
+    </section>
+
+    <footer class="ftr">
+      <span class="muted">v<span id="ext-version">0.0.0</span></span>
+      <button class="btn small" id="bulk-stop" hidden>Stop scan</button>
+    </footer>
+
+    <script src="sidepanel.js" type="module"></script>
+  </body>
+</html>

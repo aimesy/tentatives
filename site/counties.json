@@ -1,0 +1,172 @@
+[
+  {
+    "slug": "amador",
+    "label": "Amador",
+    "code": "AMA"
+  },
+  {
+    "slug": "butte",
+    "label": "Butte",
+    "code": "BUT"
+  },
+  {
+    "slug": "calaveras",
+    "label": "Calaveras",
+    "code": "CAL"
+  },
+  {
+    "slug": "contra-costa",
+    "label": "Contra Costa",
+    "code": "CC"
+  },
+  {
+    "slug": "el-dorado",
+    "label": "El Dorado",
+    "code": "ELD"
+  },
+  {
+    "slug": "fresno",
+    "label": "Fresno",
+    "code": "FRE"
+  },
+  {
+    "slug": "imperial",
+    "label": "Imperial",
+    "code": "IMP"
+  },
+  {
+    "slug": "los-angeles",
+    "label": "Los Angeles",
+    "code": "LA"
+  },
+  {
+    "slug": "marin",
+    "label": "Marin",
+    "code": "MRN"
+  },
+  {
+    "slug": "merced",
+    "label": "Merced",
+    "code": "MER"
+  },
+  {
+    "slug": "monterey",
+    "label": "Monterey",
+    "code": "MON"
+  },
+  {
+    "slug": "napa",
+    "label": "Napa",
+    "code": "NAP"
+  },
+  {
+    "slug": "nevada",
+    "label": "Nevada",
+    "code": "NEV"
+  },
+  {
+    "slug": "orange",
+    "label": "Orange",
+    "code": "ORA"
+  },
+  {
+    "slug": "placer",
+    "label": "Placer",
+    "code": "PLA"
+  },
+  {
+    "slug": "plumas",
+    "label": "Plumas",
+    "code": "PLU"
+  },
+  {
+    "slug": "riverside",
+    "label": "Riverside",
+    "code": "RIV"
+  },
+  {
+    "slug": "san-benito",
+    "label": "San Benito",
+    "code": "SBT"
+  },
+  {
+    "slug": "san-bernardino",
+    "label": "San Bernardino",
+    "code": "SBD"
+  },
+  {
+    "slug": "san-francisco",
+    "label": "San Francisco UFC",
+    "code": "SF"
+  },
+  {
+    "slug": "san-luis-obispo",
+    "label": "San Luis Obispo",
+    "code": "SLO"
+  },
+  {
+    "slug": "san-mateo",
+    "label": "San Mateo",
+    "code": "SMT"
+  },
+  {
+    "slug": "santa-barbara",
+    "label": "Santa Barbara",
+    "code": "SB"
+  },
+  {
+    "slug": "santa-clara",
+    "label": "Santa Clara",
+    "code": "SCL"
+  },
+  {
+    "slug": "santa-cruz",
+    "label": "Santa Cruz",
+    "code": "SCZ"
+  },
+  {
+    "slug": "shasta",
+    "label": "Shasta",
+    "code": "SHA"
+  },
+  {
+    "slug": "sierra",
+    "label": "Sierra",
+    "code": "SIE"
+  },
+  {
+    "slug": "solano",
+    "label": "Solano",
+    "code": "SOL"
+  },
+  {
+    "slug": "sonoma",
+    "label": "Sonoma",
+    "code": "SON"
+  },
+  {
+    "slug": "stanislaus",
+    "label": "Stanislaus",
+    "code": "STA"
+  },
+  {
+    "slug": "tulare",
+    "label": "Tulare",
+    "code": "TUL"
+  },
+  {
+    "slug": "tuolumne",
+    "label": "Tuolumne",
+    "code": "TUO"
+  },
+  {
+    "slug": "ventura",
+    "label": "Ventura",
+    "code": "VEN"
+  },
+  {
+    "slug": "yolo",
+    "label": "Yolo",
+    "code": "YOL"
+  }
+]
