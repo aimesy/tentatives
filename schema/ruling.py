@@ -81,7 +81,10 @@ class Ruling:
     source_url: str         # canonical court URL of the source
     parser_version: str
     style: str = ""         # e.g. "probate-dept-header", "lawandmotion-calendar"
+    status: str = "published"  # "pending" when the court has not posted notes yet
+    previous_version_id: str | None = None
     ingest_ts: datetime = field(default_factory=utc_now)
+    judge: str | None = None
 
     def to_row(self) -> dict[str, Any]:
         d = asdict(self)

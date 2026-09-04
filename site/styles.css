@@ -835,6 +835,7 @@ tbody tr.ruling-subrow.selected-row {
 tbody tr.rec-main > td { border-bottom: 0; }
 .col-county { width: 120px; }
 .col-dept { width: 48px; text-align: center; white-space: nowrap; }
+.col-judge { width: 150px; }
 .col-date { width: 78px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .col-case { width: 112px; font-family: var(--font-mono); }
 .col-title { width: 20%; }
@@ -844,12 +845,14 @@ tbody tr.rec-main > td { border-bottom: 0; }
 .col-share { width: 48px; text-align: center; white-space: nowrap; }
 .col-id { width: 126px; font-family: var(--font-mono); font-size: 0.67rem; color: var(--ink-3); }
 td.col-county,
+td.col-judge,
 td.col-title,
 td.col-mtype,
 td.col-outcome {
   line-height: 1.22;
 }
 td.col-county,
+td.col-judge,
 td.col-title,
 td.col-mtype,
 td.col-outcome {

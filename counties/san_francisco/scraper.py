@@ -386,6 +386,7 @@ def parse(
                 conditional=conditional,
                 continued_to=continued_to,
                 body_text=judge or "",
+                judge=judge,
                 full_text=section_text.strip(),
                 page_start=page_start,
                 page_end=page_end,

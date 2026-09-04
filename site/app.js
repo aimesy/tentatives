@@ -27,6 +27,7 @@ const FILTER_IDS = ["q", "from", "to"];
 const SEARCH_FIELDS = [
   "case_number",
   "case_title",
+  "judge",
   "motion_type",
   "outcome_text",
   "body_text",
@@ -35,6 +36,7 @@ const SEARCH_FIELDS = [
 const SORT_COLUMNS = new Set([
   "county",
   "dept",
+  "judge",
   "hearing_date",
   "case_number",
   "case_title",
@@ -53,6 +55,7 @@ const HIGH_CARD_RENDER_CAP = 200;
 const COL_FILTER_LABELS = {
   county:      "County",
   dept:        "Dept",
+  judge:       "Judge",
   motion_type: "Motion",
   outcome:     "Outcome",
   case_title:  "Title",
@@ -62,6 +65,7 @@ const COL_FILTER_LABELS = {
 const TOGGLEABLE_COLS = [
   { key: "county",  label: "County",  default: true  },
   { key: "dept",    label: "Dept",    default: true  },
+  { key: "judge",   label: "Judge",   default: true  },
   { key: "title",   label: "Title",   default: true  },
   { key: "mtype",   label: "Motion",  default: true  },
   { key: "outcome", label: "Outcome", default: true  },
@@ -254,6 +258,7 @@ function buildShortId(row) {
 function normalizeRow(row) {
   return {
     ...row,
+    judge: row.judge ?? row.judge_name ?? "",
     status: inferredStatus(row),
     _search: searchTextForRow(row),
     _shortId: buildShortId(row),
@@ -357,6 +362,7 @@ function matchesSearch(row, compiled) {
 function rowColumnValue(row, col) {
   if (col === "county") return row.county || "";
   if (col === "dept") return row.dept == null ? "" : String(row.dept);
+  if (col === "judge") return row.judge || row.judge_name || "";
   if (col === "case_title") return row.case_title || "";
   if (col === "motion_type") return row.motion_type || "";
   if (col === "outcome") return row.outcome || "";
@@ -638,7 +644,7 @@ function renderTable(slice, start, loadState) {
   if (slice.length === 0) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 10;
+    td.colSpan = 11;
     td.className = "no-data";
     td.appendChild(buildEmptyState(loadState));
     tr.appendChild(td);
@@ -673,6 +679,8 @@ function renderRow(r, idx, pageIdx = idx) {
   countyCell.title = COUNTY_LABEL[r.county] || r.county || "";
 
   appendCell(tr, r.dept || "", "col-dept");
+  const judgeCell = appendCell(tr, r.judge || r.judge_name || "", "col-judge");
+  judgeCell.title = r.judge || r.judge_name || "";
   appendCell(tr, r.hearing_date || "", "col-date");
   appendCell(tr, r.case_number || "", "col-case");
 
@@ -776,7 +784,7 @@ function renderRow(r, idx, pageIdx = idx) {
   sub.dataset.id = rowKey(r);
   if (rowKey(r) && rowKey(r) === state.selectedRowId) sub.classList.add("selected-row");
   const subCell = document.createElement("td");
-  subCell.colSpan = 10;
+  subCell.colSpan = 11;
   const excerptBox = document.createElement("div");
   excerptBox.className = "ruling-excerpt";
   const subPreviewText = previewTextForRow(r);
@@ -979,6 +987,7 @@ function renderDossierDetail(row) {
     row.case_number,
     COUNTY_LABEL[row.county] || row.county,
     row.dept ? `Dept ${row.dept}` : "",
+    row.judge || row.judge_name || "",
     row.division || "",
     row.hearing_date || "",
     row._shortId || "",
@@ -1059,6 +1068,7 @@ function openModal(rowOrIdx) {
     { label: r.case_number || "(no case #)" },
     { label: COUNTY_LABEL[r.county] || r.county },
     r.dept ? { label: `Dept ${r.dept}` } : null,
+    (r.judge || r.judge_name) ? { label: `Judge: ${r.judge || r.judge_name}` } : null,
     r.division ? { label: r.division } : null,
     r.hearing_date ? { label: r.hearing_date } : null,
     { label: r.status === "pending" ? "pending" : ((r.outcome || "other") + (r.conditional ? " (conditional)" : "")) },
@@ -1543,7 +1553,7 @@ function exportCsv() {
     return;
   }
   const cols = [
-    "id", "county", "dept", "hearing_date", "case_number", "case_title",
+    "id", "county", "dept", "judge", "hearing_date", "case_number", "case_title",
     "motion_type", "outcome", "conditional", "continued_to", "outcome_text",
     "page_start", "page_end", "source_url",
   ];
@@ -1554,6 +1564,7 @@ function exportCsv() {
       id: r._shortId,
       county: COUNTY_LABEL[r.county] || r.county,
       dept: r.dept,
+      judge: r.judge || r.judge_name || "",
       hearing_date: r.hearing_date,
       case_number: r.case_number,
       case_title: r.case_title,
