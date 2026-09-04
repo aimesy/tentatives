@@ -1,0 +1,91 @@
+name: Deploy site
+
+# Builds a GitHub Pages payload that contains the static site/ viewer alongside
+# the per-county parquet files it queries. Runs on any change to site/, the
+# parquet sources under data/, or this workflow itself.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "site/**"
+      - "data/**/rulings.parquet"
+      - "update-site-counties.py"
+      - "scripts/sync-theme-ref.mjs"
+      - ".github/workflows/site.yml"
+  workflow_run:
+    workflows: ["Backfill captures"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # NOTE: `enablement: true` is intentionally NOT set. Per the
+      # configure-pages action, enablement requires a token *other than* the
+      # default GITHUB_TOKEN (a PAT with repo/Pages-write, or a GitHub App with
+      # administration:write). With only GITHUB_TOKEN the enable-API call 403s,
+      # which fails this build job so `deploy` never runs and the whole site
+      # 404s. Pages must instead be enabled once in Settings -> Pages with
+      # "Source: GitHub Actions"; after that this workflow deploys on its own.
+      - uses: actions/configure-pages@v5
+
+      - name: Check viewer and shared theme integration contracts
+        run: node site/check-static.mjs
+
+      - name: Assemble Pages payload
+        run: |
+          python3 update-site-counties.py
+          mkdir -p _site
+          cp -R site/* _site/
+          touch _site/.nojekyll
+          # The viewer fetches data/<county>/rulings.parquet on Pages.
+          mkdir -p _site/data
+          if [ -d data ]; then
+            cp -R data/* _site/data/ || true
+          fi
+          # Drop any per-county parquet that's not a regular file (defensive).
+          find _site/data -type d -empty -delete || true
+          echo "Payload:"
+          ls -la _site
+          echo "Data dirs:"
+          ls -la _site/data || true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Remove deployed Pages artifact
+        if: ${{ success() }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          artifact_id="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" --jq '[.artifacts[] | select(.name == "github-pages")][0].id // empty')"
+          if [ -n "${artifact_id}" ]; then
+            gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}"
+          fi
