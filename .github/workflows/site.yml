@@ -34,6 +34,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            site
+            data
+            update-site-counties.py
+          sparse-checkout-cone-mode: false
 
       # NOTE: `enablement: true` is intentionally NOT set. Per the
       # configure-pages action, enablement requires a token *other than* the
