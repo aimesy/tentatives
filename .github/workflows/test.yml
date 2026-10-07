@@ -1,0 +1,60 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the data token
+        env:
+          TENTATIVES_DATA_CI: ${{ secrets.TENTATIVES_DATA_CI }}
+        run: |
+          if [ -z "$TENTATIVES_DATA_CI" ]; then
+            echo "::error::The TENTATIVES_DATA_CI secret is empty, so the archived regression sources in the private aimesy/tentatives-data cannot be fetched (README, Repositories)."
+            exit 1
+          fi
+
+      # The county tests name archived court sources by hash. The archive is
+      # many gigabytes in aimesy/tentatives-data; check out its tree without
+      # blobs and fetch only the sources the tests use.
+      - name: Check out the data tree
+        uses: actions/checkout@v4
+        with:
+          repository: aimesy/tentatives-data
+          token: ${{ secrets.TENTATIVES_DATA_CI }}
+          path: .data
+          sparse-checkout: |
+            /archive/el-dorado/captures.ndjson
+          sparse-checkout-cone-mode: false
+
+      - name: Fetch the archived regression sources used by tests
+        run: |
+          python3 .github/scripts/test_archive_paths.py .data > "$RUNNER_TEMP/test-archive-paths"
+          git -C .data sparse-checkout add --stdin < "$RUNNER_TEMP/test-archive-paths"
+          ln -s .data/archive archive
+          echo "Archived regression sources: $(wc -l < "$RUNNER_TEMP/test-archive-paths")"
+          du -sh .data/.git .data/archive counties ingest
+          df -h .
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install
+        run: pip install -r requirements.txt pytest==9.0.3
+
+      - name: Run tests
+        run: pytest counties/ ingest/ -v

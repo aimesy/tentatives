@@ -1,0 +1,91 @@
+name: Start data workflows
+
+# The archive and parsed data live in aimesy/tentatives-data, and its
+# workflows check out this repository to capture, parse and deploy. A push
+# here starts the data repository's runs that depend on what changed:
+#   Deploy site     viewer, data Worker or extension changes; the data Worker
+#                   is redeployed only when worker/data/ changed, because
+#                   each deploy empties its cache;
+#   Parse new PDFs  parser changes, so new captures are parsed with them.
+# The daily backfill always checks out master, so it needs no signal.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "site/**"
+      - "worker/**"
+      - "extension/**"
+      - ".github/scripts/package_extension.py"
+      - "update-site-counties.py"
+      - "counties/**/*.py"
+      - "schema/**/*.py"
+      - "ingest/**/*.py"
+      - "!ingest/build_viewer_data.py"
+      - "!ingest/tests/**"
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Start Deploy site
+        type: boolean
+        default: true
+      deploy_worker:
+        description: Redeploy the data Worker (empties its cache)
+        type: boolean
+        default: false
+      parse:
+        description: Start Parse new PDFs
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: data-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Start the data repository's workflows
+        env:
+          GH_TOKEN: ${{ secrets.TENTATIVES_DATA_CI }}
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          IN_DEPLOY: ${{ inputs.deploy }}
+          IN_WORKER: ${{ inputs.deploy_worker }}
+          IN_PARSE: ${{ inputs.parse }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::The TENTATIVES_DATA_CI secret is empty, so aimesy/tentatives-data was not told about this push. Run its Deploy site or Parse new PDFs workflow by hand (README, Repositories)."
+            exit 1
+          fi
+          deploy=false; worker=false; parse=false
+          if [ "$EVENT" = workflow_dispatch ]; then
+            deploy="$IN_DEPLOY"; worker="$IN_WORKER"; parse="$IN_PARSE"
+          else
+            # A new branch or a force push has no usable parent: start both.
+            if git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              changed() { [ -n "$(git diff --name-only "$BEFORE" "$GITHUB_SHA" -- "$@")" ]; }
+            else
+              changed() { true; }
+            fi
+            if changed site worker extension .github/scripts/package_extension.py update-site-counties.py; then deploy=true; fi
+            if changed worker/data; then worker=true; fi
+            if changed 'counties/*.py' 'schema/*.py' 'ingest/*.py' ':(exclude)ingest/tests' ':(exclude)ingest/build_viewer_data.py'; then parse=true; fi
+          fi
+          if [ "$deploy" = true ]; then
+            gh workflow run site.yml -R aimesy/tentatives-data -f code_ref="$GITHUB_SHA" -f deploy_worker="$worker"
+            echo "Started Deploy site at $GITHUB_SHA (deploy_worker=$worker)."
+          fi
+          if [ "$parse" = true ]; then
+            gh workflow run parse.yml -R aimesy/tentatives-data -f code_ref="$GITHUB_SHA"
+            echo "Started Parse new PDFs at $GITHUB_SHA."
+          fi
+          if [ "$deploy" != true ] && [ "$parse" != true ]; then echo "Nothing to start."; fi

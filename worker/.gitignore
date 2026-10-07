@@ -1,0 +1,5 @@
+# Built by site/build.mjs at deploy time.
+site/dist/
+# Wrangler's local state, and the token for local development.
+.wrangler/
+.dev.vars

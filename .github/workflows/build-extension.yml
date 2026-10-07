@@ -1,0 +1,105 @@
+name: Build extension
+
+# Zips browser-specific extension packages on every push to master and publishes
+# them as release assets at a stable tag (extension-latest). The public viewer
+# also builds these packages because anonymous users cannot read this repo.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "extension/**"
+      - ".github/scripts/package_extension.py"
+      - ".github/workflows/build-extension.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-extension-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            /extension/
+            /.github/scripts/package_extension.py
+          sparse-checkout-cone-mode: false
+
+      - name: Read manifest version
+        id: ver
+        run: |
+          v=$(python3 -c "import json; print(json.load(open('extension/manifest.json'))['version'])")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "manifest version: $v"
+
+      - name: Zip extension packages
+        run: |
+          python3 .github/scripts/package_extension.py --output .
+          ls -la tentatives-extension*.zip
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tentatives-extension
+          path: |
+            tentatives-extension.zip
+            tentatives-extension-chrome.zip
+            tentatives-extension-firefox.zip
+          if-no-files-found: error
+
+      - name: Publish to extension-latest release
+        if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+        # softprops/action-gh-release v2.6.2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          tag_name: extension-latest
+          name: Browser extension (latest build)
+          body: |
+            Auto-built from commit `${{ github.sha }}`. Manifest v${{ steps.ver.outputs.version }}.
+
+            **Install**
+
+            1. Chrome: download `tentatives-extension.zip` or
+               `tentatives-extension-chrome.zip` below and unzip somewhere stable
+               (the folder has to stay where Chrome can read it).
+            2. Firefox: download `tentatives-extension-firefox.zip` below to avoid
+               Chrome-only `sidePanel` manifest warnings.
+            3. Chrome: open `chrome://extensions`, toggle **Developer mode** on,
+               click **Load unpacked**, and select the unzipped folder.
+            4. Firefox: open `about:debugging#/runtime/this-firefox`, click
+               **Load Temporary Add-on**, and select `manifest.json` from the
+               unzipped Firefox package.
+            5. Click the extension icon, open **Settings**, and paste a GitHub PAT
+               with `contents:write` on `aimesy/tentatives-data`; owner, repo and branch
+               default to `aimesy`, `tentatives-data` and `master`.
+            6. Visit a supported court page and click **Upload**.
+          files: |
+            tentatives-extension.zip
+            tentatives-extension-chrome.zip
+            tentatives-extension-firefox.zip
+          overwrite_files: true
+          make_latest: false
+          prerelease: false
+
+      - name: Publish versioned extension release
+        if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+        # softprops/action-gh-release v2.6.2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          tag_name: extension-v${{ steps.ver.outputs.version }}
+          name: Browser extension v${{ steps.ver.outputs.version }}
+          body: |
+            Built from commit `${{ github.sha }}`.
+          files: |
+            tentatives-extension.zip
+            tentatives-extension-chrome.zip
+            tentatives-extension-firefox.zip
+          overwrite_files: false
+          make_latest: false
+          prerelease: false

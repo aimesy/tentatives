@@ -1,0 +1,18 @@
+# The tentatives viewer: site/ as the static assets of a Worker on
+# tentatives.amyc.us (README "Hosting"). No script runs, and Workers Caching
+# stays off, so its requests are free and do not count toward the account's
+# 100,000 Worker requests a day. build.mjs assembles dist/ from site/; the
+# viewer job in .github/workflows/site.yml runs it, then Wrangler.
+
+name = "tentatives"
+account_id = "06e69f381ac9e7c54620cb6fa5dc34d6"
+compatibility_date = "2026-10-01"
+
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "tentatives.amyc.us", custom_domain = true }]
+
+[assets]
+directory = "./dist"
+html_handling = "auto-trailing-slash"
+not_found_handling = "none"
