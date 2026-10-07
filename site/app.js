@@ -1,6 +1,7 @@
 // California Tentative Rulings - static viewer.
 //
-// Reads metadata-only county summary indexes through the data Worker and
+// Reads county summary indexes (metadata, each ruling's disposition and its
+// opening lines) through the data Worker and
 // drives the filter/sort/page view. Complete text is requested for one ruling
 // when its detail view opens and shares the PDF's document allowance. Each
 // ruling's sliced PDF at archive/<county>/rulings/<two-hex>/<ruling_id>.pdf

@@ -6,7 +6,7 @@
 // The data repository (aimesy/tentatives-data) is private. The viewer at
 // https://tentatives.amyc.us/ reads it through this Worker at
 // https://tentatives-data.amyc.us/, whose URLs mirror raw.githubusercontent.com:
-//   /<ref>/data/<county>/summary.json              metadata, without ruling text
+//   /<ref>/data/<county>/summary.json              metadata, disposition and opening lines
 //   /<ref>/data/<county>/rulings/<id>.json         one metered ruling's complete text
 //   /<ref>/archive/<county>/rulings/<xx>/<id>.pdf  the PDF slice of one ruling
 //   /<ref>/LIVE.md                                 the metrics table on amyc.us

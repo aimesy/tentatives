@@ -104,7 +104,7 @@ The data is the Worker `tentatives-data` on `tentatives-data.amyc.us` (`worker/d
 
 | Path | Answer |
 |---|---|
-| `/<commit>/data/<county>/summary.json` | county metadata without disposition, body, or full ruling text |
+| `/<commit>/data/<county>/summary.json` | county metadata with each ruling's disposition (up to 600 characters) and opening lines (300), not the full text |
 | `/<commit>/data/<county>/rulings/<id>.json` | one complete ruling text record, metered with its PDF |
 | `/<commit>/archive/<county>/rulings/<xx>/<id>.pdf` | the PDF slice of one ruling, cached for a year |
 | `/<commit>/LIVE.md` | the metrics table the amyc.us home page shows |

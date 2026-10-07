@@ -4,22 +4,27 @@ import json
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from ingest.build_viewer_data import TEXT_FIELDS, build_county, digest, ready
+from ingest.build_viewer_data import OPENING_EXCERPT, OUTCOME_EXCERPT, TEXT_FIELDS, build_county, clip, digest, ready
 
 
-def test_complete_text_stays_out_of_index_and_source_is_preserved(tmp_path):
+def test_index_carries_excerpts_and_complete_text_stays_out(tmp_path):
     source = tmp_path / "el-dorado" / "rulings.parquet"
     source.parent.mkdir()
     ruling_id = "ab" + "1" * 30
     row = {"ruling_id": ruling_id, "case_number": "25CV1", "case_title": "Case title", "county": "el-dorado",
-           "outcome": "granted", "outcome_text": "SECRET DISPOSITION", "body_text": "SECRET BODY", "full_text": "SECRET FULL TEXT", "new_private_text_column": "SECRET FUTURE FIELD"}
+           "outcome": "granted", "outcome_text": "The motion is GRANTED.",
+           "body_text": "Plaintiff moves for trial preference. " + "Long analysis. " * 200,
+           "full_text": "SECRET FULL TEXT", "new_private_text_column": "SECRET FUTURE FIELD"}
     pq.write_table(pa.Table.from_pylist([row]), source)
     before = digest(source)
     assert build_county(source) == 1
     assert digest(source) == before
     summary = json.loads((source.parent / "summary.json").read_text())
     assert summary[0]["case_number"] == "25CV1"
-    assert all(field not in summary[0] for field in TEXT_FIELDS)
+    assert summary[0]["outcome_text"] == "The motion is GRANTED."
+    assert summary[0]["body_text"].startswith("Plaintiff moves for trial preference. Long analysis.")
+    assert len(summary[0]["body_text"]) <= OPENING_EXCERPT + 1 and summary[0]["body_text"].endswith("\u2026")
+    assert "full_text" not in summary[0]
     assert "SECRET" not in (source.parent / "summary.json").read_text()
     record_path = source.parent / "ruling-text" / "ab" / f"{ruling_id}.json"
     record = json.loads(record_path.read_text())
@@ -70,3 +75,10 @@ def test_oversized_legacy_labels_are_only_in_metered_record(tmp_path):
     record = json.loads((source.parent / "ruling-text" / "01" / f"{ruling_id}.json").read_text())
     assert record["motion_type"] == motion
     assert record["case_title"] == title
+
+
+def test_clip_keeps_short_text_and_cuts_long_text_at_a_word():
+    assert clip("  GRANTED.\n\n  Appearances   required. ", OUTCOME_EXCERPT) == "GRANTED. Appearances required."
+    long = "word " * 400
+    clipped = clip(long, OUTCOME_EXCERPT)
+    assert len(clipped) <= OUTCOME_EXCERPT + 1 and clipped.endswith("word\u2026")

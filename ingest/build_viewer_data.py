@@ -1,4 +1,4 @@
-"""Build metadata indexes and individual text records without changing source Parquet.
+"""Build county indexes and individual text records without changing source Parquet.
 
 visibility: non-public:private
 The data Worker exposes summary.json and one /rulings/<id>.json record.
@@ -17,7 +17,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = 3
+VERSION = 4
 ID = re.compile(r"^[0-9a-f]{32}$")
 COUNTY = re.compile(r"^[a-z0-9-]+$")
 TEXT_FIELDS = ("outcome_text", "body_text", "full_text")
@@ -29,6 +29,11 @@ SUMMARY_FIELDS = (
 )
 PENDING = re.compile(r"calendar\s+notes\s+are\s+not\s+yet\s+available[\s\S]*check\s+back\s+for\s+updated\s+notes", re.I)
 LABEL_LIMITS = {"case_title": 512, "motion_type": 256}
+# Amy, 2026-10-07: the index carries each ruling's disposition and its opening
+# lines, so the list and search work without opening rulings; the complete
+# text stays in the metered per-ruling record.
+OUTCOME_EXCERPT = 600
+OPENING_EXCERPT = 300
 
 
 def digest(path: Path) -> str:
@@ -56,6 +61,15 @@ def write(path: Path, value) -> dict:
     return {"bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
 
 
+def clip(value, limit: int) -> str:
+    """Whitespace collapsed, cut at a word boundary within limit, marked with an ellipsis."""
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    cut = text.rfind(" ", 0, limit)
+    return text[: cut if cut > limit // 2 else limit].rstrip() + "\u2026"
+
+
 def summary_row(row: dict, county: str) -> dict:
     result = {key: row[key] for key in SUMMARY_FIELDS if key in row}
     result["county"] = county
@@ -68,6 +82,15 @@ def summary_row(row: dict, county: str) -> dict:
     # Preserve the viewer's pending-note classification without releasing notes.
     preview = next((str(row.get(key) or "") for key in TEXT_FIELDS if row.get(key)), "")
     result["status"] = "pending" if row.get("status") == "pending" or PENDING.search(preview) else "published"
+    if result["status"] == "published":
+        outcome = clip(row.get("outcome_text"), OUTCOME_EXCERPT)
+        opening = clip(row.get("body_text") or row.get("full_text"), OPENING_EXCERPT)
+        # The viewer's list and search already read these names; the detail
+        # view replaces them with the complete record when a ruling opens.
+        if outcome:
+            result["outcome_text"] = outcome
+        if opening:
+            result["body_text"] = opening
     return result
 
 
