@@ -123,7 +123,9 @@ if ! {
   "$PY" -u -m ingest.ocr_missing_text --county all &&
   "$PY" -u -m ingest.orchestrate &&
   "$PY" -u -m ingest.slice_rulings &&
-  "$PY" -u update-readme.py &&
+  # LIVE needs the archive's sizes, which a sparse clone reads from the API.
+  GITHUB_TOKEN="$(tr -d '
+' < "$TENTATIVES_TOKEN_FILE")" "$PY" -u update-readme.py &&
   "$PY" -u -m ingest.build_viewer_data
 } 2>&1 | tee "$WORK/parse.log"; then
   parsed=false

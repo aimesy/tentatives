@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import subprocess
+import urllib.request
 from pathlib import Path, PurePosixPath
 
 import pyarrow.parquet as pq
@@ -39,11 +42,14 @@ def fmt_mb(value: int) -> str:
 
 
 def tracked_archive_sizes() -> dict[str, int] | None:
-    """Archive file sizes at HEAD from the Git tree, in a sparse checkout.
+    """Archive file sizes at HEAD, in a sparse checkout.
 
     A sparse checkout (the courtproj harvest) holds only part of archive/ on
-    disk, so counting files on disk would shrink the LIVE table. Returns None
-    for a full checkout, where the files on disk are the archive.
+    disk, so counting files on disk would shrink the LIVE table. Its clone has
+    no blobs either, and `git ls-tree -l` would fetch every one of them to read
+    its size, so the sizes come from GitHub's tree API, one county subtree at a
+    time (GITHUB_TOKEN for a private repository). Returns None for a full
+    checkout, where the files on disk are the archive.
     """
     try:
         sparse = subprocess.run(
@@ -54,16 +60,42 @@ def tracked_archive_sizes() -> dict[str, int] | None:
         return None
     if sparse.stdout.strip().lower() != "true":
         return None
-    listing = subprocess.run(
-        ["git", "ls-tree", "-r", "-l", "HEAD", "--", "archive"],
-        cwd=HERE, capture_output=True, text=True, check=True,
-    ).stdout
+    remote = subprocess.run(
+        ["git", "remote", "get-url", "origin"], cwd=HERE, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    repo = remote.split("github.com/", 1)[1].removesuffix(".git").strip("/")
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "tentatives-update-readme"}
+    if os.environ.get("GITHUB_TOKEN"):
+        headers["Authorization"] = f"Bearer {os.environ['GITHUB_TOKEN']}"
+
+    def tree(sha: str, recursive: bool) -> dict:
+        url = f"https://api.github.com/repos/{repo}/git/trees/{sha}" + ("?recursive=1" if recursive else "")
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=120) as response:
+            return json.load(response)
+
+    def walk(sha: str, prefix: str, sizes: dict[str, int]) -> None:
+        listing = tree(sha, recursive=True)
+        if not listing.get("truncated"):
+            for entry in listing["tree"]:
+                if entry["type"] == "blob":
+                    sizes[f"{prefix}/{entry['path']}"] = int(entry["size"])
+            return
+        for entry in tree(sha, recursive=False)["tree"]:
+            if entry["type"] == "blob":
+                sizes[f"{prefix}/{entry['path']}"] = int(entry["size"])
+            elif entry["type"] == "tree":
+                walk(entry["sha"], f"{prefix}/{entry['path']}", sizes)
+
     sizes: dict[str, int] = {}
+    # Tree objects are in the clone, so listing the county subtrees is local.
+    listing = subprocess.run(
+        ["git", "ls-tree", "HEAD", "archive/"], cwd=HERE, capture_output=True, text=True, check=True,
+    ).stdout
     for line in listing.splitlines():
-        meta, path = line.split("\t", 1)
-        parts = meta.split()
-        if parts[1] == "blob" and parts[3].isdigit():
-            sizes[path] = int(parts[3])
+        meta, path = line.split("	", 1)
+        kind, sha = meta.split()[1:3]
+        if kind == "tree":
+            walk(sha, path, sizes)
     return sizes
 
 

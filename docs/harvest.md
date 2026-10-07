@@ -28,8 +28,9 @@ is removed when the run ends; logs go to `/var/log/tentatives-harvest.log` and
    else can fail.
 5. Checks out the sources captured in the last 14 days that no parquet row
    names yet (`ops/materialize_recent.py`), then OCRs, parses, slices,
-   refreshes LIVE (`update-readme.py` counts the archive from the Git tree
-   in a sparse checkout) and builds the viewer data, and pushes that.
+   refreshes LIVE (in a sparse checkout `update-readme.py` reads the archive's
+   file sizes from GitHub's tree API, since `git ls-tree -l` would fetch every
+   blob) and builds the viewer data, and pushes that.
 6. Starts a fallback in the data repository only after its own pushes:
    Backfill captures for the counties to recheck, or Parse new PDFs if
    parsing failed. It starts Deploy site when the county list changed.
