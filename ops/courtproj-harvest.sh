@@ -71,7 +71,11 @@ commit_push() {
 }
 
 log "tentatives $MODE harvest, code $(git -C "$CODE" rev-parse --short HEAD)"
-git clone -q --filter=blob:none --depth 1 --no-checkout "https://github.com/$DATA_REPO.git" "$DATA"
+# No automatic gc or maintenance: lazy blob fetches pile up packs, and a gc
+# detached into the background outlived the run and blocked its cleanup.
+git -c gc.auto=0 -c maintenance.auto=false clone -q --filter=blob:none --depth 1 --no-checkout "https://github.com/$DATA_REPO.git" "$DATA"
+git -C "$DATA" config gc.auto 0
+git -C "$DATA" config maintenance.auto false
 # Capture logs must be on disk: the backfill appends to them, and orchestrate
 # and materialize_recent.py read them.
 git -C "$DATA" sparse-checkout set --no-cone /.gitattributes /README.md /LIVE.md /site/counties.json /status/ /data/ '/archive/*/*.ndjson'

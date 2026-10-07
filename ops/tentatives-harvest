@@ -16,8 +16,17 @@ if ! flock -n 9; then
   exit 0
 fi
 WORK="$(mktemp -d /var/tmp/tentatives-harvest.XXXXXX)"
-# Court files stay on courtproj only for the length of a run.
-trap 'rm -rf -- "$WORK"' EXIT
+# Court files stay on courtproj only for the length of a run. Retry, in case a
+# git process is still finishing inside the clone.
+cleanup() {
+  local attempt
+  for attempt in 1 2 3 4 5 6; do
+    rm -rf -- "$WORK" 2>/dev/null && return 0
+    sleep 10
+  done
+  echo "could not remove $WORK" >&2
+}
+trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 echo "== $(date -u +%FT%TZ) tentatives $MODE harvest in $WORK"
