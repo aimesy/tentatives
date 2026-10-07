@@ -8,12 +8,16 @@ workflows named here run in `aimesy/tentatives-data` and check out this code at
 
 ## Canonical Daily Loop
 
-The primary routine is `.github/workflows/backfill.yml`.
+The primary routine is the courtproj harvest, `ops/courtproj-harvest.sh`, at
+5 PM Pacific; Backfill captures (`.github/workflows/backfill.yml` in
+`aimesy/tentatives-data`) runs the same loop only as its fallback
+([harvest.md](harvest.md)).
 
 Daily live run:
 
 1. Capture all routine-enabled county sources with `ingest.backfill --live`.
-2. Fail scheduled runs that archive zero refs.
+2. Treat a run that archives zero refs as failed, and recheck counties whose
+   discovery or fetches failed in GitHub Actions.
 3. Run `ingest.ocr_missing_text` so image-only PDFs get searchable sidecars.
 4. Run `ingest.orchestrate` so new sources become normalized Parquet rows.
 5. Run `ingest.slice_rulings` so viewer links target the right raw PDF pages.
@@ -26,7 +30,7 @@ Daily live run:
 
 Weekly Wayback run:
 
-1. Run the same workflow in bounded Wayback mode.
+1. Run the same loop in bounded Wayback mode (courtproj, Sundays).
 2. Keep CDX work conservative until a URL family is proven stable.
 3. Preserve every captured source. Do not trim archive material to make a count
    look cleaner.
@@ -42,9 +46,9 @@ list only a subset of county databases in the viewer.
 `.github/workflows/ocr.yml` is manual. Use it for bounded OCR/reparse work when
 a county has image-only PDFs or a parser migration needs a deliberate reparse.
 
-`ops/vps-live-harvest.sh` is only a temporary network fallback. Run it from a
-temporary clone, not from a persistent VPS checkout. It now runs the full loop
-itself and should not depend on `Parse new PDFs` to finish the job.
+The courtproj harvest works in a temporary sparse clone and runs the full loop
+itself; it does not depend on `Parse new PDFs` to finish the job. Its commits
+say `[skip ci]`, so they start no workflow.
 
 ## Local Smoke Routine
 

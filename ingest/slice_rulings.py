@@ -196,6 +196,11 @@ def process_county(county: str, *, force: bool) -> tuple[int, int, int]:
                 write_text_ruling_pdf(row, out)
                 made += 1
                 continue
+            if exists_or_sparse_tracked(source):
+                # A sparse checkout omits the source PDF; leave the slice for
+                # a checkout that has it rather than writing a text stand-in.
+                missing_source += 1
+                continue
             # Page-capture rows have no source PDF/DOCX to slice, but the
             # viewer still expects a per-ruling PDF target.
             write_text_ruling_pdf(row, out)

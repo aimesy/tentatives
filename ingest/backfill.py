@@ -213,25 +213,33 @@ def _page_capture_path(county: str) -> Path:
     return ARCHIVE / county / "page-captures.ndjson"
 
 
-def _materialize_capture_path_from_head(county: str) -> None:
-    """Sparse checkouts can omit capture logs; restore them before appending."""
-    path = _capture_path(county)
-    if path.exists():
-        return
+def _head_bytes(path: Path) -> bytes | None:
+    """A file's content at HEAD, for a sparse checkout that omits it."""
     try:
         rel = path.relative_to(REPO).as_posix()
     except ValueError:
-        return
+        return None
     try:
-        content = subprocess.check_output(
-            ["git", "show", f"HEAD:{rel}"],
-            cwd=REPO,
-            stderr=subprocess.DEVNULL,
-        )
+        return subprocess.check_output(["git", "show", f"HEAD:{rel}"], cwd=REPO, stderr=subprocess.DEVNULL)
     except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
+
+
+def _materialize_from_head(path: Path) -> None:
+    """Sparse checkouts can omit capture logs; restore one before reading or
+    appending, or a fresh log would replace its history in the next commit."""
+    if path.exists():
+        return
+    content = _head_bytes(path)
+    if content is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
+
+
+def _materialize_capture_path_from_head(county: str) -> None:
+    """Sparse checkouts can omit capture logs; restore them before appending."""
+    _materialize_from_head(_capture_path(county))
 
 
 def _existing_capture_keys(county: str) -> set[tuple[str, str, str | None]]:
@@ -256,6 +264,7 @@ def _existing_capture_keys(county: str) -> set[tuple[str, str, str | None]]:
 
 def _existing_page_capture_keys(county: str) -> set[tuple[str, str]]:
     path = _page_capture_path(county)
+    _materialize_from_head(path)
     if not path.exists():
         return set()
     keys: set[tuple[str, str]] = set()
@@ -320,6 +329,7 @@ def page_content_key(html: str) -> str:
 def _latest_page_captures(county: str) -> dict[str, dict]:
     """Most recent page-capture row for each source URL."""
     path = _page_capture_path(county)
+    _materialize_from_head(path)
     if not path.exists():
         return {}
     latest: dict[str, dict] = {}
@@ -348,9 +358,14 @@ def _page_capture_content_key(county: str, row: dict) -> str | None:
         return None
     path = (REPO / archive_rel).resolve()
     pages_root = (ARCHIVE / county / "pages").resolve()
-    if pages_root not in path.parents or not path.exists():
+    if pages_root not in path.parents:
         return None
-    return page_content_key(path.read_text(encoding="utf-8", errors="replace"))
+    if path.exists():
+        return page_content_key(path.read_text(encoding="utf-8", errors="replace"))
+    content = _head_bytes(path)
+    if content is None:
+        return None
+    return page_content_key(content.decode("utf-8", errors="replace"))
 
 
 def _append_capture(county: str, ref: PdfRef, sha: str, content_length: int, dry_run: bool) -> None:
@@ -402,6 +417,7 @@ def _append_page_capture(
         print(f"  would log page {ref.title} sha={sha[:12]} url={source_url}")
         return
     path = _page_capture_path(county)
+    _materialize_from_head(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, sort_keys=True) + "\n")
@@ -1157,6 +1173,16 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
             print(f"{county}: skipped {unchanged_pages} pages unchanged since their last capture")
     if failures:
         print(f"{county}: {len(failures)} failures", file=sys.stderr)
+    summary = getattr(args, "summary", None)
+    if summary is not None:
+        summary[county] = {
+            "discovered": len(refs),
+            "refs": wrote,
+            "pages_discovered": len(page_refs),
+            "pages": wrote_pages,
+            "pages_unchanged": unchanged_pages,
+            "failures": [line.strip() for line in failures],
+        }
     return 1 if failures else 0
 
 
@@ -1165,14 +1191,19 @@ def run(args: argparse.Namespace) -> int:
     session.headers.update({"User-Agent": "aimesy-tentatives/1.0"})
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    counties = sorted(COUNTY_MODULES) if args.county == "all" else [args.county]
+    counties = sorted(COUNTY_MODULES) if args.county == "all" else args.county.split(",")
+    summary_path = getattr(args, "summary_json", None)
+    args.summary = {} if summary_path else None
     if args.county == "all" and args.live and not args.wayback:
         live_counties = []
         for county in counties:
             if _routine_live_enabled(county):
                 live_counties.append(county)
             else:
-                print(f"{county}: skipped routine live check ({_routine_live_disabled_reason(county)})")
+                reason = _routine_live_disabled_reason(county)
+                print(f"{county}: skipped routine live check ({reason})")
+                if args.summary is not None:
+                    args.summary[county] = {"skipped": reason}
         counties = live_counties
     status = 0
     for county in counties:
@@ -1180,9 +1211,15 @@ def run(args: argparse.Namespace) -> int:
             status |= _run_county(args, county, session)
         except Exception as e:
             print(f"{county}: ERROR {e}", file=sys.stderr)
+            if args.summary is not None:
+                args.summary[county] = {"exception": f"{type(e).__name__}: {e}"}
             status = 1
             if not args.continue_on_error:
                 break
+    if summary_path:
+        # What the courtproj harvest uses to decide which counties GitHub
+        # Actions should recheck (ops/harvest_status.py).
+        summary_path.write_text(json.dumps(args.summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if args.continue_on_error:
         # With continue-on-error, per-county failures are logged but the
         # process exits clean; the calling workflow grep-checks the log to
@@ -1194,9 +1231,22 @@ def run(args: argparse.Namespace) -> int:
     return status
 
 
+def _county_list(value: str) -> str:
+    """all, or one or more county slugs separated by commas."""
+    if value == "all":
+        return value
+    names = list(dict.fromkeys(part.strip() for part in value.split(",") if part.strip()))
+    unknown = [name for name in names if name not in COUNTY_MODULES]
+    if not names or unknown:
+        raise argparse.ArgumentTypeError(
+            f"unknown county {', '.join(unknown) or repr(value)}; use all or slugs from: {', '.join(sorted(COUNTY_MODULES))}"
+        )
+    return ",".join(names)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--county", required=True, choices=["all", *sorted(COUNTY_MODULES)])
+    parser.add_argument("--county", required=True, type=_county_list, help="all, or county slugs separated by commas")
     parser.add_argument("--live", action="store_true", help="Fetch source files from configured live landing pages")
     parser.add_argument("--wayback", action="store_true", help="Fetch matching Wayback source-file captures")
     parser.add_argument("--from-year", type=int, help="First Wayback capture year, e.g. 2020")
@@ -1206,6 +1256,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, help="Maximum refs to fetch after discovery")
     parser.add_argument("--continue-on-error", action="store_true", help="Keep processing remaining counties after a county-level failure")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--summary-json", type=Path, help="Write each county's discovery, capture and failure counts to this file")
     args = parser.parse_args(argv)
     return run(args)
 

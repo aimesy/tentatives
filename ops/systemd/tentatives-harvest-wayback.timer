@@ -1,0 +1,11 @@
+# Copy to /etc/systemd/system/ on courtproj (docs/harvest.md).
+[Unit]
+Description=Weekly bounded tentatives Wayback check, Sunday 4:17 AM Pacific
+
+[Timer]
+OnCalendar=Sun *-*-* 04:17:00 America/Los_Angeles
+Persistent=true
+Unit=tentatives-harvest@wayback.service
+
+[Install]
+WantedBy=timers.target

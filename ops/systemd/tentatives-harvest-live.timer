@@ -1,0 +1,12 @@
+# Copy to /etc/systemd/system/ on courtproj (docs/harvest.md).
+[Unit]
+Description=Daily tentatives live harvest at 5 PM Pacific
+
+[Timer]
+OnCalendar=*-*-* 17:00:00 America/Los_Angeles
+# A run missed while courtproj was down starts at boot.
+Persistent=true
+Unit=tentatives-harvest@live.service
+
+[Install]
+WantedBy=timers.target

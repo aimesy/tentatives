@@ -1,0 +1,17 @@
+# Copy to /etc/systemd/system/ on courtproj (docs/harvest.md).
+[Unit]
+Description=tentatives %i harvest (aimesy/tentatives ops/courtproj-harvest.sh)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# TENTATIVES_TOKEN_FILE and TENTATIVES_CREDENTIAL_HELPER; never the token itself.
+EnvironmentFile=/etc/tentatives-harvest.env
+ExecStart=/usr/local/sbin/tentatives-harvest %i
+# courtproj serves SFSC; the harvest takes what is left over.
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=6h
+StandardOutput=append:/var/log/tentatives-harvest.log
+StandardError=append:/var/log/tentatives-harvest.log

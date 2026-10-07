@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
+import subprocess
+from pathlib import Path, PurePosixPath
 
 import pyarrow.parquet as pq
 
@@ -37,9 +38,53 @@ def fmt_mb(value: int) -> str:
     return f"{value / (1024 * 1024):,.0f}"
 
 
+def tracked_archive_sizes() -> dict[str, int] | None:
+    """Archive file sizes at HEAD from the Git tree, in a sparse checkout.
+
+    A sparse checkout (the courtproj harvest) holds only part of archive/ on
+    disk, so counting files on disk would shrink the LIVE table. Returns None
+    for a full checkout, where the files on disk are the archive.
+    """
+    try:
+        sparse = subprocess.run(
+            ["git", "config", "--bool", "core.sparseCheckout"],
+            cwd=HERE, capture_output=True, text=True, check=False,
+        )
+    except FileNotFoundError:
+        return None
+    if sparse.stdout.strip().lower() != "true":
+        return None
+    listing = subprocess.run(
+        ["git", "ls-tree", "-r", "-l", "HEAD", "--", "archive"],
+        cwd=HERE, capture_output=True, text=True, check=True,
+    ).stdout
+    sizes: dict[str, int] = {}
+    for line in listing.splitlines():
+        meta, path = line.split("\t", 1)
+        parts = meta.split()
+        if parts[1] == "blob" and parts[3].isdigit():
+            sizes[path] = int(parts[3])
+    return sizes
+
+
 def archive_file_stats() -> tuple[int, int]:
     count = 0
     size = 0
+    tracked = tracked_archive_sizes()
+    if tracked is not None:
+        # Files written since HEAD (new captures, slices, OCR sidecars) count
+        # from disk, the rest from the tree, as a full checkout would see them.
+        files = dict(tracked)
+        if ARCHIVE_DIR.exists():
+            for path in ARCHIVE_DIR.rglob("*"):
+                if path.is_file():
+                    files[path.relative_to(HERE).as_posix()] = path.stat().st_size
+        for rel, length in files.items():
+            if PurePosixPath(rel).suffix.lower() in {".ndjson", ".json"}:
+                continue
+            count += 1
+            size += length
+        return count, size
     if not ARCHIVE_DIR.exists():
         return count, size
     for path in ARCHIVE_DIR.rglob("*"):
