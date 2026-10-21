@@ -852,6 +852,7 @@ def test_run_county_sends_conditional_request_and_skips_download_on_304(tmp_path
         last_modified={url: "Tue, 20 Oct 2026 21:09:19 GMT"},
     )
     _patch_county(monkeypatch, tmp_path, refs=[ref])
+    monkeypatch.setattr(backfill, "_county_replaces_sources", lambda _county: True)
     args = _live_args(summary={})
 
     assert _run_county(args, "fake", server) == 0
@@ -861,13 +862,30 @@ def test_run_county_sends_conditional_request_and_skips_download_on_304(tmp_path
     captures = (tmp_path / "archive" / "fake" / "captures.ndjson").read_text(encoding="utf-8")
 
     assert _run_county(args, "fake", server) == 0
-    assert server.requests[-1][1] == {"If-Modified-Since": "Tue, 20 Oct 2026 21:09:19 GMT"}
+    # Same Last-Modified on HEAD: unchanged, so no GET at all.
+    assert server.requests[-1][0] == "HEAD " + url
     assert (tmp_path / "archive" / "fake" / "captures.ndjson").read_text(encoding="utf-8") == captures
     assert args.summary["fake"]["refs"] == 1
     assert args.summary["fake"]["refs_not_modified"] == 1
     out = capsys.readouterr().out
     assert "fake: archived/logged 1 refs" in out
     assert "1 refs and 0 pages not modified" in out
+    assert "1 refs unchanged by HEAD" in out
+
+
+def test_server_that_ignores_conditional_requests_is_not_downloaded_again(tmp_path, monkeypatch):
+    url = "https://example.test/dept-1.pdf"
+    ref = PdfRef(url=url, filename="d.pdf")
+    server = _Server({url: (b"%PDF-1.4\nA\n", "application/pdf")}, etags={url: '"v1"'})
+    real_get = server.get
+    server.get = lambda u, **kw: real_get(u, **{k: v for k, v in kw.items() if k != "headers"})
+    _patch_county(monkeypatch, tmp_path, refs=[ref])
+    monkeypatch.setattr(backfill, "_county_replaces_sources", lambda _county: True)
+
+    assert _run_county(_live_args(), "fake", server) == 0
+    assert _run_county(_live_args(), "fake", server) == 0
+    gets = [r for r in server.requests if not r[0].startswith("HEAD ")]
+    assert len(gets) == 1
 
 
 def test_run_county_downloads_again_when_the_file_changed(tmp_path, monkeypatch):
@@ -875,6 +893,7 @@ def test_run_county_downloads_again_when_the_file_changed(tmp_path, monkeypatch)
     ref = PdfRef(url=url, filename="a.pdf")
     server = _Server({url: (b"%PDF-1.4\nA\n", "application/pdf")}, etags={url: '"v1"'})
     _patch_county(monkeypatch, tmp_path, refs=[ref])
+    monkeypatch.setattr(backfill, "_county_replaces_sources", lambda _county: True)
 
     assert _run_county(_live_args(), "fake", server) == 0
     server.files[url] = (b"%PDF-1.4\nB\n", "application/pdf")
@@ -940,7 +959,7 @@ def test_run_county_treats_page_304_as_unchanged(tmp_path, monkeypatch):
     args = _live_args(summary={})
     assert _run_county(args, "fake", server) == 0
 
-    assert server.requests[-1][1] == {"If-None-Match": '"p1"'}
+    assert server.requests[-1][0] == "HEAD " + url
     assert args.summary["fake"]["pages_not_modified"] == 1
     assert args.summary["fake"]["pages_unchanged"] == 1
     assert len((tmp_path / "archive" / "fake" / "page-captures.ndjson").read_text(encoding="utf-8").splitlines()) == 1
@@ -984,7 +1003,7 @@ def test_first_run_confirms_an_archived_file_by_head_without_downloading(tmp_pat
     assert "1 archived refs confirmed unchanged by HEAD" in capsys.readouterr().out
 
     assert _run_county(_live_args(), "fake", server) == 0
-    assert server.requests[-1] == (url, {"If-None-Match": '"v1"', "If-Modified-Since": "Tue, 20 Oct 2026 21:09:19 GMT"})
+    assert server.requests[-1][0] == "HEAD " + url
 
 
 def test_first_run_downloads_when_head_shows_a_newer_file(tmp_path, monkeypatch):

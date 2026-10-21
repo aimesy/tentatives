@@ -456,6 +456,32 @@ def _page_hearing_date(ref: PageRef) -> date | None:
     return None
 
 
+def _head_matches(url: str, original_url: str, session: requests.Session, entry: dict | None, *,
+                  allowed_hosts: set[str] | None = None, verify_tls: bool = True) -> bool:
+    """Many court servers ignore If-None-Match / If-Modified-Since and answer
+    200 with the whole file. Ask with HEAD (no body) and compare the server's
+    ETag, or Last-Modified when there is no ETag, with the stored validators."""
+    if not entry or entry.get("gone") or not (entry.get("etag") or entry.get("last_modified")):
+        return False
+    fetch_url = url
+    try:
+        for _ in range(REDIRECT_LIMIT + 1):
+            _validate_fetch_host(fetch_url, original_url, allowed_hosts or set(), wayback=False)
+            r = session.head(fetch_url, timeout=30, allow_redirects=False, verify=verify_tls)
+            _close(r)
+            if 300 <= r.status_code < 400 and r.headers.get("Location"):
+                fetch_url = urljoin(fetch_url, r.headers["Location"])
+                continue
+            break
+    except Exception:
+        return False
+    if r.status_code != 200:
+        return False
+    if entry.get("etag"):
+        return r.headers.get("ETag") == entry["etag"]
+    return bool(r.headers.get("Last-Modified")) and r.headers.get("Last-Modified") == entry.get("last_modified")
+
+
 def _seed_validators_by_head(
     ref: PdfRef,
     session: requests.Session,
@@ -1397,13 +1423,12 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
     live_captures = _latest_live_captures(county) if not args.dry_run else {}
     sources_final = bool(live_captures) and not _county_replaces_sources(county)
     final_skipped = 0
+    head_matched = 0
     for ref in refs:
         fetch_url = _replay_url(ref)
         state_key = ("source", fetch_url)
         entry = fetch_state.get(state_key)
-        if not ref.wayback_ts and ref.url in live_captures and (
-            (entry or {}).get("final") or (sources_final and not _conditional_headers(entry))
-        ):
+        if not ref.wayback_ts and ref.url in live_captures and ((entry or {}).get("final") or sources_final):
             # This county never replaces a file at the same URL, and this one is
             # archived: it is final, so it is not requested again.
             if not (entry or {}).get("final"):
@@ -1425,6 +1450,13 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
                 continue
         # Only live URLs change in place; a Wayback replay never does.
         conditional = {} if ref.wayback_ts else _conditional_headers(entry)
+        if conditional and _head_matches(fetch_url, ref.url, session, entry,
+                                         allowed_hosts=allowed_hosts, verify_tls=verify_tls):
+            # Same ETag/Last-Modified as the archived copy: unchanged, no download.
+            head_matched += 1
+            not_modified += 1
+            wrote += 1
+            continue
         validators: dict[str, str | None] = {}
         try:
             content, sha = fetch_ref(
@@ -1488,6 +1520,11 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
                 unchanged_pages += 1
                 continue
         conditional = _conditional_headers(fetch_state.get(state_key)) if ref.method.upper() == "GET" else {}
+        if conditional and _head_matches(ref.url, source_url, session, fetch_state.get(state_key),
+                                         allowed_hosts=allowed_hosts, verify_tls=verify_tls):
+            pages_not_modified += 1
+            unchanged_pages += 1
+            continue
         validators = {}
         try:
             html, sha = fetch_page_ref(
@@ -1557,6 +1594,8 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
         print(f"{county}: {not_modified} refs and {pages_not_modified} pages not modified (HTTP 304, not downloaded)")
     if seeded:
         print(f"{county}: {seeded} archived refs confirmed unchanged by HEAD (validators recorded, not downloaded)")
+    if head_matched:
+        print(f"{county}: {head_matched} refs unchanged by HEAD (same ETag/Last-Modified, not downloaded)")
     if final_skipped:
         print(f"{county}: {final_skipped} archived refs not requested (county never replaces files in place)")
     if pages_final_skipped:
