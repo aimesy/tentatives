@@ -830,6 +830,12 @@ def fetch_page_ref(
     _validate_source_host(ref.url, allowed)
     _validate_source_host(source_url, allowed)
     method = ref.method.upper()
+    if ref.prefetched_html is not None and method == "GET":
+        # Downloaded once already during discovery in this run.
+        text = ref.prefetched_html
+        if len(text.encode("utf-8")) > max_bytes:
+            raise ValueError(f"page too large for {source_url}: >{max_bytes} bytes")
+        return text, hashlib.sha256(text.encode("utf-8")).hexdigest()
     if method == "POST":
         response = session.post(ref.url, data=ref.data, timeout=90, verify=verify_tls)
     elif method == "GET":
@@ -1507,6 +1513,7 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
     latest_pages = _latest_page_captures(county) if page_refs else {}
     pages_final = bool(latest_pages) and _county_pages_are_final(_page_capture_path(county))
     pages_final_skipped = 0
+    pages_index_skipped = 0
     today_date = utc_now().date()
     for ref in page_refs:
         source_url = ref.source_url or ref.url
@@ -1517,6 +1524,16 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
                 # Archived, and either its hearing date is past or this county
                 # never edits a page once posted: not requested again.
                 pages_final_skipped += 1
+                unchanged_pages += 1
+                continue
+        if ref.index_row and source_url in latest_pages:
+            entry = fetch_state.get(state_key) or {}
+            if entry.get("index_row") in (None, ref.index_row):
+                # Same index row as when this page was last fetched (or the first
+                # run: the archive was fetched in full that day): unchanged.
+                if entry.get("index_row") is None and not args.dry_run:
+                    fetch_state[state_key] = {"kind": "page", "url": source_url, **entry, "index_row": ref.index_row}
+                pages_index_skipped += 1
                 unchanged_pages += 1
                 continue
         conditional = _conditional_headers(fetch_state.get(state_key)) if ref.method.upper() == "GET" else {}
@@ -1550,8 +1567,10 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
             if status:
                 fetch_state[state_key] = {"kind": "page", "url": source_url, "gone": status, "gone_since": today}
             continue
-        if not args.dry_run and ref.method.upper() == "GET":
+        if not args.dry_run and ref.method.upper() == "GET" and ref.prefetched_html is None:
             row = _validator_entry("page", source_url, sha, validators)
+            if ref.index_row:
+                row = {**(row or {"kind": "page", "url": source_url}), "index_row": ref.index_row}
             if row:
                 fetch_state[state_key] = row
             else:
@@ -1598,6 +1617,8 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
         print(f"{county}: {head_matched} refs unchanged by HEAD (same ETag/Last-Modified, not downloaded)")
     if final_skipped:
         print(f"{county}: {final_skipped} archived refs not requested (county never replaces files in place)")
+    if pages_index_skipped:
+        print(f"{county}: {pages_index_skipped} archived pages not requested (index row unchanged)")
     if pages_final_skipped:
         print(f"{county}: {pages_final_skipped} archived pages not requested (past-dated or county never edits pages)")
     if page_refs:
