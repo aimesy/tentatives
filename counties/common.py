@@ -43,6 +43,11 @@ class PageRef:
     source_url: str | None = None
     method: str = "GET"
     data: dict[str, str] = field(default_factory=dict)
+    # Text of the index row that links to this page (hearing time, caption,
+    # motion); a page whose row has not changed is not refetched.
+    index_row: str | None = field(default=None, compare=False)
+    # HTML already downloaded during discovery, so the page is not requested twice.
+    prefetched_html: str | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)

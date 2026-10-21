@@ -1087,3 +1087,41 @@ def test_county_that_never_edits_pages_does_not_refetch_archived_pages(tmp_path,
 
     _run_county(_live_args(), "fake", server)
     assert server.requests == []
+
+
+def test_unchanged_index_row_means_no_refetch_and_a_changed_row_refetches(tmp_path, monkeypatch, capsys):
+    url = "https://example.test/tentative-ruling/26cv00001"
+    server = _Server({url: (b"<html>ruling v2</html>", "text/html")})
+    _seed_page_log(tmp_path, url, "k1", captured_at=backfill.utc_now().isoformat())
+    _seed_page_log(tmp_path, url, "k0", captured_at=backfill.utc_now().isoformat())  # county edits pages
+    page = PageRef(url=url, title="26CV00001", page_kind="tentative_ruling_detail",
+                   index_row="Wednesday, October 21, 2026 - 09:30 26CV00001 A v B Demurrer")
+    _patch_county(monkeypatch, tmp_path, pages=[page])
+
+    # First run with index rows: the archived page is current; record its row, no request.
+    _run_county(_live_args(), "fake", server)
+    assert server.requests == []
+    assert _state_rows(tmp_path)[0]["index_row"] == page.index_row
+    assert "1 archived pages not requested (index row unchanged)" in capsys.readouterr().out
+
+    _run_county(_live_args(), "fake", server)
+    assert server.requests == []
+
+    changed = PageRef(url=url, title="26CV00001", page_kind="tentative_ruling_detail",
+                      index_row="Friday, November 6, 2026 - 09:30 26CV00001 A v B Demurrer")
+    _patch_county(monkeypatch, tmp_path, pages=[changed])
+    _run_county(_live_args(), "fake", server)
+    assert [r[0] for r in server.requests] == [url]
+    assert _state_rows(tmp_path)[0]["index_row"] == changed.index_row
+
+
+def test_page_downloaded_during_discovery_is_not_requested_again(tmp_path, monkeypatch):
+    url = "https://example.test/tentative-rulings?field_judge_target_id=1"
+    page = PageRef(url=url, title="index", page_kind="tentative_rulings_index",
+                   prefetched_html="<html><body>index</body></html>")
+    server = _Server({})
+    _patch_county(monkeypatch, tmp_path, pages=[page])
+
+    _run_county(_live_args(), "fake", server)
+    assert server.requests == []
+    assert (tmp_path / "archive" / "fake" / "page-captures.ndjson").exists()

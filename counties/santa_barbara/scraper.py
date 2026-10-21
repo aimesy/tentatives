@@ -60,8 +60,22 @@ def _judge_ids(html: str) -> list[str]:
     return sorted(ids, key=int)
 
 
+def _index_rows(html: str) -> dict[str, str]:
+    """Detail URL -> the visible text of its index row (date, case, caption,
+    case type, proceeding). A ruling page changes only when this row does."""
+    rows: dict[str, str] = {}
+    for match in re.finditer(r"<tr\b[^>]*>([\s\S]*?)</tr>", html, re.IGNORECASE):
+        row = match.group(1)
+        href = re.search(r'href="(/tentative-ruling/[^"]+)"', row)
+        if href:
+            text = clean_text(re.sub(r"<[^>]+>", " ", row))
+            rows.setdefault(href.group(1).lower(), text)
+    return rows
+
+
 def _detail_page_refs(html: str, page_url: str) -> list[PageRef]:
     refs: list[PageRef] = []
+    rows = _index_rows(html)
     for link in extract_links(html):
         url = absolute_url(link.url, page_url)
         parsed = urlparse(url)
@@ -74,6 +88,7 @@ def _detail_page_refs(html: str, page_url: str) -> list[PageRef]:
                 url=url,
                 title=clean_text(link.text) or "Santa Barbara tentative ruling",
                 page_kind="tentative_ruling_detail",
+                index_row=rows.get(parsed.path.lower()),
             )
         )
     return refs
@@ -99,6 +114,7 @@ def discover_live_page_extra(session, errors=None):
                 url=first_url,
                 title=f"Santa Barbara judge {judge_id} tentative rulings",
                 page_kind="tentative_rulings_index",
+                prefetched_html=first.text,
             )
         )
         refs.extend(_detail_page_refs(first.text, first_url))
@@ -111,6 +127,7 @@ def discover_live_page_extra(session, errors=None):
                     url=page_url,
                     title=f"Santa Barbara judge {judge_id} tentative rulings page {page + 1}",
                     page_kind="tentative_rulings_index",
+                    prefetched_html=response.text,
                 )
             )
             refs.extend(_detail_page_refs(response.text, page_url))
