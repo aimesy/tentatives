@@ -24,7 +24,7 @@ import re
 import subprocess
 import sys
 import zipfile
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -382,6 +382,78 @@ def _latest_live_captures(county: str) -> dict[str, tuple[datetime, str]]:
         if prior is None or when > prior[0]:
             latest[row["source_url"]] = (when, row["source_sha256"])
     return latest
+
+
+def _county_replaces_sources(county: str) -> bool:
+    """True when this county has ever served different bytes at the same live
+    URL (rolling files such as dept-1-thurs.pdf). Such counties are checked by
+    validators only; a county that never has treats an archived file as final."""
+    _materialize_capture_path_from_head(county)
+    path = _capture_path(county)
+    if not path.exists():
+        return False
+    seen: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        url, sha = row.get("source_url"), row.get("source_sha256")
+        if row.get("wayback_ts") or not url or not sha:
+            continue
+        if seen.setdefault(url, sha) != sha:
+            return True
+    return False
+
+
+# The page log only gains a row when a page changes, so "never edited" needs
+# history: pages archived at least this long ago and never logged again.
+PAGES_NEVER_EDITED_AFTER = timedelta(days=14)
+
+
+def _county_pages_are_final(latest_pages_log: Path) -> bool:
+    """True when no archived page URL of this county has ever had different
+    content and its pages go back at least PAGES_NEVER_EDITED_AFTER."""
+    if not latest_pages_log.exists():
+        return False
+    seen: dict[str, str] = {}
+    oldest: datetime | None = None
+    for line in latest_pages_log.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+            when = datetime.fromisoformat(str(row.get("captured_at")))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        oldest = when if oldest is None or when < oldest else oldest
+        url, key = row.get("source_url"), row.get("content_key") or row.get("source_sha256")
+        if url and key and seen.setdefault(url, key) != key:
+            return False
+    return oldest is not None and utc_now() - oldest >= PAGES_NEVER_EDITED_AFTER
+
+
+# A dated ruling page is final once its hearing date is this far behind us. In
+# Los Angeles' archive (4,850 dated pages) no page changed 2 or more days after its date.
+PAGE_FINAL_AFTER = timedelta(days=2)
+_PAGE_DATE_NUMERIC = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})")
+_PAGE_DATE_WORDS = re.compile(r"(January|February|March|April|May|June|July|August|September|October|November|December) (\d{1,2}), (\d{4})")
+_MONTHS = {m: i for i, m in enumerate(["January", "February", "March", "April", "May", "June", "July", "August",
+                                       "September", "October", "November", "December"], 1)}
+
+
+def _page_hearing_date(ref: PageRef) -> date | None:
+    """The hearing/posting date a ruling page is for, from its URL or title."""
+    m = _PAGE_DATE_NUMERIC.search(unquote(ref.source_url or ref.url))
+    try:
+        if m:
+            return date(int(m[3]), int(m[1]), int(m[2]))
+        m = _PAGE_DATE_WORDS.search(ref.title or "")
+        if m:
+            return date(int(m[3]), _MONTHS[m[1]], int(m[2]))
+    except ValueError:
+        return None
+    return None
 
 
 def _seed_validators_by_head(
@@ -1323,10 +1395,24 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
     not_modified = 0
     seeded = 0
     live_captures = _latest_live_captures(county) if not args.dry_run else {}
+    sources_final = bool(live_captures) and not _county_replaces_sources(county)
+    final_skipped = 0
     for ref in refs:
         fetch_url = _replay_url(ref)
         state_key = ("source", fetch_url)
         entry = fetch_state.get(state_key)
+        if not ref.wayback_ts and ref.url in live_captures and (
+            (entry or {}).get("final") or (sources_final and not _conditional_headers(entry))
+        ):
+            # This county never replaces a file at the same URL, and this one is
+            # archived: it is final, so it is not requested again.
+            if not (entry or {}).get("final"):
+                fetch_state[state_key] = {"kind": "source", "url": fetch_url,
+                                          "sha256": live_captures[ref.url][1], "final": True}
+            final_skipped += 1
+            not_modified += 1
+            wrote += 1
+            continue
         if entry is None and not ref.wayback_ts and ref.url in live_captures:
             row = _seed_validators_by_head(ref, session, live_captures[ref.url],
                                            allowed_hosts=allowed_hosts, verify_tls=verify_tls)
@@ -1387,9 +1473,20 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
     unchanged_pages = 0
     pages_not_modified = 0
     latest_pages = _latest_page_captures(county) if page_refs else {}
+    pages_final = bool(latest_pages) and _county_pages_are_final(_page_capture_path(county))
+    pages_final_skipped = 0
+    today_date = utc_now().date()
     for ref in page_refs:
         source_url = ref.source_url or ref.url
         state_key = ("page", source_url)
+        if source_url in latest_pages:
+            hearing = _page_hearing_date(ref)
+            if pages_final or (hearing and today_date >= hearing + PAGE_FINAL_AFTER):
+                # Archived, and either its hearing date is past or this county
+                # never edits a page once posted: not requested again.
+                pages_final_skipped += 1
+                unchanged_pages += 1
+                continue
         conditional = _conditional_headers(fetch_state.get(state_key)) if ref.method.upper() == "GET" else {}
         validators = {}
         try:
@@ -1460,6 +1557,10 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
         print(f"{county}: {not_modified} refs and {pages_not_modified} pages not modified (HTTP 304, not downloaded)")
     if seeded:
         print(f"{county}: {seeded} archived refs confirmed unchanged by HEAD (validators recorded, not downloaded)")
+    if final_skipped:
+        print(f"{county}: {final_skipped} archived refs not requested (county never replaces files in place)")
+    if pages_final_skipped:
+        print(f"{county}: {pages_final_skipped} archived pages not requested (past-dated or county never edits pages)")
     if page_refs:
         print(f"{county}: archived/logged {wrote_pages} pages")
         if unchanged_pages:
@@ -1472,6 +1573,8 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
             "discovered": discovered,
             "refs": wrote,
             "refs_not_modified": not_modified,
+            "refs_final_skipped": final_skipped,
+            "pages_final_skipped": pages_final_skipped,
             "skipped_known_wayback": skipped_known,
             "skipped_gone": skipped_gone,
             "pages_discovered": len(page_refs),

@@ -965,6 +965,8 @@ def _seed_capture_log(tmp_path, url, content, fetched_at):
 
 
 def test_first_run_confirms_an_archived_file_by_head_without_downloading(tmp_path, monkeypatch, capsys):
+    # A county that has replaced files in place is checked by validators (HEAD), not treated as final.
+    monkeypatch.setattr(backfill, "_county_replaces_sources", lambda _county: True)
     url = "https://example.test/a.pdf"
     ref = PdfRef(url=url, filename="a.pdf")
     content = b"%PDF-1.4\nA\n"
@@ -986,6 +988,8 @@ def test_first_run_confirms_an_archived_file_by_head_without_downloading(tmp_pat
 
 
 def test_first_run_downloads_when_head_shows_a_newer_file(tmp_path, monkeypatch):
+    # A county that has replaced files in place is checked by validators (HEAD), not treated as final.
+    monkeypatch.setattr(backfill, "_county_replaces_sources", lambda _county: True)
     url = "https://example.test/a.pdf"
     ref = PdfRef(url=url, filename="a.pdf")
     server = _Server({url: (b"%PDF-1.4\nB\n", "application/pdf")},
@@ -997,3 +1001,70 @@ def test_first_run_downloads_when_head_shows_a_newer_file(tmp_path, monkeypatch)
     assert [r[0] for r in server.requests] == ["HEAD " + url, url]
     log = (tmp_path / "archive" / "fake" / "captures.ndjson").read_text(encoding="utf-8").splitlines()
     assert len(log) == 2
+
+
+def test_archived_file_in_a_county_that_never_replaces_files_is_not_requested(tmp_path, monkeypatch, capsys):
+    url = "https://example.test/2026-10-20-ruling.pdf"
+    ref = PdfRef(url=url, filename="r.pdf")
+    content = b"%PDF-1.4\nA\n"
+    server = _Server({url: (content, "application/pdf")})  # sends no validators
+    _patch_county(monkeypatch, tmp_path, refs=[ref])
+    sha = _seed_capture_log(tmp_path, url, content, "2026-10-20T00:00:00+00:00")
+    args = _live_args(summary={})
+
+    assert _run_county(args, "fake", server) == 0
+    assert server.requests == []
+    [row] = _state_rows(tmp_path)
+    assert row == {"kind": "source", "url": url, "sha256": sha, "final": True}
+    assert args.summary["fake"]["refs_final_skipped"] == 1
+    assert "1 archived refs not requested" in capsys.readouterr().out
+    assert _run_county(_live_args(), "fake", server) == 0
+    assert server.requests == []
+
+
+def test_county_that_replaces_files_in_place_still_fetches_without_validators(tmp_path, monkeypatch):
+    url = "https://example.test/dept-1-thurs.pdf"
+    ref = PdfRef(url=url, filename="d.pdf")
+    server = _Server({url: (b"%PDF-1.4\nC\n", "application/pdf")})
+    _patch_county(monkeypatch, tmp_path, refs=[ref])
+    path = tmp_path / "archive" / "fake" / "captures.ndjson"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps({"source_sha256": s, "source_url": url, "wayback_ts": None,
+                                        "fetched_at": "2026-10-1%dT00:00:00+00:00" % i}) + "\n"
+                            for i, s in enumerate(("a" * 64, "b" * 64))), encoding="utf-8")
+
+    assert _run_county(_live_args(), "fake", server) == 0
+    assert [r[0] for r in server.requests] == ["HEAD " + url, url]
+
+
+def _seed_page_log(tmp_path, url, key, captured_at="2026-10-01T00:00:00+00:00"):
+    path = tmp_path / "archive" / "fake" / "page-captures.ndjson"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"source_url": url, "source_sha256": key, "content_key": key, "captured_at": captured_at}) + "\n")
+
+
+def test_past_dated_archived_page_is_not_requested_but_current_one_is(tmp_path, monkeypatch, capsys):
+    past = "https://example.test/rulings?dept_date=A%2C1%2C10%2F01%2F2026"
+    current = "https://example.test/rulings?dept_date=A%2C1%2C" + backfill.utc_now().strftime("%m%%2F%d%%2F%Y")
+    pages = [PageRef(url=past, title="Dept 1 October 1, 2026"), PageRef(url=current, title="Dept 1 today")]
+    server = _Server({current: (b"<html>ruling</html>", "text/html")})
+    _patch_county(monkeypatch, tmp_path, pages=pages)
+    for url in (past, current):
+        _seed_page_log(tmp_path, url, "k1")
+    _seed_page_log(tmp_path, current, "k2")  # this county has edited a page, so the date rule decides
+    args = _live_args(summary={})
+
+    _run_county(args, "fake", server)
+    assert [r[0] for r in server.requests] == [current]
+    assert args.summary["fake"]["pages_final_skipped"] == 1
+
+
+def test_county_that_never_edits_pages_does_not_refetch_archived_pages(tmp_path, monkeypatch):
+    url = "https://example.test/document/tentative-rulings-document-173"
+    server = _Server({url: (b"<html>doc</html>", "text/html")})
+    _patch_county(monkeypatch, tmp_path, pages=[PageRef(url=url, title="Yolo tentative ruling")])
+    _seed_page_log(tmp_path, url, "k1")
+
+    _run_county(_live_args(), "fake", server)
+    assert server.requests == []
