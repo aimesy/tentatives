@@ -39,6 +39,28 @@ Every courtproj commit says `[skip ci]`, so none starts a workflow.
 `tentatives-harvest-wayback.timer` runs the bounded Wayback check (50 refs a
 county) Sundays at 4:17 AM Pacific through the same script.
 
+## Repeat downloads
+
+A harvest downloads a file only when it may be new. `ingest.backfill` keeps
+`archive/<county>/fetch-state.ndjson`, one row per fetch URL, beside the
+capture logs (so the sparse clone checks it out and the capture commit pushes
+it):
+
+- a live file or GET page is requested with the `ETag` (`If-None-Match`) and
+  `Last-Modified` (`If-Modified-Since`) the server sent with the archived
+  copy; a 304 answer downloads nothing and counts as that file checked, as a
+  repeat download did before (`archived/logged N refs` and `refs` in the
+  summary still include it, so the zero-capture checks behave as before);
+- a URL the court answered 404 or 410 for is recorded as gone and not
+  requested again;
+- a Wayback capture already in `captures.ndjson` (same URL and timestamp) is
+  not fetched again, and is skipped before `--limit` applies, so the weekly
+  bounded run spends its 50 on captures it does not have.
+
+Listing pages are still read every day to discover new files. A server that
+sends no validators is downloaded and compared by sha256 as before. Delete a
+row (or the file) to force a fresh download of that URL.
+
 ## Rechecks
 
 `ops/harvest_status.py` marks a county for a recheck in GitHub Actions when:
