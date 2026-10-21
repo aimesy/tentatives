@@ -778,6 +778,22 @@ class _Server:
         return response
 
 
+def _server_head(self, url, **kwargs):
+    self.requests.append(("HEAD " + url, dict(kwargs.get("headers") or {})))
+    headers = {}
+    if self.etags.get(url):
+        headers["ETag"] = self.etags[url]
+    if self.last_modified.get(url):
+        headers["Last-Modified"] = self.last_modified[url]
+    response = _FakeResponse(status_code=200 if url in self.files else 404)
+    response.headers = headers
+    response.url = url
+    return response
+
+
+_Server.head = _server_head
+
+
 def _live_args(**overrides):
     values = dict(
         live=True,
@@ -937,3 +953,47 @@ def test_dry_run_writes_no_fetch_state(tmp_path, monkeypatch):
 
     assert _run_county(_live_args(dry_run=True), "fake", server) == 0
     assert not (tmp_path / "archive" / "fake" / "fetch-state.ndjson").exists()
+
+
+def _seed_capture_log(tmp_path, url, content, fetched_at):
+    sha = hashlib.sha256(content).hexdigest()
+    path = tmp_path / "archive" / "fake" / "captures.ndjson"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"source_sha256": sha, "source_url": url, "wayback_ts": None,
+                                "fetched_at": fetched_at}) + "\n", encoding="utf-8")
+    return sha
+
+
+def test_first_run_confirms_an_archived_file_by_head_without_downloading(tmp_path, monkeypatch, capsys):
+    url = "https://example.test/a.pdf"
+    ref = PdfRef(url=url, filename="a.pdf")
+    content = b"%PDF-1.4\nA\n"
+    server = _Server({url: (content, "application/pdf")}, etags={url: '"v1"'},
+                     last_modified={url: "Tue, 20 Oct 2026 21:09:19 GMT"})
+    _patch_county(monkeypatch, tmp_path, refs=[ref])
+    sha = _seed_capture_log(tmp_path, url, content, "2026-10-21T00:00:00+00:00")
+    args = _live_args(summary={})
+
+    assert _run_county(args, "fake", server) == 0
+    assert [r[0] for r in server.requests] == ["HEAD " + url]
+    [row] = _state_rows(tmp_path)
+    assert row["sha256"] == sha and row["etag"] == '"v1"'
+    assert args.summary["fake"]["refs_not_modified"] == 1
+    assert "1 archived refs confirmed unchanged by HEAD" in capsys.readouterr().out
+
+    assert _run_county(_live_args(), "fake", server) == 0
+    assert server.requests[-1] == (url, {"If-None-Match": '"v1"', "If-Modified-Since": "Tue, 20 Oct 2026 21:09:19 GMT"})
+
+
+def test_first_run_downloads_when_head_shows_a_newer_file(tmp_path, monkeypatch):
+    url = "https://example.test/a.pdf"
+    ref = PdfRef(url=url, filename="a.pdf")
+    server = _Server({url: (b"%PDF-1.4\nB\n", "application/pdf")},
+                     last_modified={url: "Wed, 21 Oct 2026 09:00:00 GMT"})
+    _patch_county(monkeypatch, tmp_path, refs=[ref])
+    _seed_capture_log(tmp_path, url, b"%PDF-1.4\nA\n", "2026-10-21T00:00:00+00:00")
+
+    assert _run_county(_live_args(), "fake", server) == 0
+    assert [r[0] for r in server.requests] == ["HEAD " + url, url]
+    log = (tmp_path / "archive" / "fake" / "captures.ndjson").read_text(encoding="utf-8").splitlines()
+    assert len(log) == 2
