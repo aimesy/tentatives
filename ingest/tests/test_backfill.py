@@ -727,3 +727,213 @@ def test_run_county_compares_against_older_rows_without_content_key(tmp_path, mo
     assert _run_county(_page_args(), "fake", object()) == 0
     assert len((county_dir / "page-captures.ndjson").read_text(encoding="utf-8").splitlines()) == 1
     assert len(list((county_dir / "pages").rglob("*.html"))) == 1
+
+
+# Repeat downloads: conditional requests, removed files, logged Wayback captures.
+
+
+class _HTTPError(Exception):
+    def __init__(self, status_code):
+        super().__init__(f"{status_code} Client Error")
+        self.response = type("R", (), {"status_code": status_code})()
+
+
+class _Server:
+    """Serves fixed files and honours If-None-Match / If-Modified-Since."""
+
+    def __init__(self, files, etags=None, last_modified=None, gone=()):
+        self.files = files
+        self.etags = etags or {}
+        self.last_modified = last_modified or {}
+        self.gone = set(gone)
+        self.requests = []
+
+    def get(self, url, **kwargs):
+        headers = kwargs.get("headers") or {}
+        self.requests.append((url, dict(headers)))
+        if url in self.gone:
+            response = _FakeResponse(status_code=404)
+
+            def raise_gone():
+                raise _HTTPError(404)
+
+            response.raise_for_status = raise_gone
+            return response
+        etag = self.etags.get(url)
+        modified = self.last_modified.get(url)
+        if (etag and headers.get("If-None-Match") == etag) or (
+            not etag and modified and headers.get("If-Modified-Since") == modified
+        ):
+            response = _FakeResponse(status_code=304)
+            response.url = url
+            return response
+        response_headers = {"Content-Type": self.files[url][1]}
+        if etag:
+            response_headers["ETag"] = etag
+        if modified:
+            response_headers["Last-Modified"] = modified
+        body = self.files[url][0]
+        response = _FakeResponse([body], response_headers, text=body.decode("utf-8", "replace"))
+        response.url = url
+        return response
+
+
+def _live_args(**overrides):
+    values = dict(
+        live=True,
+        wayback=False,
+        from_year=None,
+        to_year=None,
+        url_from_year=None,
+        url_to_year=None,
+        limit=None,
+        dry_run=False,
+        continue_on_error=True,
+    )
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+def _patch_county(monkeypatch, tmp_path, refs=(), pages=()):
+    monkeypatch.setattr(backfill, "REPO", tmp_path)
+    monkeypatch.setattr(backfill, "ARCHIVE", tmp_path / "archive")
+    monkeypatch.setattr(backfill, "_allowed_hosts_for_county", lambda _county: {"example.test"})
+    monkeypatch.setattr(backfill, "_verify_tls_for_county", lambda _county: True)
+    monkeypatch.setattr(backfill, "discover_live_refs", lambda *_args, **_kwargs: list(refs))
+    monkeypatch.setattr(backfill, "discover_extra_live_refs", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(backfill, "discover_live_page_refs", lambda *_args, **_kwargs: list(pages))
+    monkeypatch.setattr(backfill, "_head_bytes", lambda _path: None)
+
+
+def _state_rows(tmp_path):
+    path = tmp_path / "archive" / "fake" / "fetch-state.ndjson"
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_fetch_ref_raises_not_modified_on_304_and_records_validators():
+    ref = PdfRef(url="https://example.test/a.pdf", filename="a.pdf")
+    server = _Server(
+        {"https://example.test/a.pdf": (b"%PDF-1.4\nA\n", "application/pdf")},
+        etags={"https://example.test/a.pdf": '"v1"'},
+        last_modified={"https://example.test/a.pdf": "Tue, 20 Oct 2026 21:09:19 GMT"},
+    )
+    validators = {}
+    content, _sha = fetch_ref(ref, server, allowed_hosts={"example.test"}, validators=validators)
+    assert content.startswith(b"%PDF")
+    assert validators == {"etag": '"v1"', "last_modified": "Tue, 20 Oct 2026 21:09:19 GMT"}
+    assert server.requests[0][1] == {}
+
+    with pytest.raises(backfill.NotModified):
+        fetch_ref(ref, server, allowed_hosts={"example.test"}, conditional={"If-None-Match": '"v1"'})
+    assert server.requests[1][1] == {"If-None-Match": '"v1"'}
+
+
+def test_run_county_sends_conditional_request_and_skips_download_on_304(tmp_path, monkeypatch, capsys):
+    url = "https://example.test/a.pdf"
+    ref = PdfRef(url=url, filename="a.pdf")
+    server = _Server(
+        {url: (b"%PDF-1.4\nA\n", "application/pdf")},
+        last_modified={url: "Tue, 20 Oct 2026 21:09:19 GMT"},
+    )
+    _patch_county(monkeypatch, tmp_path, refs=[ref])
+    args = _live_args(summary={})
+
+    assert _run_county(args, "fake", server) == 0
+    assert server.requests[-1][1] == {}
+    [row] = _state_rows(tmp_path)
+    assert row["url"] == url and row["last_modified"] == "Tue, 20 Oct 2026 21:09:19 GMT" and row["sha256"]
+    captures = (tmp_path / "archive" / "fake" / "captures.ndjson").read_text(encoding="utf-8")
+
+    assert _run_county(args, "fake", server) == 0
+    assert server.requests[-1][1] == {"If-Modified-Since": "Tue, 20 Oct 2026 21:09:19 GMT"}
+    assert (tmp_path / "archive" / "fake" / "captures.ndjson").read_text(encoding="utf-8") == captures
+    assert args.summary["fake"]["refs"] == 1
+    assert args.summary["fake"]["refs_not_modified"] == 1
+    out = capsys.readouterr().out
+    assert "fake: archived/logged 1 refs" in out
+    assert "1 refs and 0 pages not modified" in out
+
+
+def test_run_county_downloads_again_when_the_file_changed(tmp_path, monkeypatch):
+    url = "https://example.test/a.pdf"
+    ref = PdfRef(url=url, filename="a.pdf")
+    server = _Server({url: (b"%PDF-1.4\nA\n", "application/pdf")}, etags={url: '"v1"'})
+    _patch_county(monkeypatch, tmp_path, refs=[ref])
+
+    assert _run_county(_live_args(), "fake", server) == 0
+    server.files[url] = (b"%PDF-1.4\nB\n", "application/pdf")
+    server.etags[url] = '"v2"'
+    assert _run_county(_live_args(), "fake", server) == 0
+
+    assert server.requests[-1][1] == {"If-None-Match": '"v1"'}
+    log = (tmp_path / "archive" / "fake" / "captures.ndjson").read_text(encoding="utf-8").splitlines()
+    assert len(log) == 2
+    assert _state_rows(tmp_path)[0]["etag"] == '"v2"'
+
+
+def test_run_county_stops_requesting_a_removed_file(tmp_path, monkeypatch, capsys):
+    gone = PdfRef(url="https://example.test/gone.pdf", filename="gone.pdf")
+    server = _Server({}, gone={gone.url})
+    _patch_county(monkeypatch, tmp_path, refs=[gone])
+
+    assert _run_county(_live_args(), "fake", server) == 1
+    assert len(server.requests) == 1
+    [row] = _state_rows(tmp_path)
+    assert row["gone"] == 404 and row["url"] == gone.url
+
+    args = _live_args(summary={})
+    assert _run_county(args, "fake", server) == 0
+    assert len(server.requests) == 1
+    assert args.summary["fake"]["skipped_gone"] == 1
+    assert args.summary["fake"]["failures"] == []
+    assert "1 URLs the court removed" in capsys.readouterr().out
+
+
+def test_run_county_skips_logged_wayback_captures_before_the_limit(tmp_path, monkeypatch):
+    original = "https://example.test/a.pdf"
+    old = PdfRef(url=original, filename="a.pdf", wayback_ts="20240101000000")
+    new = PdfRef(url=original, filename="a.pdf", wayback_ts="20250101000000")
+    monkeypatch.setattr(backfill, "discover_wayback_refs", lambda *_args, **_kwargs: [old, new])
+    monkeypatch.setattr(backfill, "_wayback_needs_live_refs", lambda _county: False)
+    monkeypatch.setattr(backfill, "_existing_capture_keys", lambda _county: {("sha-old", original, old.wayback_ts)})
+    fetched = []
+
+    def fake_fetch(ref, *_args, **kwargs):
+        fetched.append(ref)
+        assert not kwargs.get("conditional")
+        content = b"%PDF-1.4\nnew\n"
+        return content, hashlib.sha256(content).hexdigest()
+
+    monkeypatch.setattr(backfill, "fetch_ref", fake_fetch)
+    _patch_county(monkeypatch, tmp_path)
+
+    assert _run_county(_live_args(live=False, wayback=True, limit=1), "fake", object()) == 0
+    assert fetched == [new]
+    # Wayback captures never change, so they need no fetch state.
+    assert not (tmp_path / "archive" / "fake" / "fetch-state.ndjson").exists()
+
+
+def test_run_county_treats_page_304_as_unchanged(tmp_path, monkeypatch):
+    url = "https://example.test/tentatives"
+    ref = PageRef(url=url, title="Tentatives")
+    html = b"<html><body><p>Case 1: GRANTED.</p></body></html>"
+    server = _Server({url: (html, "text/html")}, etags={url: '"p1"'})
+    _patch_county(monkeypatch, tmp_path, pages=[ref])
+
+    assert _run_county(_live_args(), "fake", server) == 0
+    args = _live_args(summary={})
+    assert _run_county(args, "fake", server) == 0
+
+    assert server.requests[-1][1] == {"If-None-Match": '"p1"'}
+    assert args.summary["fake"]["pages_not_modified"] == 1
+    assert args.summary["fake"]["pages_unchanged"] == 1
+    assert len((tmp_path / "archive" / "fake" / "page-captures.ndjson").read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_dry_run_writes_no_fetch_state(tmp_path, monkeypatch):
+    url = "https://example.test/a.pdf"
+    server = _Server({url: (b"%PDF-1.4\nA\n", "application/pdf")}, etags={url: '"v1"'})
+    _patch_county(monkeypatch, tmp_path, refs=[PdfRef(url=url, filename="a.pdf")])
+
+    assert _run_county(_live_args(dry_run=True), "fake", server) == 0
+    assert not (tmp_path / "archive" / "fake" / "fetch-state.ndjson").exists()

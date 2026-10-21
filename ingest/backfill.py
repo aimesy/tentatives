@@ -48,6 +48,9 @@ PDF_MAGIC = b"%PDF-"
 DOCX_MAGIC_PREFIXES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 REDIRECT_LIMIT = 5
 SUPPORTED_SOURCE_EXTENSIONS = {".pdf", ".docx"}
+# A court answering 404 or 410 has removed the file; asking again every day
+# only repeats the error (ops/harvest_status.py treats these the same way).
+GONE_STATUSES = {404, 410}
 
 COUNTY_MODULES = discovery_modules()
 
@@ -205,12 +208,21 @@ def _content_type_matches_source(value: str, extension: str) -> bool:
     return False
 
 
+class NotModified(Exception):
+    """The server answered 304 to a conditional request: the file is the one
+    already archived, and no body was downloaded."""
+
+
 def _capture_path(county: str) -> Path:
     return ARCHIVE / county / "captures.ndjson"
 
 
 def _page_capture_path(county: str) -> Path:
     return ARCHIVE / county / "page-captures.ndjson"
+
+
+def _fetch_state_path(county: str) -> Path:
+    return ARCHIVE / county / "fetch-state.ndjson"
 
 
 def _head_bytes(path: Path) -> bytes | None:
@@ -280,6 +292,92 @@ def _existing_page_capture_keys(county: str) -> set[tuple[str, str]]:
         if sha and url:
             keys.add((url, sha))
     return keys
+
+
+def _load_fetch_state(county: str) -> dict[tuple[str, str], dict]:
+    """What the last runs learned about each fetch URL, so a run does not
+    download a file it already holds.
+
+    One row per URL in archive/<county>/fetch-state.ndjson:
+      {"kind": "source"|"page", "url": ..., "sha256": ..., "etag": ..., "last_modified": ...}
+        the validators the server sent with the archived file, for a
+        conditional request (If-None-Match / If-Modified-Since) next time;
+      {"kind": ..., "url": ..., "gone": 404, "gone_since": "YYYY-MM-DD"}
+        the court removed the file; it is not requested again.
+    """
+    path = _fetch_state_path(county)
+    _materialize_from_head(path)
+    if not path.exists():
+        return {}
+    state: dict[tuple[str, str], dict] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and row.get("kind") and row.get("url"):
+            state[(str(row["kind"]), str(row["url"]))] = row
+    return state
+
+
+def _save_fetch_state(county: str, state: dict[tuple[str, str], dict]) -> None:
+    path = _fetch_state_path(county)
+    text = "".join(json.dumps(state[key], sort_keys=True) + "\n" for key in sorted(state))
+    if path.exists() and path.read_text(encoding="utf-8") == text:
+        return
+    if not text and not path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _conditional_headers(entry: dict | None) -> dict[str, str]:
+    """If-None-Match / If-Modified-Since for a URL whose file is archived."""
+    if not entry or entry.get("gone") or not entry.get("sha256"):
+        return {}
+    headers: dict[str, str] = {}
+    if entry.get("etag"):
+        headers["If-None-Match"] = str(entry["etag"])
+    if entry.get("last_modified"):
+        headers["If-Modified-Since"] = str(entry["last_modified"])
+    return headers
+
+
+def _validator_entry(kind: str, url: str, sha: str, validators: dict[str, str | None]) -> dict | None:
+    """The state row for a file just archived, or None when the server sent
+    no validators (a conditional request is then impossible)."""
+    etag = validators.get("etag")
+    last_modified = validators.get("last_modified")
+    if not etag and not last_modified:
+        return None
+    row = {"kind": kind, "url": url, "sha256": sha}
+    if etag:
+        row["etag"] = etag
+    if last_modified:
+        row["last_modified"] = last_modified
+    return row
+
+
+def _gone_status(error: Exception) -> int | None:
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    return status if isinstance(status, int) and status in GONE_STATUSES else None
+
+
+def _record_validators(response, validators: dict[str, str | None] | None) -> None:
+    if validators is None:
+        return
+    headers = getattr(response, "headers", None) or {}
+    validators["etag"] = headers.get("ETag") or None
+    validators["last_modified"] = headers.get("Last-Modified") or None
+
+
+def _close(response) -> None:
+    close = getattr(response, "close", None)
+    if callable(close):
+        close()
 
 
 class _VisibleContent(HTMLParser):
@@ -510,14 +608,26 @@ def fetch_ref(
     allowed_hosts: set[str] | None = None,
     verify_tls: bool = True,
     max_bytes: int = MAX_SOURCE_BYTES,
+    conditional: dict[str, str] | None = None,
+    validators: dict[str, str | None] | None = None,
 ) -> tuple[bytes, str]:
+    """Download one source file and return (content, sha256).
+
+    With `conditional` (If-None-Match / If-Modified-Since), a 304 answer raises
+    NotModified without downloading anything. `validators`, when given, receives
+    the ETag and Last-Modified the server sent with the file.
+    """
     allowed = allowed_hosts or set()
     extension = _source_extension(ref)
     _validate_source_host(ref.url, allowed)
     fetch_url = _replay_url(ref)
+    extra = {"headers": dict(conditional)} if conditional else {}
     for _ in range(REDIRECT_LIMIT + 1):
         _validate_fetch_host(fetch_url, ref.url, allowed, wayback=bool(ref.wayback_ts))
-        r = session.get(fetch_url, timeout=90, stream=True, allow_redirects=False, verify=verify_tls)
+        r = session.get(fetch_url, timeout=90, stream=True, allow_redirects=False, verify=verify_tls, **extra)
+        if r.status_code == 304 and conditional:
+            _close(r)
+            raise NotModified(fetch_url)
         if 300 <= r.status_code < 400 and r.headers.get("Location"):
             fetch_url = urljoin(fetch_url, r.headers["Location"])
             continue
@@ -535,6 +645,7 @@ def fetch_ref(
                 source_url=ref.url,
                 extension=extension,
             )
+        _record_validators(r, validators)
         break
     else:
         raise ValueError(f"too many redirects for {ref.url}")
@@ -548,7 +659,11 @@ def fetch_page_ref(
     allowed_hosts: set[str] | None = None,
     verify_tls: bool = True,
     max_bytes: int = MAX_PAGE_BYTES,
+    conditional: dict[str, str] | None = None,
+    validators: dict[str, str | None] | None = None,
 ) -> tuple[str, str]:
+    """Fetch one HTML page; `conditional` and `validators` as in fetch_ref
+    (GET pages only)."""
     allowed = allowed_hosts or set()
     source_url = ref.source_url or ref.url
     _validate_source_host(ref.url, allowed)
@@ -557,10 +672,14 @@ def fetch_page_ref(
     if method == "POST":
         response = session.post(ref.url, data=ref.data, timeout=90, verify=verify_tls)
     elif method == "GET":
-        response = session.get(ref.url, timeout=90, verify=verify_tls)
+        extra = {"headers": dict(conditional)} if conditional else {}
+        response = session.get(ref.url, timeout=90, verify=verify_tls, **extra)
     else:
         raise ValueError(f"unsupported page fetch method for {source_url}: {ref.method}")
     _validate_fetch_host(response.url or ref.url, source_url, allowed)
+    if response.status_code == 304 and conditional and method == "GET":
+        _close(response)
+        raise NotModified(source_url)
     response.raise_for_status()
     ctype = response.headers.get("Content-Type", "")
     if not _content_type_is_htmlish(ctype):
@@ -574,6 +693,8 @@ def fetch_page_ref(
     text = body.decode(response.encoding or "utf-8", errors="replace")
     if "<html" not in text[:2048].lower() and "<!doctype html" not in text[:2048].lower():
         raise ValueError(f"response does not look like HTML for {source_url}")
+    if method == "GET":
+        _record_validators(response, validators)
     return text, hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
@@ -1096,21 +1217,78 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
         from_year=args.url_from_year,
         to_year=args.url_to_year,
     )
-    refs = _limit(refs, args.limit)
+    existing = _existing_capture_keys(county)
+    existing_pages = _existing_page_capture_keys(county)
+    fetch_state = _load_fetch_state(county)
+    state_before = {key: dict(row) for key, row in fetch_state.items()}
+    today = utc_now().date().isoformat()
+    # Skip what is already held before the limit applies, so a bounded run
+    # spends its limit on captures it does not have yet:
+    #   a Wayback capture is fixed once taken, so (url, timestamp) already
+    #     logged is the same file;
+    #   a URL the court answered 404 or 410 for is not asked again.
+    known_wayback = {(url, ts) for _sha, url, ts in existing if ts}
+    discovered = len(refs)
+    skipped_known = 0
+    skipped_gone = 0
+    pending: list[PdfRef] = []
+    for ref in refs:
+        if ref.wayback_ts and (ref.url, ref.wayback_ts) in known_wayback:
+            skipped_known += 1
+            continue
+        if fetch_state.get(("source", _replay_url(ref)), {}).get("gone"):
+            skipped_gone += 1
+            continue
+        pending.append(ref)
+    refs = _limit(pending, args.limit)
+    live_pages: list[PageRef] = []
+    for ref in page_refs:
+        if fetch_state.get(("page", ref.source_url or ref.url), {}).get("gone"):
+            skipped_gone += 1
+            continue
+        live_pages.append(ref)
+    page_refs = live_pages
     if args.limit is not None:
         page_refs = page_refs[: args.limit]
     print(f"{county}: {len(refs)} refs, {len(page_refs)} pages")
-    existing = _existing_capture_keys(county)
-    existing_pages = _existing_page_capture_keys(county)
+    if skipped_known or skipped_gone:
+        print(
+            f"{county}: skipped {skipped_known} Wayback captures already logged"
+            f" and {skipped_gone} URLs the court removed (404/410)"
+        )
     wrote = 0
+    not_modified = 0
     for ref in refs:
+        fetch_url = _replay_url(ref)
+        state_key = ("source", fetch_url)
+        entry = fetch_state.get(state_key)
+        # Only live URLs change in place; a Wayback replay never does.
+        conditional = {} if ref.wayback_ts else _conditional_headers(entry)
+        validators: dict[str, str | None] = {}
         try:
-            content, sha = fetch_ref(ref, session, allowed_hosts=allowed_hosts, verify_tls=verify_tls)
+            content, sha = fetch_ref(
+                ref,
+                session,
+                allowed_hosts=allowed_hosts,
+                verify_tls=verify_tls,
+                conditional=conditional or None,
+                validators=validators,
+            )
+        except NotModified:
+            # The archived file is current: same bytes, same capture row,
+            # nothing downloaded. It counts as checked, as a repeat download
+            # of the same file did before.
+            not_modified += 1
+            wrote += 1
+            continue
         except Exception as e:
             _record_failure(
                 failures,
                 f"  ERROR fetch {ref.url} wayback={ref.wayback_ts or '-'}: {e}",
             )
+            status = _gone_status(e)
+            if status:
+                fetch_state[state_key] = {"kind": "source", "url": fetch_url, "gone": status, "gone_since": today}
             continue
         archive_path = ARCHIVE / county / sha[:2] / f"{sha}{_source_extension(ref)}"
         key = (sha, ref.url, ref.wayback_ts)
@@ -1123,20 +1301,52 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
         if key not in existing:
             _append_capture(county, ref, sha, len(content), dry_run=False)
             existing.add(key)
+        if not ref.wayback_ts:
+            row = _validator_entry("source", fetch_url, sha, validators)
+            if row:
+                fetch_state[state_key] = row
+            else:
+                fetch_state.pop(state_key, None)
         wrote += 1
     wrote_pages = 0
     unchanged_pages = 0
+    pages_not_modified = 0
     latest_pages = _latest_page_captures(county) if page_refs else {}
     for ref in page_refs:
         source_url = ref.source_url or ref.url
+        state_key = ("page", source_url)
+        conditional = _conditional_headers(fetch_state.get(state_key)) if ref.method.upper() == "GET" else {}
+        validators = {}
         try:
-            html, sha = fetch_page_ref(ref, session, allowed_hosts=allowed_hosts, verify_tls=verify_tls)
+            html, sha = fetch_page_ref(
+                ref,
+                session,
+                allowed_hosts=allowed_hosts,
+                verify_tls=verify_tls,
+                conditional=conditional or None,
+                validators=validators,
+            )
+        except NotModified:
+            # Same bytes as the page already archived, so the same visible
+            # content: unchanged, as the content check below would find.
+            pages_not_modified += 1
+            unchanged_pages += 1
+            continue
         except Exception as e:
             _record_failure(
                 failures,
                 f"  ERROR fetch page {source_url}: {e}",
             )
+            status = _gone_status(e)
+            if status:
+                fetch_state[state_key] = {"kind": "page", "url": source_url, "gone": status, "gone_since": today}
             continue
+        if not args.dry_run and ref.method.upper() == "GET":
+            row = _validator_entry("page", source_url, sha, validators)
+            if row:
+                fetch_state[state_key] = row
+            else:
+                fetch_state.pop(state_key, None)
         content_key = page_content_key(html)
         prior = latest_pages.get(source_url)
         if prior is not None and _page_capture_content_key(county, prior) == content_key:
@@ -1166,7 +1376,13 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
             existing_pages.add(key)
         latest_pages[source_url] = {"content_key": content_key}
         wrote_pages += 1
+    if not args.dry_run and fetch_state != state_before:
+        _save_fetch_state(county, fetch_state)
+    # "archived/logged" counts refs confirmed current, whether downloaded or
+    # answered 304; the daily checks downstream grep for it.
     print(f"{county}: archived/logged {wrote} refs")
+    if not_modified or pages_not_modified:
+        print(f"{county}: {not_modified} refs and {pages_not_modified} pages not modified (HTTP 304, not downloaded)")
     if page_refs:
         print(f"{county}: archived/logged {wrote_pages} pages")
         if unchanged_pages:
@@ -1176,11 +1392,15 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
     summary = getattr(args, "summary", None)
     if summary is not None:
         summary[county] = {
-            "discovered": len(refs),
+            "discovered": discovered,
             "refs": wrote,
+            "refs_not_modified": not_modified,
+            "skipped_known_wayback": skipped_known,
+            "skipped_gone": skipped_gone,
             "pages_discovered": len(page_refs),
             "pages": wrote_pages,
             "pages_unchanged": unchanged_pages,
+            "pages_not_modified": pages_not_modified,
             "failures": [line.strip() for line in failures],
         }
     return 1 if failures else 0
