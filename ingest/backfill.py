@@ -25,6 +25,7 @@ import subprocess
 import sys
 import zipfile
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable
@@ -358,6 +359,68 @@ def _validator_entry(kind: str, url: str, sha: str, validators: dict[str, str | 
     if last_modified:
         row["last_modified"] = last_modified
     return row
+
+
+def _latest_live_captures(county: str) -> dict[str, tuple[datetime, str]]:
+    """For each live source URL already archived: (when we last fetched it, its sha256)."""
+    _materialize_capture_path_from_head(county)
+    path = _capture_path(county)
+    latest: dict[str, tuple[datetime, str]] = {}
+    if not path.exists():
+        return latest
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+            if row.get("wayback_ts") or not row.get("source_url") or not row.get("source_sha256"):
+                continue
+            when = datetime.fromisoformat(str(row["fetched_at"]))
+        except (ValueError, KeyError, TypeError):
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        prior = latest.get(row["source_url"])
+        if prior is None or when > prior[0]:
+            latest[row["source_url"]] = (when, row["source_sha256"])
+    return latest
+
+
+def _seed_validators_by_head(
+    ref: PdfRef,
+    session: requests.Session,
+    captured: tuple[datetime, str],
+    *,
+    allowed_hosts: set[str] | None = None,
+    verify_tls: bool = True,
+) -> dict | None:
+    """First run after fetch-state existed: instead of downloading an archived
+    file again just to learn its validators, ask with HEAD (no body). If the
+    server's Last-Modified is not after our own capture, the archived file is
+    current and its validators are recorded; otherwise None (fetch as usual)."""
+    fetch_url = _replay_url(ref)
+    try:
+        for _ in range(REDIRECT_LIMIT + 1):
+            _validate_fetch_host(fetch_url, ref.url, allowed_hosts or set(), wayback=False)
+            r = session.head(fetch_url, timeout=30, allow_redirects=False, verify=verify_tls)
+            _close(r)
+            if 300 <= r.status_code < 400 and r.headers.get("Location"):
+                fetch_url = urljoin(fetch_url, r.headers["Location"])
+                continue
+            break
+        if r.status_code != 200:
+            return None
+        last_modified = r.headers.get("Last-Modified")
+        if not last_modified:
+            return None
+        modified = parsedate_to_datetime(last_modified)
+        if modified.tzinfo is None:
+            modified = modified.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+    captured_at, sha = captured
+    if modified > captured_at:
+        return None
+    return _validator_entry("source", _replay_url(ref), sha,
+                            {"etag": r.headers.get("ETag") or None, "last_modified": last_modified})
 
 
 def _gone_status(error: Exception) -> int | None:
@@ -1258,10 +1321,22 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
         )
     wrote = 0
     not_modified = 0
+    seeded = 0
+    live_captures = _latest_live_captures(county) if not args.dry_run else {}
     for ref in refs:
         fetch_url = _replay_url(ref)
         state_key = ("source", fetch_url)
         entry = fetch_state.get(state_key)
+        if entry is None and not ref.wayback_ts and ref.url in live_captures:
+            row = _seed_validators_by_head(ref, session, live_captures[ref.url],
+                                           allowed_hosts=allowed_hosts, verify_tls=verify_tls)
+            if row:
+                # Archived and unchanged since our capture: record validators, download nothing.
+                fetch_state[state_key] = row
+                seeded += 1
+                not_modified += 1
+                wrote += 1
+                continue
         # Only live URLs change in place; a Wayback replay never does.
         conditional = {} if ref.wayback_ts else _conditional_headers(entry)
         validators: dict[str, str | None] = {}
@@ -1383,6 +1458,8 @@ def _run_county(args: argparse.Namespace, county: str, session: requests.Session
     print(f"{county}: archived/logged {wrote} refs")
     if not_modified or pages_not_modified:
         print(f"{county}: {not_modified} refs and {pages_not_modified} pages not modified (HTTP 304, not downloaded)")
+    if seeded:
+        print(f"{county}: {seeded} archived refs confirmed unchanged by HEAD (validators recorded, not downloaded)")
     if page_refs:
         print(f"{county}: archived/logged {wrote_pages} pages")
         if unchanged_pages:
