@@ -31,6 +31,8 @@ from xml.sax.saxutils import escape
 
 import pikepdf
 import pyarrow.parquet as pq
+
+from ingest.rulings_store import read_county_table
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
@@ -175,7 +177,7 @@ def process_county(county: str, *, force: bool) -> tuple[int, int, int]:
     parquet_path = DATA / county / "rulings.parquet"
     if not parquet_path.exists():
         return 0, 0, 0
-    table = pq.read_table(parquet_path)
+    table = read_county_table(parquet_path.parent)
     rows = table.to_pylist()
     made = skipped = missing_source = 0
     for row in rows:

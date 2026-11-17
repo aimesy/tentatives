@@ -23,6 +23,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from ingest.rulings_store import read_county_table, write_county_table
+
 from counties.registry import page_parser_functions, parser_functions, parser_source_extensions
 
 REPO = Path(__file__).parent.parent
@@ -46,7 +48,7 @@ def _read_existing_column(parquet_path: Path, column: str) -> set[str]:
     if not parquet_path.exists():
         return set()
     try:
-        table = pq.read_table(parquet_path, columns=[column])
+        table = read_county_table(parquet_path.parent, columns=[column])
         return {value for value in table.column(column).to_pylist() if value}
     except Exception as e:
         raise RuntimeError(
@@ -83,7 +85,7 @@ def existing_logical_keys(parquet_path: Path) -> set[tuple[str, str, str, str, s
     if not parquet_path.exists():
         return set()
     try:
-        return {ruling_logical_key(row) for row in pq.read_table(parquet_path).to_pylist()}
+        return {ruling_logical_key(row) for row in read_county_table(parquet_path.parent).to_pylist()}
     except Exception as e:
         raise RuntimeError(
             f"refusing to append to unreadable parquet {parquet_path}: {e}"
@@ -441,7 +443,7 @@ def process_county(
     county_data.mkdir(parents=True, exist_ok=True)
     new_table = pa.Table.from_pylist(new_rulings)
     if parquet_path.exists() and not reparse_existing:
-        existing_table = pq.read_table(parquet_path)
+        existing_table = read_county_table(county_data)
         # Align schemas - either table may have null-only columns that need the
         # other table's concrete type.
         schema = merged_table_schema(existing_table, new_table)
@@ -453,8 +455,8 @@ def process_county(
         )
     else:
         combined = new_table
-    write_parquet_atomic(combined, parquet_path)
-    print(f"  wrote {parquet_path.relative_to(REPO)}")
+    written = write_county_table(combined, county_data)
+    print(f"  wrote {', '.join(str(p.relative_to(REPO)) for p in written)}")
     return len(new_rulings)
 
 

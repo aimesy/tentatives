@@ -12,6 +12,8 @@ from pathlib import Path, PurePosixPath
 
 import pyarrow.parquet as pq
 
+from ingest.rulings_store import county_num_rows, county_schema, read_county_table
+
 
 HERE = Path(__file__).parent
 README = HERE / "README.md"
@@ -138,13 +140,12 @@ def live_stats() -> dict[str, int | str]:
 
     for path in sorted(DATA_DIR.glob("*/rulings.parquet")):
         parsed_counties += 1
-        meta = pq.read_metadata(path)
-        rulings += int(meta.num_rows or 0)
-        schema = pq.read_schema(path)
+        rulings += county_num_rows(path.parent)
+        schema = county_schema(path.parent)
         columns = [name for name in ("source_sha256", "hearing_date") if name in schema.names]
         if not columns:
             continue
-        table = pq.read_table(path, columns=columns)
+        table = read_county_table(path.parent, columns=columns)
         if "source_sha256" in table.column_names:
             source_hashes.update(
                 value.as_py()

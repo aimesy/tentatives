@@ -57,7 +57,9 @@ def main() -> None:
     for county_dir in sorted(p for p in (root / "archive").iterdir() if p.is_dir()):
         county = county_dir.name
         parquet = root / "data" / county / "rulings.parquet"
-        seen = set(pq.read_table(parquet, columns=["source_sha256"]).column(0).to_pylist()) if parquet.exists() else set()
+        # rulings.parquet plus any rulings-NNN.parquet shards (ingest/rulings_store.py).
+        shards = [parquet, *sorted(parquet.parent.glob("rulings-[0-9][0-9][0-9].parquet"))] if parquet.exists() else []
+        seen = {sha for shard in shards for sha in pq.read_table(shard, columns=["source_sha256"]).column(0).to_pylist()}
         candidates = []
         for row in rows(county_dir / "captures.ndjson"):
             sha = row.get("source_sha256")

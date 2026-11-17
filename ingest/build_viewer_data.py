@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
+from ingest.rulings_store import county_digest, read_county_table
+
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = 4
 ID = re.compile(r"^[0-9a-f]{32}$")
@@ -99,7 +101,7 @@ def ready(source: Path, *, verify_outputs: bool = True) -> bool:
     if not manifest_path.exists():
         return False
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("version") != VERSION or manifest.get("source_sha256") != digest(source):
+    if manifest.get("version") != VERSION or manifest.get("source_sha256") != county_digest(source.parent):
         return False
     for relative, expected in manifest.get("outputs", {}).items():
         path = source.parent / relative
@@ -116,7 +118,7 @@ def build_county(source: Path) -> int:
         raise ValueError(f"invalid county directory: {county}")
     if ready(source):
         return 0
-    table = pq.read_table(source)
+    table = read_county_table(source.parent)
     summaries = []
     records: dict[str, dict] = {}
     for row in table.to_pylist():
@@ -143,7 +145,7 @@ def build_county(source: Path) -> int:
     outputs["summary.json"] = write(source.parent / "summary.json", summaries)
     write(source.parent / "_viewer.json", {
         "version": VERSION, "visibility": "non-public:private",
-        "source_sha256": digest(source), "rows": len(summaries), "outputs": outputs,
+        "source_sha256": county_digest(source.parent), "rows": len(summaries), "outputs": outputs,
     })
     return len(summaries)
 

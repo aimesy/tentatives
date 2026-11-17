@@ -121,3 +121,13 @@ In `aimesy/tentatives-data`, `status/harvest.json` shows the last run, and
 `gh run list -R aimesy/tentatives-data --workflow backfill.yml` shows whether a
 fallback ran. Run a fallback by hand with
 `gh workflow run backfill.yml -R aimesy/tentatives-data -f county=marin,yolo -f mode=live`.
+
+## County files over GitHub's limit
+
+GitHub refuses any file over 100 MiB. `ingest/rulings_store.py` writes a
+county's rulings as `data/<county>/rulings.parquet` alone while that stays
+under 90 MiB, and otherwise splits the rows, in order, into `rulings.parquet`,
+`rulings-002.parquet`, `rulings-003.parquet`, ... each under 90 MiB. Los
+Angeles crossed the limit on 2026-11-11 and every parsed-data push failed
+until this was added. Read a county through `read_county_table`, never
+`rulings.parquet` alone.
