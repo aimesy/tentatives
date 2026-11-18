@@ -8,7 +8,11 @@ After=network-online.target
 Type=oneshot
 # TENTATIVES_TOKEN_FILE and TENTATIVES_CREDENTIAL_HELPER; never the token itself.
 EnvironmentFile=/etc/tentatives-harvest.env
-ExecStart=/usr/local/sbin/tentatives-harvest %i
+# Every court fetch goes through a Surfshark or PIA lane, never courtproj's own
+# IP (Amy, 2026-11-18). vpn-lane-exec (ops/vpn-lane-exec, installed in
+# /usr/local/sbin) runs the harvest in the first lane that is up and exits 75,
+# running nothing, if none is.
+ExecStart=/usr/local/sbin/vpn-lane-exec pi26c104 pi26c101 -- /usr/local/sbin/tentatives-harvest %i
 # courtproj serves SFSC; the harvest takes what is left over.
 Nice=19
 IOSchedulingClass=idle

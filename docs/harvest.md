@@ -31,9 +31,14 @@ is removed when the run ends; logs go to `/var/log/tentatives-harvest.log` and
    refreshes LIVE (in a sparse checkout `update-readme.py` reads the archive's
    file sizes from GitHub's tree API, since `git ls-tree -l` would fetch every
    blob) and builds the viewer data, and pushes that.
-6. Starts a fallback in the data repository only after its own pushes:
-   Backfill captures for the counties to recheck, or Parse new PDFs if
-   parsing failed. It starts Deploy site when the county list changed.
+6. Fetches the counties to recheck again, through the fallback VPN lane
+   (`TENTATIVES_FALLBACK_LANES` in /etc/tentatives-harvest.env), and pushes
+   them. After its own pushes it starts Parse new PDFs if parsing failed, and
+   Deploy site when the county list changed. It no longer starts Backfill
+   captures: that workflow fetches from GitHub's IP, and it is disabled
+   (2026-11-18). Every court fetch goes through a Surfshark or PIA lane:
+   tentatives-harvest@.service runs the harvest through `ops/vpn-lane-exec`,
+   which refuses to run when no lane is up.
 
 Every courtproj commit says `[skip ci]`, so none starts a workflow.
 `tentatives-harvest-wayback.timer` runs the bounded Wayback check (50 refs a
@@ -76,7 +81,10 @@ A county that has captured nothing for longer is not rechecked every day;
 capture fails as a whole (the backfill exits with an error, or no county
 captures anything), the recheck is every county.
 
-## The 6 PM check
+## The 6 PM check (disabled 2026-11-18)
+
+Backfill captures is disabled (`gh workflow disable`), because it fetches
+from GitHub's IP rather than a VPN lane. What follows describes it as it was.
 
 Backfill captures (`.github/workflows/backfill.yml` in
 `aimesy/tentatives-data`) has two cron slots, 01:00 and 02:00 UTC, and keeps

@@ -9,20 +9,27 @@
 # then OCRs, parses, slices and refreshes LIVE and the viewer data, and pushes
 # those. Every commit says [skip ci], so none of them starts a GitHub Actions
 # run. The script starts one itself only as a fallback, after its own pushes:
-#   Backfill captures  for the counties to recheck (all, if the capture failed)
 #   Parse new PDFs     if parsing failed
 #   Deploy site        if the county list changed
+# Counties to recheck (all, if the capture failed) are fetched again here,
+# through the fallback VPN lane, never through GitHub Actions: every court
+# fetch goes through a Surfshark or PIA lane (Amy, 2026-11-18). The caller,
+# tentatives-harvest@.service, already runs this script inside a VPN lane via
+# /usr/local/sbin/vpn-lane-exec, which refuses to run without one.
 #
 # Environment (EnvironmentFile of tentatives-harvest@.service):
 #   TENTATIVES_TOKEN_FILE         file holding a GitHub token that can push to
 #                                 the data repository and start its workflows
 #   TENTATIVES_CREDENTIAL_HELPER  git credential helper that reads that file
+#   TENTATIVES_FALLBACK_LANES     VPN lanes (network namespaces) for the
+#                                 recheck, tried in order, e.g. "pi26c101"
 set -euo pipefail
 WORK="$1"
 MODE="${2:-live}"
 : "${TENTATIVES_TOKEN_FILE:?}" "${TENTATIVES_CREDENTIAL_HELPER:?}"
 DATA_REPO="${TENTATIVES_DATA_REPO:-aimesy/tentatives-data}"
 VENV="${TENTATIVES_VENV:-/var/lib/tentatives-harvest/venv}"
+FALLBACK_LANES="${TENTATIVES_FALLBACK_LANES:-}"
 CODE="$WORK/code"
 DATA="$WORK/data"
 # The empty helper comes first so no global helper stores the token.
@@ -43,7 +50,7 @@ dispatch() {
           -X POST -d "$body" "https://api.github.com/repos/$DATA_REPO/actions/workflows/$workflow/dispatches" >/dev/null; then
     log "started $workflow $*"
   else
-    log "COULD NOT START $workflow $*; the 6 PM check in Backfill captures is the backstop"
+    log "COULD NOT START $workflow $*"
   fi
 }
 
@@ -108,11 +115,27 @@ if [ "$MODE" = live ]; then
   recheck="$("$PY" "$CODE/ops/harvest_status.py" capture "$STATUS" --summary "$WORK/summary.json" --exit "$capture_exit")"
   log "capture exit $capture_exit; recheck: ${recheck:-none}"
   if ! commit_push "archive: raw captures (courtproj)" archive/ status/; then
-    dispatch backfill.yml county=all mode=live reason="courtproj could not push its captures"
+    log "raw captures not pushed; the next run captures them again"
     exit 1
   fi
+  if [ -n "$recheck" ]; then
+    if [ -z "$FALLBACK_LANES" ]; then
+      log "recheck $recheck: no fallback lane configured; the next run retries"
+    else
+      log "recheck $recheck through fallback lane(s) $FALLBACK_LANES"
+      set +e
+      # shellcheck disable=SC2086
+      /usr/local/sbin/vpn-lane-exec $FALLBACK_LANES -- \
+        "$PY" -u -m ingest.backfill --county "$recheck" --live --continue-on-error 2>&1 | tee -a "$WORK/backfill.log"
+      recheck_exit=${PIPESTATUS[0]}
+      set -e
+      log "recheck exit $recheck_exit"
+      commit_push "archive: raw captures (courtproj recheck, fallback lane)" archive/ status/ || true
+      if [ "$recheck_exit" -eq 0 ]; then recheck=""; fi
+    fi
+  fi
   if [ "$recheck" = all ]; then
-    dispatch backfill.yml county=all mode=live reason="courtproj capture failed"
+    log "capture failed in every lane; the next run retries"
     exit 1
   fi
 else
@@ -150,11 +173,11 @@ else
 fi
 
 # Fallback runs start only now, after this run's pushes, so they never race
-# them; a Backfill captures run parses everything, so it also covers a failed
-# parse here.
+# them. Parse new PDFs fetches nothing from the courts.
 if [ -n "$recheck" ]; then
-  dispatch backfill.yml county="$recheck" mode=live reason="courtproj recheck"
-elif [ "$parsed" != true ]; then
+  log "still to recheck: $recheck (the next run retries)"
+fi
+if [ "$parsed" != true ]; then
   dispatch parse.yml
 fi
 [ "$parsed" = true ] || exit 1

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# vpn-lane-exec LANE [LANE...] -- COMMAND [ARGS...]
+#
+# Runs COMMAND inside the first named network namespace (a Surfshark or PIA
+# WireGuard lane) whose egress works and is not one of courtproj's own
+# addresses. If no listed lane passes, it exits 75 and runs nothing: a
+# collector must never fall back to courtproj's own IP (Amy's standing rule).
+#
+# Exported to COMMAND: VPN_LANE, VPN_LANE_EGRESS_IP, and VPN_LANE_HOST_IP (the
+# host end of the lane's veth, if it has one, for reaching host services such
+# as the SFSC session agent).
+#
+# Installed 2026-11-18 on courtproj for tentatives-harvest@ and
+# sfsc-daily-public-updates.
+set -uo pipefail
+
+lanes=()
+while [ $# -gt 0 ] && [ "$1" != "--" ]; do lanes+=("$1"); shift; done
+[ "${1:-}" = "--" ] && shift
+if [ ${#lanes[@]} -eq 0 ] || [ $# -eq 0 ]; then
+  echo "usage: vpn-lane-exec LANE [LANE...] -- COMMAND [ARGS...]" >&2
+  exit 2
+fi
+
+log() { printf '%s vpn-lane-exec: %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
+
+# courtproj's own public addresses, read from the host namespace.
+# (PID 1's namespace, so this also holds when called from inside another lane.)
+own_ips="$(nsenter --net=/proc/1/ns/net ip -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | tr '\n' ' ')"
+if [ -z "$own_ips" ]; then
+  echo "vpn-lane-exec: cannot read courtproj's own addresses; refusing" >&2
+  exit 75
+fi
+
+egress_of() {
+  local lane="$1" url ip
+  for url in https://api.ipify.org https://ifconfig.me/ip https://icanhazip.com; do
+    ip="$(ip netns exec "$lane" curl -4 -s --max-time 12 "$url" 2>/dev/null | tr -d '[:space:]')"
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "$ip"; return 0; fi
+  done
+  return 1
+}
+
+for lane in "${lanes[@]}"; do
+  if ! ip netns list | awk '{print $1}' | grep -qx -- "$lane"; then
+    log "lane $lane: no such namespace"; continue
+  fi
+  dev="$(ip -n "$lane" route show default 2>/dev/null | awk '/^default/ {for (i=1;i<=NF;i++) if ($i=="dev") print $(i+1); exit}')"
+  if [ -z "$dev" ] || ! ip -n "$lane" -d link show "$dev" 2>/dev/null | grep -q wireguard; then
+    log "lane $lane: default route is not a WireGuard tunnel (dev=${dev:-none})"; continue
+  fi
+  if ! egress="$(egress_of "$lane")"; then
+    log "lane $lane: no working egress"; continue
+  fi
+  case " $own_ips " in
+    *" $egress "*) log "lane $lane: egress $egress is courtproj's own address; refusing"; continue ;;
+  esac
+  host_ip=""
+  peer="$(ip -n "$lane" -4 -o addr show | awk '$2 !~ /^lo$/ && $4 ~ /\/30$/ {print $4; exit}')"
+  if [ -n "$peer" ]; then
+    # The host end is the other usable address of the /30.
+    host_ip="$(python3 -c 'import ipaddress,sys; i=ipaddress.ip_interface(sys.argv[1]); print([str(h) for h in i.network.hosts() if h != i.ip][0])' "$peer")"
+  fi
+  export VPN_LANE="$lane" VPN_LANE_EGRESS_IP="$egress" VPN_LANE_HOST_IP="$host_ip"
+  log "lane $lane up: egress $egress${host_ip:+, host $host_ip}; running $1"
+  exec ip netns exec "$lane" "$@"
+done
+
+log "NO VPN LANE UP among ${lanes[*]}; refusing to run $1 from courtproj's own IP"
+exit 75
