@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import urllib.error
 import urllib.request
 from pathlib import Path, PurePosixPath
 
@@ -76,7 +77,14 @@ def tracked_archive_sizes() -> dict[str, int] | None:
             return json.load(response)
 
     def walk(sha: str, prefix: str, sizes: dict[str, int]) -> None:
-        listing = tree(sha, recursive=True)
+        try:
+            listing = tree(sha, recursive=True)
+        except urllib.error.HTTPError as err:
+            # GitHub answers 500 when a recursive listing of a large subtree
+            # times out (2026-11-18, every harvest); list it level by level.
+            if err.code < 500:
+                raise
+            listing = {"truncated": True}
         if not listing.get("truncated"):
             for entry in listing["tree"]:
                 if entry["type"] == "blob":
