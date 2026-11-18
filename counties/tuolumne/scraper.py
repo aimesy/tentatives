@@ -18,6 +18,7 @@ of the header block.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import io
 import re
@@ -26,6 +27,7 @@ from urllib.parse import ParseResult
 
 import pypdf
 
+from counties.simple_parser import find_date, parse_date_value
 from counties.static_pdf import discover_static_pdfs
 from schema import Ruling
 from . import COUNTY_SLUG, PARSER_VERSION
@@ -249,6 +251,8 @@ def parse(
     raw_pages = [page.extract_text() or "" for page in reader.pages]
     if not raw_pages:
         return []
+    if not any(CASE_ROW_RE.search(page) for page in raw_pages):
+        return _parse_narrative(raw_pages, source_url, source_sha256, dept_hint, division_hint)
 
     rulings: list[Ruling] = []
     for page_index, page_text in enumerate(raw_pages, start=1):
@@ -289,6 +293,173 @@ def parse(
             )
         )
 
+    return rulings
+
+
+# ------------------------------------------------- narrative layouts (2026-09+)
+#
+# Dept. 2 since 2026-09: each ruling opens with "Case No.:", "Case Title:",
+# "Case Type:", "Hearing Type:" (values inline, or as a block of labels
+# followed by a block of values). Every page repeats a court header.
+# Dept. 5 since 2026-10: numbered "1. Title (CV12345)" lines.
+
+NARRATIVE_VERSION = "tuolumne-parse-v2"
+_CASE_NO = r"(?P<num>[A-Z]{1,4}\d{4,7})"
+STACKED_RE = re.compile(
+    r"(?m)^\s*Case No\.:\s*\n\s*Case Title:\s*\n\s*Case Type:\s*\n\s*Hearing Type:\s*\n"
+    rf"\s*{_CASE_NO}\s*\n(?P<title>[^\n]+)\n(?P<ctype>[^\n]+)\n(?P<htype>[^\n]+)\n"
+)
+INLINE_RE = re.compile(
+    rf"(?m)^\s*Case No\.:\s*{_CASE_NO}\s*\n\s*Case Title:\s*(?P<title>[^\n]+)\n"
+    r"(?:\s*Case Type:\s*(?P<ctype>[^\n]*)\n)?(?:\s*Hearing Type:\s*(?P<htype>[^\n]+)\n)?"
+)
+# "1. Title (CV12345)" or "Title (CV12345)" (Dept. 5).
+NUMBERED_RE = re.compile(rf"(?m)^\s*(?:\d{{1,3}}\.\s+)?(?P<title>[^\n]+?)\s*\({_CASE_NO}\)\s*$")
+# "1. CV66705 Pagni v. City of Sonora" then "Hearing on: ..." (Dept. 2, 2026-08).
+NUMBER_FIRST_RE = re.compile(rf"(?m)^\s*\d{{1,3}}\.\s+{_CASE_NO}\s+(?P<title>[^\n]+?)\s*$")
+_COURT_HEADER_RE = re.compile(
+    r"SUPERIOR COURT OF CALIFORNIA\s*\n\s*COUNTY OF TUOLUMNE\s*\n(?:(?!\n\s*Case No\.:).){0,1500}?"
+    r"(?:has not been given\.[^\n]*\n|_{10,}[^\n]*\n|(?=\n\s*Case No\.:))",
+    re.IGNORECASE | re.DOTALL,
+)
+_FOOTER_RE = re.compile(r"(?im)^\s*\d{0,3}\s*[\[\]|Il!]*\s*Pag[ec]\s*\d*\s*$|^\s*\d{1,3}\s*$")
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _dedupe_pages(pages: list[str]) -> list[tuple[int, str]]:
+    """Some PDFs repeat a page (OCR and image copies). Keep the last copy."""
+    kept: list[tuple[int, str]] = []
+    for number, text in enumerate(pages, start=1):
+        if kept:
+            a, b = _norm(kept[-1][1])[:1500], _norm(text)[:1500]
+            if a and b and difflib.SequenceMatcher(None, a, b, autojunk=False).quick_ratio() > 0.95 \
+                    and difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() > 0.9:
+                kept[-1] = (number, text)
+                continue
+        kept.append((number, text))
+    return kept
+
+
+def _narrative_meta(head: str, dept_hint: str | None) -> tuple[date | None, str | None]:
+    m = re.search(r"HEARING DATE:\s*([^\n]+)", head, re.IGNORECASE)
+    hearing = parse_date_value(m.group(1)) if m else None
+    if hearing is None:
+        m = re.search(r"TENTATIVE RULINGS[^\n]*", head, re.IGNORECASE)
+        hearing = find_date(m.group(0)) if m else None
+    hearing = hearing or find_date(head)
+    m = re.search(r"\bDEP(?:ARTMEN)?T\.?:?\s*(?:[A-Za-z]+\s*\()?(\d+)", head, re.IGNORECASE)
+    return hearing, (m.group(1) if m else dept_hint)
+
+
+def _parse_narrative(
+    raw_pages: list[str],
+    source_url: str,
+    source_sha256: str,
+    dept_hint: str | None,
+    division_hint: str | None,
+) -> list[Ruling]:
+    pages = _dedupe_pages(raw_pages)
+    hearing_date, dept = _narrative_meta("\n".join(text for _, text in pages[:1])[:2500], dept_hint)
+    if hearing_date is None:
+        return []
+    parts: list[str] = []
+    starts: list[tuple[int, int]] = []
+    pos = 0
+    for number, text in pages:
+        text = _COURT_HEADER_RE.sub("\n", text.replace("\r", ""))
+        text = _FOOTER_RE.sub("", text)
+        starts.append((pos, number))
+        parts.append(text)
+        pos += len(text) + 1
+    plain = "\n".join(parts)
+
+    def page_at(offset: int) -> int:
+        page = starts[0][1]
+        for start, number in starts:
+            if start > offset:
+                break
+            page = number
+        return page
+
+    anchors = sorted(
+        [
+            *STACKED_RE.finditer(plain),
+            *INLINE_RE.finditer(plain),
+            *NUMBERED_RE.finditer(plain),
+            *NUMBER_FIRST_RE.finditer(plain),
+        ],
+        key=lambda m: m.start(),
+    )
+    blocks: dict[str, dict] = {}
+    order: list[str] = []
+    for i, anchor in enumerate(anchors):
+        end = anchors[i + 1].start() if i + 1 < len(anchors) else len(plain)
+        rest = plain[anchor.end() : end]
+        motion = (anchor.groupdict().get("htype") or "").strip()
+        lines = rest.split("\n")
+        if anchor.re is STACKED_RE:
+            # A long hearing type wraps onto a short next line.
+            while lines and lines[0].strip() and len(lines[0].strip()) <= 40 \
+                    and not lines[0].strip().endswith(".") and not NARRATIVE_START_RE.match(lines[0].strip()):
+                motion += " " + lines.pop(0).strip()
+        if anchor.re is NUMBER_FIRST_RE:
+            hearing_on = re.match(r"\s*Hearing on:\s*(.+?)\n\s*(?=Moving Party:|Tentative Ruling:)", "\n".join(lines), re.S)
+            if hearing_on:
+                motion = " ".join(hearing_on.group(1).split())
+        body = "\n".join(lines).strip()
+        case_number = anchor.group("num").upper()
+        piece = {
+            "title": anchor.group("title"),
+            "motion": motion,
+            "body": body,
+            "full": plain[anchor.start() : end].strip(),
+            "page_start": page_at(anchor.start()),
+            "page_end": page_at(max(anchor.start(), end - 1)),
+        }
+        prior = blocks.get(case_number)
+        if prior and order and order[-1] == case_number:
+            # The same case continued under a repeated page header.
+            prior["body"] = f"{prior['body']}\n{body}".strip()
+            prior["full"] = f"{prior['full']}\n{body}".strip()
+            prior["page_end"] = piece["page_end"]
+            continue
+        key = case_number if case_number not in blocks else f"{case_number}#{i}"
+        blocks[key] = piece | {"case_number": case_number}
+        order.append(key if key == case_number else case_number)
+
+    rulings: list[Ruling] = []
+    for piece in blocks.values():
+        index = len(rulings) + 1
+        outcome, conditional, continued_to = _classify(piece["body"])
+        rulings.append(
+            Ruling(
+                ruling_id=_ruling_id(source_sha256, index, piece["case_number"]),
+                county=COUNTY_SLUG,
+                division=division_hint or "Civil Law and Motion",
+                dept=dept,
+                hearing_date=hearing_date,
+                ruling_index=index,
+                case_number=piece["case_number"],
+                case_title=" ".join(piece["title"].split()),
+                motion_type=" ".join(piece["motion"].split()),
+                outcome=outcome,
+                outcome_text=piece["body"],
+                conditional=conditional,
+                continued_to=continued_to,
+                body_text=piece["body"],
+                full_text=piece["full"],
+                page_start=piece["page_start"],
+                page_end=piece["page_end"],
+                source_sha256=source_sha256,
+                source_url=source_url,
+                style="tuolumne-narrative",
+                parser_version=NARRATIVE_VERSION,
+                ingest_ts=datetime.now(UTC),
+            )
+        )
     return rulings
 
 

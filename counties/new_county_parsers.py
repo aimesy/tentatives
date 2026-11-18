@@ -377,42 +377,95 @@ def parse_ventura(
     ]
 
 
+_MONTEREY_CASE = re.compile(r"\b\d{2}CV\d{6}\b")
+_MONTEREY_BODY_START = re.compile(
+    r"^(?:By this|The |This |Summary\b|Background\b|Tentative\b|Ruling\b|Plaintiffs?\b.*\b(?:moves?|seeks?)\b)",
+    re.IGNORECASE,
+)
+
+
+def _monterey_capture_date(capture: dict | None) -> date | None:
+    """The hearing date the court's API listed this document under."""
+    if not capture:
+        return None
+    m = re.search(r"[?&]date=(\d{4}-\d{2}-\d{2})", capture.get("source_page_url") or "")
+    if not m:
+        m = re.match(r"(\d{4}-\d{2}-\d{2})-", capture.get("discovered_filename") or "")
+    return parse_date_value(m.group(1)) if m else None
+
+
 def parse_monterey(
     pdf_bytes: bytes,
     source_url: str,
     source_sha256: str | None = None,
     dept_hint: str | None = None,
     division_hint: str | None = None,
+    capture: dict | None = None,
 ) -> list[Ruling]:
     sha = source_sha(pdf_bytes, source_sha256)
     pages, plain, _offsets = _pdf_text(pdf_bytes)
-    case = re.search(r"\b\d{2}CV\d{6}\b", plain)
-    date_match = re.search(r"Hearing Date:\s*([A-Za-z]+ \d{1,2},? \d{4})", plain, re.IGNORECASE)
-    if not case or not date_match:
-        return []
-    hearing_date = parse_date_value(date_match.group(1))
-    if not hearing_date:
+    plain = re.sub(r"(?im)^\s*Page \d+ of \d+\s*$", "", plain)
+    case = _MONTEREY_CASE.search(plain)
+    if not case:
         return []
     title_start = re.search(r"TENTATIVE RULING", plain, re.IGNORECASE)
-    title_region = plain[(title_start.end() if title_start else 0) : case.start()]
-    title_lines = [line for line in title_region.splitlines() if inline(line) and not inline(line).isdigit()]
-    motion_region = plain[case.end() : date_match.start()]
-    motion_lines = [
-        line
-        for line in motion_region.splitlines()
-        if inline(line) and not re.search(r"consolidated|related cross", line, re.IGNORECASE)
+    title_from = title_start.end() if title_start else 0
+    date_match = re.search(r"Hearing Date:\s*([A-Za-z]+ \d{1,2},? \d{4})", plain, re.IGNORECASE)
+    if date_match:
+        hearing_date = parse_date_value(date_match.group(1))
+        motion_region = plain[case.end() : date_match.start()]
+        motion_lines = [
+            line
+            for line in motion_region.splitlines()
+            if inline(line) and not re.search(r"consolidated|related cross", line, re.IGNORECASE)
+        ]
+        body = plain[date_match.end() :]
+    else:
+        # Newer per-case PDFs: "TENTATIVE RULING", an optional date line, the
+        # title and case number, the motion, then the ruling. Without a date
+        # line, use the hearing date the court's API listed the document under.
+        hearing_date = None
+        head = plain[title_from : case.start()]
+        dated = re.match(r"\s*([A-Za-z]+ \d{1,2},? \d{4})\s*\n", head)
+        if dated:
+            hearing_date = parse_date_value(dated.group(1))
+            title_from += dated.end()
+        hearing_date = hearing_date or _monterey_capture_date(capture)
+        after = plain[case.end() :].lstrip(" )\t").split("\n")
+        motion_lines = []
+        consumed = 0
+        for line in after:
+            consumed += len(line) + 1
+            text = inline(line)
+            if not text:
+                if motion_lines:
+                    break
+                continue
+            if _MONTEREY_BODY_START.match(text) or len(motion_lines) >= 3:
+                consumed -= len(line) + 1
+                break
+            motion_lines.append(text.rstrip(":"))
+            if text.endswith(":"):
+                break
+        body = plain[case.end() :].lstrip(" )\t")[consumed:]
+    if not hearing_date:
+        return []
+    title_region = plain[title_from : case.start()]
+    title_lines = [
+        inline(line).rstrip("(").strip()
+        for line in title_region.splitlines()
+        if inline(line) and not inline(line).isdigit()
     ]
-    body = plain[date_match.end() :]
     return [
         make_ruling(
             county="monterey",
             source_sha256=sha,
             source_url=source_url,
-            parser_version="monterey-v1",
+            parser_version="monterey-v2",
             style="monterey-one-ruling",
             index=1,
             case_number=case.group(0),
-            case_title=" ".join(title_lines) or case.group(0),
+            case_title=" ".join(t for t in title_lines if t) or case.group(0),
             hearing_date=hearing_date,
             full_text=plain,
             body_text=body,
@@ -528,6 +581,60 @@ def parse_tulare_page(html: str, capture: dict) -> list[Ruling]:
     return rulings
 
 
+_SANTA_CRUZ_TITLED_CASE = re.compile(
+    r"(?m)^(?P<title>[^\n]*?\S)\s*\((?P<num>\d{2}CV\d{5,6}(?:\s*(?:,|;|&|and)\s*\d{2}CV\d{5,6})*)\)\s*$"
+)
+_SANTA_CRUZ_PAGE_LINE = re.compile(r"(?im)^\s*Page \d+ of \d+\s*$")
+
+
+def _parse_santa_cruz_titled(plain: str, offsets: list[int], hearing_date: date, sha: str, source_url: str,
+                             dept_hint: str | None, division_hint: str | None) -> list[Ruling]:
+    """Layout since about 2026-09: "Title (23CV00490)", the motion line(s), then the ruling."""
+    anchors = list(_SANTA_CRUZ_TITLED_CASE.finditer(plain))
+    rulings: list[Ruling] = []
+    for i, anchor in enumerate(anchors):
+        end = anchors[i + 1].start() if i + 1 < len(anchors) else len(plain)
+        block = clean_lines(_SANTA_CRUZ_PAGE_LINE.sub("", plain[anchor.start() : end]))
+        lines = [inline(line) for line in block.splitlines() if inline(line)]
+        if len(lines) < 2:
+            continue
+        body_start = 1
+        while body_start < len(lines) and body_start <= 4:
+            line = lines[body_start]
+            if re.match(r"(?:The|This|Based|Plaintiffs?|Defendants?)\b", line) and re.search(
+                r"\b(?:is|are|was|were|has|have|seeks?|moves?)\b", line
+            ):
+                break
+            if line.endswith(".") and not re.search(r"\bNos?\.$", line):
+                break
+            body_start += 1
+        motion = " ".join(lines[1:body_start])
+        body = "\n".join(lines[body_start:])
+        page_start, page_end = _page_span(offsets, anchor.start(), end)
+        case_number = re.sub(r"\s*(?:;|&|and)\s*", ",", inline(anchor.group("num"))).replace(" ", "")
+        rulings.append(
+            make_ruling(
+                county="santa-cruz",
+                source_sha256=sha,
+                source_url=source_url,
+                parser_version="santa-cruz-v2",
+                style="santa-cruz-law-motion",
+                index=len(rulings) + 1,
+                case_number=case_number,
+                case_title=inline(anchor.group("title")),
+                hearing_date=hearing_date,
+                full_text=block,
+                body_text=body,
+                motion_type=motion,
+                division=division_hint or "Civil Law and Motion",
+                dept=dept_hint,
+                page_start=page_start,
+                page_end=page_end,
+            )
+        )
+    return rulings
+
+
 def parse_santa_cruz(
     pdf_bytes: bytes,
     source_url: str,
@@ -537,7 +644,8 @@ def parse_santa_cruz(
 ) -> list[Ruling]:
     sha = source_sha(pdf_bytes, source_sha256)
     _pages, plain, offsets = _pdf_text(pdf_bytes)
-    hearing_date = find_date(plain[:1000])
+    # "SEPTEMBER 3 , 2026": drop the stray space before the comma.
+    hearing_date = find_date(re.sub(r"(\d)\s+,", r"\1,", plain[:1000]))
     if not hearing_date:
         return []
     anchors = list(re.finditer(r"(?m)^\s*Nos?\.\s+(?P<num>[0-9A-Z,\s]+)\s*$", plain))
@@ -578,6 +686,8 @@ def parse_santa_cruz(
                 page_end=page_end,
             )
         )
+    if not rulings:
+        return _parse_santa_cruz_titled(plain, offsets, hearing_date, sha, source_url, dept_hint, division_hint)
     return rulings
 
 

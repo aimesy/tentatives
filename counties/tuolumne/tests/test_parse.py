@@ -102,3 +102,91 @@ def test_missing_timestamp_uses_blank_line_before_narrative_body():
     assert rows[0].motion_type == "Petition Hearing - Other / Cancel and Release Mechanics Lien"
     assert rows[0].outcome_text.startswith("This is a special proceeding")
     assert rows[0].body_text.startswith("This is a special proceeding")
+
+
+def _header(day: str) -> list[str]:
+    return [
+        "SUPERIOR COURT OF CALIFORNIA",
+        "COUNTY OF TUOLUMNE",
+        f"TENTATIVE RULINGS FOR {day}",
+        "DEPT. 2",
+        "JUDICIAL OFFICER: SARAH J. CARRILLO",
+        "The Tentative Ruling will become the ruling of the court if the court has not directed oral",
+        "argument by its Tentative Ruling, and notice of intent to appear has not been given.",
+    ]
+
+
+def test_parse_tuolumne_stacked_labels_layout_dedupes_repeated_page():
+    first = _header("NOVEMBER 13, 2026") + [
+        "Case No.:", "Case Title:", "Case Type:", "Hearing Type:",
+        "CV67962",
+        "Megan Gallegos v. Peter Edward Bippart, M.D.",
+        "Medical Malpractice",
+        "Hospital's Motion to Compel Discovery Responses",
+        "This medical malpractice case arises from a medical procedure.",
+        "11Pagc",
+    ]
+    second = [
+        "1 [Page",
+        "Hospital's Motion to Compel is GRANTED.",
+        "Case No.:", "Case Title:", "Case Type:", "Hearing Type:",
+        "CV68690",
+        "Jonathan Avrett v. Kevin P Cobden",
+        "Breach of Contract - Real Property",
+        "Demurrer to First Amended Complaint and Motion for Leave to File",
+        "Cross-Complaint",
+        "This case arises from a real property dispute.",
+        "Plaintiff's Demurrer is OVERRULED.",
+    ]
+    rulings = parse(_pdf([first, first, second]), "https://example.test/tr-d2-11132026.pdf")
+    assert [r.case_number for r in rulings] == ["CV67962", "CV68690"]
+    assert {(r.hearing_date, r.dept) for r in rulings} == {(date(2026, 11, 13), "2")}
+    assert rulings[0].motion_type == "Hospital's Motion to Compel Discovery Responses"
+    assert "GRANTED" in rulings[0].body_text and "Pag" not in rulings[0].body_text
+    assert rulings[1].motion_type.endswith("Motion for Leave to File Cross-Complaint")
+    assert rulings[1].page_start == 3
+
+
+def test_parse_tuolumne_inline_labels_and_numbered_layouts():
+    inline = _pdf([[
+        "SUPERIOR COURT OF CALIFORNIA",
+        "COUNTY OF TUOLUMNE",
+        "TENTATIVE RULINGS- September 8, 2026",
+        "HEARING DATE: September 9, 2026",
+        "DEPT.: Two (2)",
+        "JUDICIAL OFFICER: Honorable Sarah J. Carrillo",
+        "__________________________________",
+        "Case No.: CV68545",
+        "Case Title: Mark Rose vs. FCA US et al",
+        "Case Type: Breach of Contract Warranty",
+        "Hearing Type: Defendant FCA's Demurrer to Plaintiff's First Amended Complaint",
+        "Background",
+        "The demurrer is SUSTAINED.",
+    ]])
+    [ruling] = parse(inline, "https://example.test/tr_d2_09092026.pdf")
+    assert (ruling.case_number, ruling.hearing_date, ruling.dept) == ("CV68545", date(2026, 9, 9), "2")
+    assert ruling.case_title == "Mark Rose vs. FCA US et al"
+
+    numbered = _pdf([[
+        "CIVIL TENTATIVE RULINGS DEPT. 5 November 4, 2026",
+        "Debra Medina v. City of Sonora et al. (CV68817)",
+        "This matter is before the Court on Petitioner's petition. The Court intends to grant it.",
+        "2. Barclays Bank Delaware v. Yanine Lugo (CVL66893)",
+        "This matter is before the Court on Plaintiff's motion.",
+    ]])
+    rulings = parse(numbered, "https://example.test/tr-d5-11042026.pdf")
+    assert [(r.case_number, r.dept) for r in rulings] == [("CV68817", "5"), ("CVL66893", "5")]
+    assert rulings[1].case_title == "Barclays Bank Delaware v. Yanine Lugo"
+
+    number_first = _pdf([[
+        "Dept. 2",
+        "Civil Law and Motion Tentative Rulings for Friday, August 14, 2026, at 8:30 a.m.",
+        "1. CV66705 Pagni v. City of Sonora et al",
+        "Hearing on: Motions for Leave to File Third Amended Petition and",
+        "Augment the Administrative Record",
+        "Moving Party: Petitioner",
+        "Tentative Ruling: n/a",
+    ]])
+    [ruling] = parse(number_first, "https://example.test/tr_d2_08142026.pdf")
+    assert ruling.hearing_date == date(2026, 8, 14)
+    assert ruling.motion_type == "Motions for Leave to File Third Amended Petition and Augment the Administrative Record"
