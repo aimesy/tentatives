@@ -30,6 +30,7 @@ MODE="${2:-live}"
 DATA_REPO="${TENTATIVES_DATA_REPO:-aimesy/tentatives-data}"
 VENV="${TENTATIVES_VENV:-/var/lib/tentatives-harvest/venv}"
 FALLBACK_LANES="${TENTATIVES_FALLBACK_LANES:-}"
+HARVEST_HOST="${TENTATIVES_HOST:-courtproj}"
 CODE="$WORK/code"
 DATA="$WORK/data"
 # The empty helper comes first so no global helper stores the token.
@@ -106,15 +107,15 @@ cd "$DATA"
 
 recheck=""
 if [ "$MODE" = live ]; then
-  "$PY" "$CODE/ops/harvest_status.py" start "$STATUS" --date "$TODAY" --code "$(git -C "$CODE" rev-parse HEAD)"
-  commit_push "status: courtproj harvest started" status/
+  "$PY" "$CODE/ops/harvest_status.py" start "$STATUS" --date "$TODAY" --code "$(git -C "$CODE" rev-parse HEAD)" --host "$HARVEST_HOST"
+  commit_push "status: $HARVEST_HOST harvest started" status/
   set +e
   "$PY" -u -m ingest.backfill --county all --live --continue-on-error --summary-json "$WORK/summary.json" 2>&1 | tee "$WORK/backfill.log"
   capture_exit=${PIPESTATUS[0]}
   set -e
   recheck="$("$PY" "$CODE/ops/harvest_status.py" capture "$STATUS" --summary "$WORK/summary.json" --exit "$capture_exit")"
   log "capture exit $capture_exit; recheck: ${recheck:-none}"
-  if ! commit_push "archive: raw captures (courtproj)" archive/ status/; then
+  if ! commit_push "archive: raw captures ($HARVEST_HOST)" archive/ status/; then
     log "raw captures not pushed; the next run captures them again"
     exit 1
   fi
@@ -130,7 +131,7 @@ if [ "$MODE" = live ]; then
       recheck_exit=${PIPESTATUS[0]}
       set -e
       log "recheck exit $recheck_exit"
-      commit_push "archive: raw captures (courtproj recheck, fallback lane)" archive/ status/ || true
+      commit_push "archive: raw captures ($HARVEST_HOST recheck, fallback lane)" archive/ status/ || true
       if [ "$recheck_exit" -eq 0 ]; then recheck=""; fi
     fi
   fi
@@ -140,7 +141,7 @@ if [ "$MODE" = live ]; then
   fi
 else
   "$PY" -u -m ingest.backfill --county all --wayback --continue-on-error --limit 50 2>&1 | tee "$WORK/backfill.log"
-  commit_push "archive: Wayback captures (courtproj)" archive/
+  commit_push "archive: Wayback captures ($HARVEST_HOST)" archive/
 fi
 
 counties_before="$(git rev-parse -q --verify HEAD:site/counties.json || true)"
@@ -159,7 +160,7 @@ fi
 
 if [ "$parsed" = true ]; then
   [ "$MODE" = live ] && "$PY" "$CODE/ops/harvest_status.py" parse "$STATUS" --result ok
-  if ! commit_push "archive: parsed data (courtproj)" archive/ data/ site/counties.json README.md LIVE.md status/; then
+  if ! commit_push "archive: parsed data ($HARVEST_HOST)" archive/ data/ site/counties.json README.md LIVE.md status/; then
     parsed=false
   elif [ "$counties_before" != "$(git rev-parse -q --verify HEAD:site/counties.json || true)" ]; then
     dispatch site.yml deploy_worker=false
@@ -168,7 +169,7 @@ else
   log "parsing failed"
   if [ "$MODE" = live ]; then
     "$PY" "$CODE/ops/harvest_status.py" parse "$STATUS" --result failed
-    commit_push "status: courtproj parse failed" status/ || true
+    commit_push "status: $HARVEST_HOST parse failed" status/ || true
   fi
 fi
 

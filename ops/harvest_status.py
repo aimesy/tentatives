@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -72,7 +73,7 @@ def cmd_start(args: argparse.Namespace) -> None:
     previous = load(args.status)
     save(args.status, {
         "date": args.date,
-        "host": "courtproj",
+        "host": args.host,
         "code": args.code,
         "started_at": now(),
         "stage": "capturing",
@@ -131,6 +132,7 @@ def main() -> None:
     start.add_argument("status", type=Path)
     start.add_argument("--date", required=True)
     start.add_argument("--code", required=True)
+    start.add_argument("--host", default=os.environ.get("TENTATIVES_HOST", "courtproj"))
     start.set_defaults(run=cmd_start)
     capture = sub.add_parser("capture")
     capture.add_argument("status", type=Path)

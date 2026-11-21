@@ -1,11 +1,11 @@
 # Daily Harvest
 
 Courts delete tentative rulings within days, so a missed harvest loses them.
-The daily harvest runs on courtproj, the SFSC server, and GitHub Actions in
-`aimesy/tentatives-data` runs only when courtproj fails. Actions minutes on the
-private data repository are metered; courtproj costs nothing extra.
+The daily harvest runs on counsel-factory to keep its downloads and Git
+transfers off courtproj. Court fetches and local rechecks use existing VPN
+lanes. The GitHub Actions capture fallback is disabled.
 
-## Courtproj
+## Counsel-factory
 
 `tentatives-harvest-live.timer` starts `tentatives-harvest@live.service` at
 5 PM America/Los_Angeles. The service runs `/usr/local/sbin/tentatives-harvest`
@@ -40,7 +40,7 @@ is removed when the run ends; logs go to `/var/log/tentatives-harvest.log` and
    tentatives-harvest@.service runs the harvest through `ops/vpn-lane-exec`,
    which refuses to run when no lane is up.
 
-Every courtproj commit says `[skip ci]`, so none starts a workflow.
+Every harvest commit says `[skip ci]`, so none starts a workflow.
 `tentatives-harvest-wayback.timer` runs the bounded Wayback check (50 refs a
 county) Sundays at 4:17 AM Pacific through the same script.
 
@@ -68,7 +68,7 @@ row (or the file) to force a fresh download of that URL.
 
 ## Rechecks
 
-`ops/harvest_status.py` marks a county for a recheck in GitHub Actions when:
+`ops/harvest_status.py` marks a county for a recheck through another VPN lane when:
 
 - its discovery failed or it raised an error;
 - a fetch failed for any reason but 404 or 410 (a court removing an old file
@@ -101,7 +101,7 @@ courtproj starts its own fallback runs, and a dispatched run starts at once.
 A run that does nothing costs one billed minute. A fallback run records itself
 under `fallback` in `status/harvest.json`, so the check does not repeat it.
 
-## Install on courtproj
+## Install on the harvest host
 
 ```bash
 install -m 755 ops/tentatives-harvest /usr/local/sbin/tentatives-harvest
@@ -112,6 +112,19 @@ chmod 600 /etc/tentatives-harvest.env
 systemctl daemon-reload
 systemctl enable --now tentatives-harvest-live.timer tentatives-harvest-wayback.timer
 ```
+
+Also set `TENTATIVES_HOST=counsel-factory`, `TENTATIVES_PRIMARY_LANES` and
+`TENTATIVES_FALLBACK_LANES` in the environment file. Lane values are
+space-separated lists of existing Surfshark or PIA network namespaces on
+that host. The host label appears in `status/harvest.json` and commit messages.
+
+The service uses one CPU at most, low CPU and I/O priority, a 4 GiB memory
+pressure threshold, an 8 GiB memory limit, and no swap. Systemd IP accounting
+records its network usage.
+
+Before enabling replacement timers, verify a small capture and private data
+repository access, then stop and disable the old host's two timers while no
+harvest is running. Keep the old installation and logs for rollback.
 
 The credential helper must read the token from the file; never put a token on
 a command line, where every local account can read it.
@@ -125,10 +138,10 @@ journalctl -u tentatives-harvest@live.service -n 50
 tail -n 50 /var/log/tentatives-harvest.log
 ```
 
-In `aimesy/tentatives-data`, `status/harvest.json` shows the last run, and
-`gh run list -R aimesy/tentatives-data --workflow backfill.yml` shows whether a
-fallback ran. Run a fallback by hand with
-`gh workflow run backfill.yml -R aimesy/tentatives-data -f county=marin,yolo -f mode=live`.
+In `aimesy/tentatives-data`, `status/harvest.json` shows the last live run,
+including its host and counties needing a recheck. The GitHub Actions
+Backfill captures workflow remains disabled; rerun the live service to retry
+through VPN lanes.
 
 ## County files over GitHub's limit
 
